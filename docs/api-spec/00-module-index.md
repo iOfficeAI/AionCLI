@@ -47,7 +47,7 @@
 | 2 | 数据模型与存储 | 02-database.md | `process/services/database/` | ✅ 已完成 |
 | 3 | 认证与用户管理 | 03-auth.md | `process/webserver/auth/`, `process/bridge/authBridge.ts` | ✅ 已完成 |
 | 4 | 系统设置 | 04-system-settings.md | `process/bridge/systemSettingsBridge.ts`, `process/bridge/modelBridge.ts`, `common/config/` | ✅ 已完成 |
-| 5 | 会话与消息管理 | 05-conversation.md | `process/bridge/conversationBridge.ts`, `process/bridge/acpConversationBridge.ts`, `process/bridge/geminiConversationBridge.ts`, `process/task/`, `common/chat/` | ⬜ 未开始 |
+| 5 | 会话与消息管理 | 05-conversation.md | `process/bridge/conversationBridge.ts`, `process/bridge/acpConversationBridge.ts`, `process/bridge/geminiConversationBridge.ts`, `process/task/`, `common/chat/` | ✅ 已完成 |
 | 6 | AI 后端集成 | 06-ai-agent.md | `process/agent/`, `process/task/*AgentManager.ts`, `process/worker/`, `process/bridge/bedrockBridge.ts`, `process/bridge/geminiBridge.ts`, `process/bridge/remoteAgentBridge.ts`, `common/api/` | ⬜ 未开始 |
 | 7 | 实时通信（WebSocket） | 07-realtime.md | `process/webserver/websocket/` | ⬜ 未开始 |
 | 8 | 文件与工作区 | 08-file-workspace.md | `process/bridge/fsBridge.ts`, `process/bridge/documentBridge.ts`, `process/bridge/fileWatchBridge.ts`, `process/bridge/workspaceSnapshotBridge.ts` | ⬜ 未开始 |
