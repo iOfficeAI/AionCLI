@@ -2,6 +2,15 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+/// Type of available update based on semver comparison.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UpdateType {
+    Major,
+    Minor,
+    Patch,
+}
+
 /// Model selection config — references a provider and a specific model.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -63,6 +72,23 @@ impl VersionInfo {
                     .map(|(min_ver, cur_ver)| cur_ver < min_ver)
             })
             .unwrap_or(false)
+    }
+
+    /// Determine the update type (major, minor, or patch) based on semver diff.
+    /// Returns `None` if no update is available or versions are unparseable.
+    pub fn get_update_type(&self) -> Option<UpdateType> {
+        let latest = semver::Version::parse(&self.latest).ok()?;
+        let current = semver::Version::parse(&self.current).ok()?;
+        if latest <= current {
+            return None;
+        }
+        if latest.major > current.major {
+            Some(UpdateType::Major)
+        } else if latest.minor > current.minor {
+            Some(UpdateType::Minor)
+        } else {
+            Some(UpdateType::Patch)
+        }
     }
 }
 
@@ -159,5 +185,61 @@ mod tests {
             release_notes: None,
         };
         assert!(!v.is_update_available());
+        assert_eq!(v.get_update_type(), None);
+    }
+
+    #[test]
+    fn test_version_info_get_update_type_major() {
+        let v = VersionInfo {
+            current: "1.2.3".into(),
+            latest: "2.0.0".into(),
+            minimum_required: None,
+            release_notes: None,
+        };
+        assert_eq!(v.get_update_type(), Some(UpdateType::Major));
+    }
+
+    #[test]
+    fn test_version_info_get_update_type_minor() {
+        let v = VersionInfo {
+            current: "1.2.3".into(),
+            latest: "1.5.0".into(),
+            minimum_required: None,
+            release_notes: None,
+        };
+        assert_eq!(v.get_update_type(), Some(UpdateType::Minor));
+    }
+
+    #[test]
+    fn test_version_info_get_update_type_patch() {
+        let v = VersionInfo {
+            current: "1.2.3".into(),
+            latest: "1.2.5".into(),
+            minimum_required: None,
+            release_notes: None,
+        };
+        assert_eq!(v.get_update_type(), Some(UpdateType::Patch));
+    }
+
+    #[test]
+    fn test_version_info_get_update_type_none_when_same() {
+        let v = VersionInfo {
+            current: "1.0.0".into(),
+            latest: "1.0.0".into(),
+            minimum_required: None,
+            release_notes: None,
+        };
+        assert_eq!(v.get_update_type(), None);
+    }
+
+    #[test]
+    fn test_version_info_get_update_type_none_when_older() {
+        let v = VersionInfo {
+            current: "2.0.0".into(),
+            latest: "1.5.0".into(),
+            minimum_required: None,
+            release_notes: None,
+        };
+        assert_eq!(v.get_update_type(), None);
     }
 }

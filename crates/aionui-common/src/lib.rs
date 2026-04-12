@@ -18,4 +18,4 @@ pub use error::AppError;
 pub use id::{generate_id, generate_prefixed_id};
 pub use pagination::PaginatedResult;
 pub use timestamp::{now_ms, TimestampMs};
-pub use types::{Confirmation, ConfirmationOption, ProviderWithModel, VersionInfo};
+pub use types::{Confirmation, ConfirmationOption, ProviderWithModel, UpdateType, VersionInfo};
