@@ -92,6 +92,9 @@ tokio-tungstenite = "0.26"
 # Semver
 semver = "1"
 
+# Directories
+dirs = "6"
+
 # Regex
 regex = "1"
 

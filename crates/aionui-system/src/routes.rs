@@ -7,8 +7,8 @@ use axum::Router;
 use aionui_api_types::{
     ApiResponse, ClientPreferencesResponse, CreateProviderRequest, DetectProtocolRequest,
     FetchModelsRequest, FetchModelsResponse, ProtocolDetectionResponse, ProviderResponse,
-    SystemSettingsResponse, UpdateClientPreferencesRequest, UpdateProviderRequest,
-    UpdateSettingsRequest,
+    SystemInfoResponse, SystemSettingsResponse, UpdateCheckRequest, UpdateCheckResult,
+    UpdateClientPreferencesRequest, UpdateProviderRequest, UpdateSettingsRequest,
 };
 use aionui_common::AppError;
 
@@ -17,6 +17,7 @@ use crate::model_fetcher::ModelFetchService;
 use crate::protocol::ProtocolDetectionService;
 use crate::provider::ProviderService;
 use crate::settings::SettingsService;
+use crate::version::VersionCheckService;
 
 /// Shared state for system route handlers.
 #[derive(Clone)]
@@ -26,9 +27,10 @@ pub struct SystemRouterState {
     pub provider_service: ProviderService,
     pub model_fetch_service: ModelFetchService,
     pub protocol_detection_service: ProtocolDetectionService,
+    pub version_check_service: VersionCheckService,
 }
 
-/// Build the system router (settings + client prefs + providers).
+/// Build the system router (settings + client prefs + providers + system).
 ///
 /// All routes require authentication (applied by the caller).
 ///
@@ -43,6 +45,8 @@ pub struct SystemRouterState {
 /// - `DELETE /api/providers/:id`             — delete a provider
 /// - `POST /api/providers/:id/models`        — fetch models from remote API
 /// - `POST /api/providers/detect-protocol`   — detect API protocol
+/// - `GET  /api/system/info`                 — system directory & platform info
+/// - `POST /api/system/check-update`         — check GitHub for new versions
 pub fn system_routes(state: SystemRouterState) -> Router {
     Router::new()
         .route("/api/settings", get(get_settings).patch(update_settings))
@@ -57,6 +61,8 @@ pub fn system_routes(state: SystemRouterState) -> Router {
             delete(delete_provider).put(update_provider),
         )
         .route("/api/providers/{id}/models", post(fetch_models))
+        .route("/api/system/info", get(get_system_info))
+        .route("/api/system/check-update", post(check_update))
         .with_state(state)
 }
 
@@ -182,5 +188,23 @@ async fn detect_protocol(
         .protocol_detection_service
         .detect_protocol(&req)
         .await?;
+    Ok(Json(ApiResponse::ok(result)))
+}
+
+// ===========================================================================
+// System info & version check handlers
+// ===========================================================================
+
+async fn get_system_info() -> Json<ApiResponse<SystemInfoResponse>> {
+    let info = crate::sysinfo::get_system_info();
+    Json(ApiResponse::ok(info))
+}
+
+async fn check_update(
+    State(state): State<SystemRouterState>,
+    body: Result<Json<UpdateCheckRequest>, JsonRejection>,
+) -> Result<Json<ApiResponse<UpdateCheckResult>>, AppError> {
+    let Json(req) = body.map_err(|e| AppError::BadRequest(e.to_string()))?;
+    let result = state.version_check_service.check_update(&req).await?;
     Ok(Json(ApiResponse::ok(result)))
 }

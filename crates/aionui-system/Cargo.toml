@@ -17,6 +17,8 @@ reqwest.workspace = true
 tokio.workspace = true
 aws-config.workspace = true
 aws-sdk-bedrock.workspace = true
+semver.workspace = true
+dirs.workspace = true
 
 [dev-dependencies]
 tower = { workspace = true }

@@ -20,7 +20,7 @@ use aionui_db::{
 };
 use aionui_system::{
     ClientPrefService, ModelFetchService, ProtocolDetectionService, ProviderService,
-    SettingsService, SystemRouterState, system_routes,
+    SettingsService, SystemRouterState, VersionCheckService, system_routes,
 };
 
 // ---------------------------------------------------------------------------
@@ -45,7 +45,8 @@ fn build_state(db: &aionui_db::Database) -> SystemRouterState {
             TEST_KEY,
             http_client.clone(),
         ),
-        protocol_detection_service: ProtocolDetectionService::new(http_client),
+        protocol_detection_service: ProtocolDetectionService::new(http_client.clone()),
+        version_check_service: VersionCheckService::new(http_client, "0.1.0".to_owned()),
     }
 }
 
