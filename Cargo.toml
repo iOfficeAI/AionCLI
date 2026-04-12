@@ -116,6 +116,7 @@ sha1 = "0.10"
 sha2 = "0.10"
 
 # AWS
+aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-sdk-bedrock = "1"
 aws-sdk-bedrockruntime = "1"
 

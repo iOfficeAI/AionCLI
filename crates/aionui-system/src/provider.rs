@@ -6,6 +6,7 @@ use aionui_api_types::{
 };
 use aionui_common::{AppError, decrypt_string, encrypt_string};
 use aionui_db::{CreateProviderParams, IProviderRepository, UpdateProviderParams, models::Provider};
+use serde::de::DeserializeOwned;
 
 /// Business logic for model provider CRUD with API key encryption/masking.
 #[derive(Clone)]
@@ -38,16 +39,9 @@ impl ProviderService {
         validate_create_request(&req)?;
 
         let encrypted_key = encrypt_string(&req.api_key, &self.encryption_key)?;
-        let models_json = serde_json::to_string(&req.models)
-            .map_err(|e| AppError::Internal(format!("Failed to serialize models: {e}")))?;
-        let capabilities_json = serde_json::to_string(&req.capabilities)
-            .map_err(|e| AppError::Internal(format!("Failed to serialize capabilities: {e}")))?;
-        let bedrock_json = req
-            .bedrock_config
-            .as_ref()
-            .map(serde_json::to_string)
-            .transpose()
-            .map_err(|e| AppError::Internal(format!("Failed to serialize bedrock config: {e}")))?;
+        let models_json = serialize_json(&req.models, "models")?;
+        let capabilities_json = serialize_json(&req.capabilities, "capabilities")?;
+        let bedrock_json = serialize_opt(&req.bedrock_config, "bedrock_config")?;
 
         let params = CreateProviderParams {
             platform: &req.platform,
@@ -81,48 +75,12 @@ impl ProviderService {
             .as_deref()
             .map(|k| encrypt_string(k, &self.encryption_key))
             .transpose()?;
-        let models_json = req
-            .models
-            .as_ref()
-            .map(serde_json::to_string)
-            .transpose()
-            .map_err(|e| AppError::Internal(format!("Failed to serialize models: {e}")))?;
-        let capabilities_json = req
-            .capabilities
-            .as_ref()
-            .map(serde_json::to_string)
-            .transpose()
-            .map_err(|e| AppError::Internal(format!("Failed to serialize capabilities: {e}")))?;
-        let model_protocols_json = req
-            .model_protocols
-            .as_ref()
-            .map(serde_json::to_string)
-            .transpose()
-            .map_err(|e| {
-                AppError::Internal(format!("Failed to serialize model_protocols: {e}"))
-            })?;
-        let model_enabled_json = req
-            .model_enabled
-            .as_ref()
-            .map(serde_json::to_string)
-            .transpose()
-            .map_err(|e| {
-                AppError::Internal(format!("Failed to serialize model_enabled: {e}"))
-            })?;
-        let model_health_json = req
-            .model_health
-            .as_ref()
-            .map(serde_json::to_string)
-            .transpose()
-            .map_err(|e| {
-                AppError::Internal(format!("Failed to serialize model_health: {e}"))
-            })?;
-        let bedrock_json = req
-            .bedrock_config
-            .as_ref()
-            .map(serde_json::to_string)
-            .transpose()
-            .map_err(|e| AppError::Internal(format!("Failed to serialize bedrock config: {e}")))?;
+        let models_json = serialize_opt(&req.models, "models")?;
+        let capabilities_json = serialize_opt(&req.capabilities, "capabilities")?;
+        let model_protocols_json = serialize_opt(&req.model_protocols, "model_protocols")?;
+        let model_enabled_json = serialize_opt(&req.model_enabled, "model_enabled")?;
+        let model_health_json = serialize_opt(&req.model_health, "model_health")?;
+        let bedrock_json = serialize_opt(&req.bedrock_config, "bedrock_config")?;
 
         let params = UpdateProviderParams {
             platform: req.platform.as_deref(),
@@ -171,38 +129,12 @@ impl ProviderService {
             .map_err(|e| AppError::Internal(format!("Failed to parse models JSON: {e}")))?;
         let capabilities = serde_json::from_str(&row.capabilities)
             .map_err(|e| AppError::Internal(format!("Failed to parse capabilities JSON: {e}")))?;
-        let model_protocols: Option<HashMap<String, String>> = row
-            .model_protocols
-            .as_deref()
-            .map(serde_json::from_str)
-            .transpose()
-            .map_err(|e| {
-                AppError::Internal(format!("Failed to parse model_protocols JSON: {e}"))
-            })?;
-        let model_enabled: Option<HashMap<String, bool>> = row
-            .model_enabled
-            .as_deref()
-            .map(serde_json::from_str)
-            .transpose()
-            .map_err(|e| {
-                AppError::Internal(format!("Failed to parse model_enabled JSON: {e}"))
-            })?;
-        let model_health = row
-            .model_health
-            .as_deref()
-            .map(serde_json::from_str)
-            .transpose()
-            .map_err(|e| {
-                AppError::Internal(format!("Failed to parse model_health JSON: {e}"))
-            })?;
-        let bedrock_config = row
-            .bedrock_config
-            .as_deref()
-            .map(serde_json::from_str)
-            .transpose()
-            .map_err(|e| {
-                AppError::Internal(format!("Failed to parse bedrock_config JSON: {e}"))
-            })?;
+        let model_protocols: Option<HashMap<String, String>> =
+            deserialize_opt(&row.model_protocols, "model_protocols")?;
+        let model_enabled: Option<HashMap<String, bool>> =
+            deserialize_opt(&row.model_enabled, "model_enabled")?;
+        let model_health = deserialize_opt(&row.model_health, "model_health")?;
+        let bedrock_config = deserialize_opt(&row.bedrock_config, "bedrock_config")?;
 
         Ok(ProviderResponse {
             id: row.id,
@@ -222,6 +154,38 @@ impl ProviderService {
             updated_at: row.updated_at,
         })
     }
+}
+
+// ---------------------------------------------------------------------------
+// JSON helpers (M-1 / M-2 refactor)
+// ---------------------------------------------------------------------------
+
+/// Serialize an optional value to JSON string.
+fn serialize_opt<T: serde::Serialize>(
+    val: &Option<T>,
+    field: &str,
+) -> Result<Option<String>, AppError> {
+    val.as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|e| AppError::Internal(format!("Failed to serialize {field}: {e}")))
+}
+
+/// Serialize a value to JSON string.
+fn serialize_json<T: serde::Serialize>(val: &T, field: &str) -> Result<String, AppError> {
+    serde_json::to_string(val)
+        .map_err(|e| AppError::Internal(format!("Failed to serialize {field}: {e}")))
+}
+
+/// Deserialize an optional JSON string into a typed value.
+pub(crate) fn deserialize_opt<T: DeserializeOwned>(
+    json: &Option<String>,
+    field: &str,
+) -> Result<Option<T>, AppError> {
+    json.as_deref()
+        .map(serde_json::from_str)
+        .transpose()
+        .map_err(|e| AppError::Internal(format!("Failed to parse {field} JSON: {e}")))
 }
 
 // ---------------------------------------------------------------------------
