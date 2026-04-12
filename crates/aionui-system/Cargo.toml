@@ -7,9 +7,14 @@ edition.workspace = true
 aionui-common.workspace = true
 aionui-db.workspace = true
 aionui-api-types.workspace = true
-aionui-realtime.workspace = true
-reqwest.workspace = true
-aws-sdk-bedrock.workspace = true
-semver.workspace = true
+axum.workspace = true
+async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+tower = { workspace = true }
+http-body-util.workspace = true

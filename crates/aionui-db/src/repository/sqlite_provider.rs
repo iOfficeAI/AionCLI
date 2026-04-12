@@ -93,41 +93,11 @@ impl IProviderRepository for SqliteProviderRepository {
         id: &str,
         params: UpdateProviderParams<'_>,
     ) -> Result<Provider, DbError> {
-        // Fetch existing row first to merge partial updates
         let existing = self.find_by_id(id).await?.ok_or_else(|| {
             DbError::NotFound(format!("Provider '{id}' not found"))
         })?;
 
-        let now = aionui_common::now_ms();
-        let platform = params.platform.unwrap_or(&existing.platform);
-        let name = params.name.unwrap_or(&existing.name);
-        let base_url = params.base_url.unwrap_or(&existing.base_url);
-        let api_key_encrypted = params
-            .api_key_encrypted
-            .unwrap_or(&existing.api_key_encrypted);
-        let models = params.models.unwrap_or(&existing.models);
-        let enabled = params.enabled.unwrap_or(existing.enabled);
-        let capabilities = params.capabilities.unwrap_or(&existing.capabilities);
-        let context_limit = match params.context_limit {
-            Some(v) => v,
-            None => existing.context_limit,
-        };
-        let model_protocols = match params.model_protocols {
-            Some(v) => v.map(String::from),
-            None => existing.model_protocols.clone(),
-        };
-        let model_enabled = match params.model_enabled {
-            Some(v) => v.map(String::from),
-            None => existing.model_enabled.clone(),
-        };
-        let model_health = match params.model_health {
-            Some(v) => v.map(String::from),
-            None => existing.model_health.clone(),
-        };
-        let bedrock_config = match params.bedrock_config {
-            Some(v) => v.map(String::from),
-            None => existing.bedrock_config.clone(),
-        };
+        let merged = merge_update(existing, params);
 
         sqlx::query(
             "UPDATE providers SET \
@@ -137,40 +107,24 @@ impl IProviderRepository for SqliteProviderRepository {
                 bedrock_config = ?, updated_at = ? \
              WHERE id = ?",
         )
-        .bind(platform)
-        .bind(name)
-        .bind(base_url)
-        .bind(api_key_encrypted)
-        .bind(models)
-        .bind(enabled)
-        .bind(capabilities)
-        .bind(context_limit)
-        .bind(&model_protocols)
-        .bind(&model_enabled)
-        .bind(&model_health)
-        .bind(&bedrock_config)
-        .bind(now)
+        .bind(&merged.platform)
+        .bind(&merged.name)
+        .bind(&merged.base_url)
+        .bind(&merged.api_key_encrypted)
+        .bind(&merged.models)
+        .bind(merged.enabled)
+        .bind(&merged.capabilities)
+        .bind(merged.context_limit)
+        .bind(&merged.model_protocols)
+        .bind(&merged.model_enabled)
+        .bind(&merged.model_health)
+        .bind(&merged.bedrock_config)
+        .bind(merged.updated_at)
         .bind(id)
         .execute(&self.pool)
         .await?;
 
-        Ok(Provider {
-            id: existing.id,
-            platform: platform.to_string(),
-            name: name.to_string(),
-            base_url: base_url.to_string(),
-            api_key_encrypted: api_key_encrypted.to_string(),
-            models: models.to_string(),
-            enabled,
-            capabilities: capabilities.to_string(),
-            context_limit,
-            model_protocols,
-            model_enabled,
-            model_health,
-            bedrock_config,
-            created_at: existing.created_at,
-            updated_at: now,
-        })
+        Ok(merged)
     }
 
     async fn delete(&self, id: &str) -> Result<(), DbError> {
@@ -186,6 +140,39 @@ impl IProviderRepository for SqliteProviderRepository {
         }
 
         Ok(())
+    }
+}
+
+/// Merge partial update params into an existing provider, returning a new instance.
+fn merge_update(existing: Provider, params: UpdateProviderParams<'_>) -> Provider {
+    let now = aionui_common::now_ms();
+    Provider {
+        id: existing.id,
+        platform: params.platform.unwrap_or(&existing.platform).to_string(),
+        name: params.name.unwrap_or(&existing.name).to_string(),
+        base_url: params.base_url.unwrap_or(&existing.base_url).to_string(),
+        api_key_encrypted: params
+            .api_key_encrypted
+            .unwrap_or(&existing.api_key_encrypted)
+            .to_string(),
+        models: params.models.unwrap_or(&existing.models).to_string(),
+        enabled: params.enabled.unwrap_or(existing.enabled),
+        capabilities: params.capabilities.unwrap_or(&existing.capabilities).to_string(),
+        context_limit: params.context_limit.unwrap_or(existing.context_limit),
+        model_protocols: params
+            .model_protocols
+            .map_or(existing.model_protocols, |v| v.map(String::from)),
+        model_enabled: params
+            .model_enabled
+            .map_or(existing.model_enabled, |v| v.map(String::from)),
+        model_health: params
+            .model_health
+            .map_or(existing.model_health, |v| v.map(String::from)),
+        bedrock_config: params
+            .bedrock_config
+            .map_or(existing.bedrock_config, |v| v.map(String::from)),
+        created_at: existing.created_at,
+        updated_at: now,
     }
 }
 
