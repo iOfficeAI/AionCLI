@@ -2,6 +2,7 @@ pub mod acp_agent;
 pub mod acp_routes;
 pub mod acp_service;
 pub mod agent_manager;
+pub mod api_client;
 pub mod cli_process;
 pub mod middleware;
 pub mod remote_agent_routes;
@@ -14,6 +15,11 @@ pub mod types;
 pub use acp_agent::AcpAgentManager;
 pub use acp_routes::{AcpRouterState, acp_routes};
 pub use agent_manager::{AgentManagerHandle, IAgentManager};
+pub use api_client::{
+    AnthropicRotatingClient, ApiClientError, ApiKeyManager, ApiKeyStatus, ClientOptions,
+    GeminiRotatingClient, LlmClient, OpenAIRotatingClient, RotatingClient, clean_function_name,
+    create_rotating_client, is_retryable_status, normalize_base_url,
+};
 pub use cli_process::{CliAgentProcess, CliSpawnConfig};
 pub use middleware::{
     CronCommand, CronCommandResult, CronCreateParams, ICronService, MessageMiddleware,
