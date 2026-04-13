@@ -1,6 +1,7 @@
 mod acp;
 mod auth;
 mod confirmation;
+mod connection_test;
 mod conversation;
 mod lifecycle;
 mod provider;
@@ -46,5 +47,8 @@ pub use response::{ApiResponse, ErrorResponse};
 pub use system::{
     ClientPreferencesResponse, SystemSettingsResponse, UpdateClientPreferencesRequest,
     UpdateSettingsRequest,
+};
+pub use connection_test::{
+    GeminiSubscriptionData, GeminiSubscriptionQuery, TestBedrockConnectionRequest,
 };
 pub use websocket::WebSocketMessage;

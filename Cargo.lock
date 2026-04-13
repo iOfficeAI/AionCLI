@@ -63,6 +63,8 @@ dependencies = [
  "aionui-realtime",
  "aionui-system",
  "async-trait",
+ "aws-config",
+ "aws-sdk-bedrock",
  "aws-sdk-bedrockruntime",
  "axum",
  "base64",

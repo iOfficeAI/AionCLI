@@ -7,8 +7,9 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use aionui_ai_agent::{
-    AcpRouterState, AgentFactory, IWorkerTaskManager, RemoteAgentRouterState, RemoteAgentService,
-    WorkerTaskManagerImpl, acp_routes, remote_agent_routes,
+    AcpRouterState, AgentFactory, ConnectionTestRouterState, ConnectionTestService,
+    IWorkerTaskManager, RemoteAgentRouterState, RemoteAgentService, WorkerTaskManagerImpl,
+    acp_routes, connection_test_routes, remote_agent_routes,
 };
 use aionui_auth::{
     AuthRouterState, AuthState, CookieConfig, JwtService, QrTokenStore, auth_middleware,
@@ -188,12 +189,14 @@ pub fn create_router(services: &AppServices) -> Router {
     let conversation_state = build_conversation_state(services);
     let remote_agent_state = build_remote_agent_state(services);
     let acp_state = build_acp_state(services);
+    let connection_test_state = build_connection_test_state();
     create_router_with_system_state(
         services,
         system_state,
         conversation_state,
         remote_agent_state,
         acp_state,
+        connection_test_state,
     )
 }
 
@@ -221,6 +224,13 @@ pub fn build_remote_agent_state(services: &AppServices) -> RemoteAgentRouterStat
 pub fn build_acp_state(services: &AppServices) -> AcpRouterState {
     AcpRouterState {
         worker_task_manager: services.worker_task_manager.clone(),
+    }
+}
+
+/// Build the default `ConnectionTestRouterState`.
+pub fn build_connection_test_state() -> ConnectionTestRouterState {
+    ConnectionTestRouterState {
+        service: ConnectionTestService::new(reqwest::Client::new()),
     }
 }
 
@@ -254,6 +264,7 @@ pub fn create_router_with_system_state(
     conversation_state: ConversationRouterState,
     remote_agent_state: RemoteAgentRouterState,
     acp_state: AcpRouterState,
+    connection_test_state: ConnectionTestRouterState,
 ) -> Router {
     let ws_state = build_ws_state(services);
     create_router_with_all_state(
@@ -262,6 +273,7 @@ pub fn create_router_with_system_state(
         conversation_state,
         remote_agent_state,
         acp_state,
+        connection_test_state,
         ws_state,
     )
 }
@@ -276,6 +288,7 @@ pub fn create_router_with_all_state(
     conversation_state: ConversationRouterState,
     remote_agent_state: RemoteAgentRouterState,
     acp_state: AcpRouterState,
+    connection_test_state: ConnectionTestRouterState,
     ws_state: WsHandlerState,
 ) -> Router {
     let auth_state = AuthRouterState {
@@ -304,6 +317,10 @@ pub fn create_router_with_all_state(
 
     // ACP management routes protected by auth middleware
     let acp_authenticated = acp_routes(acp_state)
+        .route_layer(from_fn_with_state(auth_mw_state.clone(), auth_middleware));
+
+    // Connection test routes (Bedrock, Gemini) protected by auth middleware
+    let connection_test_authenticated = connection_test_routes(connection_test_state)
         .route_layer(from_fn_with_state(auth_mw_state, auth_middleware));
 
     // WebSocket upgrade route — exempt from CSRF (no cookie-based
@@ -319,6 +336,7 @@ pub fn create_router_with_all_state(
         .merge(conversation_authenticated)
         .merge(remote_agent_authenticated)
         .merge(acp_authenticated)
+        .merge(connection_test_authenticated)
         .layer(middleware::from_fn_with_state(
             services.cookie_config.clone(),
             csrf_middleware,

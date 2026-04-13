@@ -4,6 +4,8 @@ pub mod acp_service;
 pub mod agent_manager;
 pub mod api_client;
 pub mod cli_process;
+pub mod connection_test_routes;
+pub mod connection_test_service;
 pub mod middleware;
 pub mod remote_agent_routes;
 pub mod remote_agent_service;
@@ -14,6 +16,8 @@ pub mod types;
 
 pub use acp_agent::AcpAgentManager;
 pub use acp_routes::{AcpRouterState, acp_routes};
+pub use connection_test_routes::{ConnectionTestRouterState, connection_test_routes};
+pub use connection_test_service::ConnectionTestService;
 pub use agent_manager::{AgentManagerHandle, IAgentManager};
 pub use api_client::{
     AnthropicRotatingClient, ApiClientError, ApiKeyManager, ApiKeyStatus, ClientOptions,
