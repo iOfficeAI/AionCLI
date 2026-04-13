@@ -687,6 +687,10 @@ impl crate::agent_manager::IAgentManager for AcpAgentManager {
 
         Ok(())
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 impl AcpAgentManager {

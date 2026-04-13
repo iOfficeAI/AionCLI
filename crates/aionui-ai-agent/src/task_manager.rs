@@ -216,6 +216,9 @@ mod tests {
         fn kill(&self, _reason: Option<AgentKillReason>) -> Result<(), AppError> {
             Ok(())
         }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
     }
 
     fn make_options(conversation_id: &str) -> BuildTaskOptions {

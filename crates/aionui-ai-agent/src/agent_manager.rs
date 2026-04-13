@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::sync::Arc;
 
 use aionui_common::{
@@ -72,6 +73,13 @@ pub trait IAgentManager: Send + Sync {
     /// - `reason: Some(IdleTimeout)` — idle cleanup
     /// - `reason: None` — explicit user/system kill
     fn kill(&self, reason: Option<AgentKillReason>) -> Result<(), AppError>;
+
+    /// Downcast helper for accessing type-specific extensions.
+    ///
+    /// Concrete implementations return `self` so that route handlers can
+    /// downcast `AgentManagerHandle` to e.g. `AcpAgentManager` for
+    /// ACP-specific operations (mode/model/config management).
+    fn as_any(&self) -> &dyn Any;
 }
 
 /// Type-erased handle to an agent manager, shareable across async tasks.

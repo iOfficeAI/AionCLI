@@ -7,8 +7,8 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use aionui_ai_agent::{
-    AgentFactory, IWorkerTaskManager, RemoteAgentRouterState, RemoteAgentService,
-    WorkerTaskManagerImpl, remote_agent_routes,
+    AcpRouterState, AgentFactory, IWorkerTaskManager, RemoteAgentRouterState, RemoteAgentService,
+    WorkerTaskManagerImpl, acp_routes, remote_agent_routes,
 };
 use aionui_auth::{
     AuthRouterState, AuthState, CookieConfig, JwtService, QrTokenStore, auth_middleware,
@@ -187,11 +187,13 @@ pub fn create_router(services: &AppServices) -> Router {
     let system_state = build_system_state(services);
     let conversation_state = build_conversation_state(services);
     let remote_agent_state = build_remote_agent_state(services);
+    let acp_state = build_acp_state(services);
     create_router_with_system_state(
         services,
         system_state,
         conversation_state,
         remote_agent_state,
+        acp_state,
     )
 }
 
@@ -212,6 +214,13 @@ pub fn build_remote_agent_state(services: &AppServices) -> RemoteAgentRouterStat
     let repo = Arc::new(SqliteRemoteAgentRepository::new(pool));
     RemoteAgentRouterState {
         service: RemoteAgentService::new(repo, encryption_key),
+    }
+}
+
+/// Build the default `AcpRouterState` from application services.
+pub fn build_acp_state(services: &AppServices) -> AcpRouterState {
+    AcpRouterState {
+        worker_task_manager: services.worker_task_manager.clone(),
     }
 }
 
@@ -244,6 +253,7 @@ pub fn create_router_with_system_state(
     system_state: SystemRouterState,
     conversation_state: ConversationRouterState,
     remote_agent_state: RemoteAgentRouterState,
+    acp_state: AcpRouterState,
 ) -> Router {
     let ws_state = build_ws_state(services);
     create_router_with_all_state(
@@ -251,6 +261,7 @@ pub fn create_router_with_system_state(
         system_state,
         conversation_state,
         remote_agent_state,
+        acp_state,
         ws_state,
     )
 }
@@ -264,6 +275,7 @@ pub fn create_router_with_all_state(
     system_state: SystemRouterState,
     conversation_state: ConversationRouterState,
     remote_agent_state: RemoteAgentRouterState,
+    acp_state: AcpRouterState,
     ws_state: WsHandlerState,
 ) -> Router {
     let auth_state = AuthRouterState {
@@ -288,6 +300,10 @@ pub fn create_router_with_all_state(
 
     // Remote agent routes protected by auth middleware
     let remote_agent_authenticated = remote_agent_routes(remote_agent_state)
+        .route_layer(from_fn_with_state(auth_mw_state.clone(), auth_middleware));
+
+    // ACP management routes protected by auth middleware
+    let acp_authenticated = acp_routes(acp_state)
         .route_layer(from_fn_with_state(auth_mw_state, auth_middleware));
 
     // WebSocket upgrade route — exempt from CSRF (no cookie-based
@@ -302,6 +318,7 @@ pub fn create_router_with_all_state(
         .merge(system_authenticated)
         .merge(conversation_authenticated)
         .merge(remote_agent_authenticated)
+        .merge(acp_authenticated)
         .layer(middleware::from_fn_with_state(
             services.cookie_config.clone(),
             csrf_middleware,

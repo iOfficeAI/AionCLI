@@ -942,6 +942,9 @@ impl IAgentManager for MockAgent {
     fn kill(&self, _reason: Option<AgentKillReason>) -> Result<(), AppError> {
         Ok(())
     }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 // ── Mock WorkerTaskManager ──────────────────────────────────────

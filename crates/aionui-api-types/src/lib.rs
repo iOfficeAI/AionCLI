@@ -1,3 +1,4 @@
+mod acp;
 mod auth;
 mod confirmation;
 mod conversation;
@@ -34,6 +35,12 @@ pub use provider::{
 pub use remote_agent::{
     CreateRemoteAgentRequest, HandshakeResponse, RemoteAgentListItem, RemoteAgentResponse,
     TestRemoteAgentConnectionRequest, UpdateRemoteAgentRequest,
+};
+pub use acp::{
+    AcpAgentInfo, AcpEnvResponse, AcpHealthCheckRequest, AcpHealthCheckResponse,
+    AcpModeResponse, DetectCliRequest, DetectCliResponse, ProbeModelRequest,
+    SetConfigOptionRequest, SetModeRequest, SetModelRequest, TestCustomAgentRequest,
+    TestCustomAgentResponse,
 };
 pub use response::{ApiResponse, ErrorResponse};
 pub use system::{

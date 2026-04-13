@@ -1,4 +1,6 @@
 pub mod acp_agent;
+pub mod acp_routes;
+pub mod acp_service;
 pub mod agent_manager;
 pub mod cli_process;
 pub mod remote_agent_routes;
@@ -8,6 +10,7 @@ pub mod task_manager;
 pub mod types;
 
 pub use acp_agent::AcpAgentManager;
+pub use acp_routes::{AcpRouterState, acp_routes};
 pub use agent_manager::{AgentManagerHandle, IAgentManager};
 pub use cli_process::{CliAgentProcess, CliSpawnConfig};
 pub use remote_agent_routes::{RemoteAgentRouterState, remote_agent_routes};
