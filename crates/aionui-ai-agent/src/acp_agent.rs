@@ -94,14 +94,7 @@ fn inject_files_and_skills(payload: &mut Value, data: &SendMessageData) {
     }
 }
 
-/// Build the approval memory key from action and optional command_type.
-fn approval_key(action: Option<&str>, command_type: Option<&str>) -> String {
-    match (action, command_type) {
-        (Some(a), Some(ct)) => format!("{a}:{ct}"),
-        (Some(a), None) => a.to_owned(),
-        _ => String::new(),
-    }
-}
+use crate::agent_manager::approval_key;
 
 /// Manages a single ACP Agent instance.
 ///

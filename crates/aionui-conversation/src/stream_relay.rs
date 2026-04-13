@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use aionui_ai_agent::AgentStreamEvent;
@@ -44,12 +45,13 @@ impl StreamRelay {
         let mut text_buffer = String::new();
         let mut record_created = false;
         let mut flush_counter: u32 = 0;
+        let mut seen_confirmations: HashSet<String> = HashSet::new();
 
         loop {
             match rx.recv().await {
                 Ok(event) => {
                     self.forward_to_websocket(&event);
-                    self.maybe_broadcast_confirmation(&event);
+                    self.maybe_broadcast_confirmation(&event, &mut seen_confirmations);
 
                     if let AgentStreamEvent::Text(ref data) = event {
                         text_buffer.push_str(&data.content);
@@ -85,8 +87,15 @@ impl StreamRelay {
         }
     }
 
-    /// Broadcast a `confirmation.add` WebSocket event when permission events arrive.
-    fn maybe_broadcast_confirmation(&self, event: &AgentStreamEvent) {
+    /// Broadcast a confirmation WebSocket event when permission events arrive.
+    ///
+    /// Sends `confirmation.add` for new confirmations and `confirmation.update`
+    /// for confirmations whose ID has already been seen.
+    fn maybe_broadcast_confirmation(
+        &self,
+        event: &AgentStreamEvent,
+        seen: &mut HashSet<String>,
+    ) {
         let data = match event {
             AgentStreamEvent::AcpPermission(d) | AgentStreamEvent::CodexPermission(d) => d,
             _ => return,
@@ -94,6 +103,12 @@ impl StreamRelay {
 
         // Try to parse as Confirmation to build a well-typed event payload
         if let Ok(conf) = serde_json::from_value::<Confirmation>(data.clone()) {
+            let event_name = if seen.contains(&conf.id) {
+                "confirmation.update"
+            } else {
+                seen.insert(conf.id.clone());
+                "confirmation.add"
+            };
             let payload = json!({
                 "conversationId": self.conversation_id,
                 "id": conf.id,
@@ -104,7 +119,7 @@ impl StreamRelay {
                 "commandType": conf.command_type,
                 "options": conf.options,
             });
-            let msg = WebSocketMessage::new("confirmation.add", payload);
+            let msg = WebSocketMessage::new(event_name, payload);
             self.broadcaster.broadcast(msg);
         } else {
             // Fallback: broadcast raw data with conversation ID
@@ -233,21 +248,14 @@ impl StreamRelay {
             }
         }
 
-        // Update conversation status
-        let new_status = match event {
-            AgentStreamEvent::Error(_) => ConversationStatus::Finished,
-            _ => ConversationStatus::Finished,
-        };
-        self.update_conversation_status(new_status).await;
+        // Update conversation status — all terminal events resolve to Finished
+        self.update_conversation_status(ConversationStatus::Finished).await;
     }
 
     /// Send a `turn.completed` WebSocket event.
-    fn send_turn_completed(&self, event: &AgentStreamEvent) {
-        let status = match event {
-            AgentStreamEvent::Error(_) => "finished",
-            _ => "finished",
-        };
-        self.send_turn_completed_status(status);
+    fn send_turn_completed(&self, _event: &AgentStreamEvent) {
+        // All terminal events resolve to "finished" status
+        self.send_turn_completed_status("finished");
     }
 
     fn send_turn_completed_status(&self, status: &str) {

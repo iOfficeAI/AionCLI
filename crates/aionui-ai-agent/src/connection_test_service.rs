@@ -52,7 +52,7 @@ impl ConnectionTestService {
             .await
             .map_err(|e| {
                 warn!(error = %e, "Bedrock connection test failed");
-                AppError::BadRequest(format!("Bedrock credentials invalid: {e}"))
+                AppError::UnprocessableEntity(format!("Bedrock credentials invalid: {e}"))
             })?;
 
         info!("Bedrock connection test passed");

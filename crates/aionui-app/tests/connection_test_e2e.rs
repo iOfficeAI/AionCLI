@@ -175,8 +175,8 @@ async fn t8_1_bedrock_invalid_credentials() {
         &csrf,
     );
     let resp = app.clone().oneshot(req).await.unwrap();
-    // Fake credentials fail at the AWS API level
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    // Fake credentials fail at the AWS API level → 422 Unprocessable Entity
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
 
     let json = body_json(resp).await;
     assert_eq!(json["success"], false);

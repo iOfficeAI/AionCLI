@@ -114,6 +114,7 @@ dependencies = [
  "aionui-system",
  "aionui-team",
  "anyhow",
+ "async-trait",
  "axum",
  "clap",
  "futures-util",

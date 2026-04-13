@@ -31,6 +31,9 @@ pub enum AppError {
 
     #[error("Request timeout: {0}")]
     Timeout(String),
+
+    #[error("Unprocessable entity: {0}")]
+    UnprocessableEntity(String),
 }
 
 /// Internal error response body matching the `ErrorResponse` format from `aionui-api-types`.
@@ -54,6 +57,7 @@ impl AppError {
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
             Self::BadGateway(_) => StatusCode::BAD_GATEWAY,
             Self::Timeout(_) => StatusCode::BAD_GATEWAY,
+            Self::UnprocessableEntity(_) => StatusCode::UNPROCESSABLE_ENTITY,
         }
     }
 
@@ -69,6 +73,7 @@ impl AppError {
             Self::Internal(_) => "INTERNAL_ERROR",
             Self::BadGateway(_) => "BAD_GATEWAY",
             Self::Timeout(_) => "TIMEOUT",
+            Self::UnprocessableEntity(_) => "UNPROCESSABLE_ENTITY",
         }
     }
 }
@@ -128,6 +133,10 @@ mod tests {
             AppError::Timeout("x".into()).status_code(),
             StatusCode::BAD_GATEWAY
         );
+        assert_eq!(
+            AppError::UnprocessableEntity("x".into()).status_code(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
     }
 
     #[test]
@@ -147,6 +156,10 @@ mod tests {
         );
         assert_eq!(AppError::BadGateway("x".into()).error_code(), "BAD_GATEWAY");
         assert_eq!(AppError::Timeout("x".into()).error_code(), "TIMEOUT");
+        assert_eq!(
+            AppError::UnprocessableEntity("x".into()).error_code(),
+            "UNPROCESSABLE_ENTITY"
+        );
     }
 
     #[test]

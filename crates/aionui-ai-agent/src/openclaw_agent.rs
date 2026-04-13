@@ -230,7 +230,7 @@ impl OpenClawAgentManager {
 
         json!({
             "workspace": self.workspace,
-            "backend": format!("{:?}", self.backend),
+            "backend": serde_json::to_value(self.backend).unwrap_or_default(),
             "agentName": self.config.agent_name,
             "cliPath": self.config.gateway.cli_path,
             "gatewayHost": host,
@@ -243,13 +243,7 @@ impl OpenClawAgentManager {
     }
 }
 
-fn approval_key(action: Option<&str>, command_type: Option<&str>) -> String {
-    match (action, command_type) {
-        (Some(a), Some(ct)) => format!("{a}:{ct}"),
-        (Some(a), None) => a.to_owned(),
-        _ => String::new(),
-    }
-}
+use crate::agent_manager::approval_key;
 
 #[async_trait::async_trait]
 impl IAgentManager for OpenClawAgentManager {

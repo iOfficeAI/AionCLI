@@ -8,6 +8,7 @@ pub mod auxiliary_routes;
 pub mod cli_process;
 pub mod connection_test_routes;
 pub mod connection_test_service;
+pub mod factory;
 pub mod gemini_agent;
 pub mod idle_scanner;
 pub mod middleware;
@@ -27,13 +28,14 @@ pub use aionrs_agent::AionrsAgentManager;
 pub use auxiliary_routes::{AuxiliaryRouterState, auxiliary_routes};
 pub use connection_test_routes::{ConnectionTestRouterState, connection_test_routes};
 pub use connection_test_service::ConnectionTestService;
-pub use agent_manager::{AgentManagerHandle, IAgentManager};
+pub use agent_manager::{AgentManagerHandle, IAgentManager, approval_key};
 pub use api_client::{
     AnthropicRotatingClient, ApiClientError, ApiKeyManager, ApiKeyStatus, ClientOptions,
     GeminiRotatingClient, LlmClient, OpenAIRotatingClient, RotatingClient, clean_function_name,
     create_rotating_client, is_retryable_status, normalize_base_url,
 };
 pub use cli_process::{CliAgentProcess, CliSpawnConfig};
+pub use factory::{AgentFactoryDeps, build_agent_factory};
 pub use gemini_agent::GeminiAgentManager;
 pub use idle_scanner::start_idle_scanner;
 pub use middleware::{

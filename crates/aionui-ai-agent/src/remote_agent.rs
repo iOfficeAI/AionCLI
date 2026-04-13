@@ -264,13 +264,7 @@ impl RemoteAgentManager {
     }
 }
 
-fn approval_key(action: Option<&str>, command_type: Option<&str>) -> String {
-    match (action, command_type) {
-        (Some(a), Some(ct)) => format!("{a}:{ct}"),
-        (Some(a), None) => a.to_owned(),
-        _ => String::new(),
-    }
-}
+use crate::agent_manager::approval_key;
 
 #[async_trait::async_trait]
 impl IAgentManager for RemoteAgentManager {

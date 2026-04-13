@@ -84,3 +84,15 @@ pub trait IAgentManager: Send + Sync {
 
 /// Type-erased handle to an agent manager, shareable across async tasks.
 pub type AgentManagerHandle = Arc<dyn IAgentManager>;
+
+/// Build the approval memory key from action and optional command_type.
+///
+/// Used by agent implementations to key their session-level approval memory
+/// when handling `always_allow` confirmations.
+pub fn approval_key(action: Option<&str>, command_type: Option<&str>) -> String {
+    match (action, command_type) {
+        (Some(a), Some(ct)) => format!("{a}:{ct}"),
+        (Some(a), None) => a.to_owned(),
+        _ => String::new(),
+    }
+}

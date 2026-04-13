@@ -38,6 +38,7 @@ reqwest.workspace = true
 anyhow.workspace = true
 
 [dev-dependencies]
+async-trait.workspace = true
 http-body-util.workspace = true
 tower = { workspace = true, features = ["util"] }
 tokio-tungstenite.workspace = true

@@ -7,16 +7,16 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use aionui_ai_agent::{
-    AcpRouterState, AgentFactory, ConnectionTestRouterState, ConnectionTestService,
-    IWorkerTaskManager, RemoteAgentRouterState, RemoteAgentService, WorkerTaskManagerImpl,
-    acp_routes, connection_test_routes, remote_agent_routes,
+    AcpRouterState, AcpSkillManager, AgentFactoryDeps, AuxiliaryRouterState,
+    ConnectionTestRouterState, ConnectionTestService, IWorkerTaskManager,
+    RemoteAgentRouterState, RemoteAgentService, WorkerTaskManagerImpl, acp_routes,
+    auxiliary_routes, build_agent_factory, connection_test_routes, remote_agent_routes,
 };
 use aionui_auth::{
     AuthRouterState, AuthState, CookieConfig, JwtService, QrTokenStore, auth_middleware,
     auth_routes, csrf_middleware, extract_token_from_ws_headers, resolve_jwt_secret,
     security_headers_middleware,
 };
-use aionui_common::AppError;
 use aionui_conversation::{ConversationRouterState, ConversationService, conversation_routes};
 use aionui_db::{
     Database, IUserRepository, SqliteClientPreferenceRepository, SqliteConversationRepository,
@@ -76,6 +76,17 @@ pub struct AppServices {
 }
 
 impl AppServices {
+    /// Replace the worker task manager after construction.
+    ///
+    /// Primarily used by tests to inject mock implementations.
+    pub fn with_worker_task_manager(
+        mut self,
+        wtm: Arc<dyn IWorkerTaskManager>,
+    ) -> Self {
+        self.worker_task_manager = wtm;
+        self
+    }
+
     /// Build application services from an initialized database.
     ///
     /// Resolves JWT secret (env → db → generate), constructs all shared
@@ -109,12 +120,17 @@ impl AppServices {
             tracing::info!("Generated and persisted new JWT secret");
         }
 
-        // Stub factory — real agent construction will be wired in task 6.15
-        let stub_factory: AgentFactory = Arc::new(|_| {
-            Err(AppError::Internal("Agent factory not configured".into()))
+        let encryption_key = derive_encryption_key(&secret);
+        let remote_agent_repo = Arc::new(SqliteRemoteAgentRepository::new(
+            database.pool().clone(),
+        ));
+        let factory = build_agent_factory(AgentFactoryDeps {
+            skill_manager: AcpSkillManager::new(),
+            remote_agent_repo,
+            encryption_key,
         });
         let worker_task_manager: Arc<dyn IWorkerTaskManager> =
-            Arc::new(WorkerTaskManagerImpl::new(stub_factory));
+            Arc::new(WorkerTaskManagerImpl::new(factory));
 
         Ok(Self {
             database,
@@ -190,6 +206,7 @@ pub fn create_router(services: &AppServices) -> Router {
     let remote_agent_state = build_remote_agent_state(services);
     let acp_state = build_acp_state(services);
     let connection_test_state = build_connection_test_state();
+    let auxiliary_state = build_auxiliary_state(services);
     create_router_with_system_state(
         services,
         system_state,
@@ -197,6 +214,7 @@ pub fn create_router(services: &AppServices) -> Router {
         remote_agent_state,
         acp_state,
         connection_test_state,
+        auxiliary_state,
     )
 }
 
@@ -234,6 +252,13 @@ pub fn build_connection_test_state() -> ConnectionTestRouterState {
     }
 }
 
+/// Build the default `AuxiliaryRouterState` from application services.
+pub fn build_auxiliary_state(services: &AppServices) -> AuxiliaryRouterState {
+    AuxiliaryRouterState {
+        worker_task_manager: services.worker_task_manager.clone(),
+    }
+}
+
 /// Build the default `WsHandlerState` from application services.
 ///
 /// Tests can call this and override individual fields before passing
@@ -265,6 +290,7 @@ pub fn create_router_with_system_state(
     remote_agent_state: RemoteAgentRouterState,
     acp_state: AcpRouterState,
     connection_test_state: ConnectionTestRouterState,
+    auxiliary_state: AuxiliaryRouterState,
 ) -> Router {
     let ws_state = build_ws_state(services);
     create_router_with_all_state(
@@ -274,6 +300,7 @@ pub fn create_router_with_system_state(
         remote_agent_state,
         acp_state,
         connection_test_state,
+        auxiliary_state,
         ws_state,
     )
 }
@@ -289,6 +316,7 @@ pub fn create_router_with_all_state(
     remote_agent_state: RemoteAgentRouterState,
     acp_state: AcpRouterState,
     connection_test_state: ConnectionTestRouterState,
+    auxiliary_state: AuxiliaryRouterState,
     ws_state: WsHandlerState,
 ) -> Router {
     let auth_state = AuthRouterState {
@@ -321,6 +349,10 @@ pub fn create_router_with_all_state(
 
     // Connection test routes (Bedrock, Gemini) protected by auth middleware
     let connection_test_authenticated = connection_test_routes(connection_test_state)
+        .route_layer(from_fn_with_state(auth_mw_state.clone(), auth_middleware));
+
+    // Auxiliary routes (workspace, side-question, reload-context, slash-commands, openclaw runtime)
+    let auxiliary_authenticated = auxiliary_routes(auxiliary_state)
         .route_layer(from_fn_with_state(auth_mw_state, auth_middleware));
 
     // WebSocket upgrade route — exempt from CSRF (no cookie-based
@@ -337,6 +369,7 @@ pub fn create_router_with_all_state(
         .merge(remote_agent_authenticated)
         .merge(acp_authenticated)
         .merge(connection_test_authenticated)
+        .merge(auxiliary_authenticated)
         .layer(middleware::from_fn_with_state(
             services.cookie_config.clone(),
             csrf_middleware,
