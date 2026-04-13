@@ -298,7 +298,7 @@ async fn get_file_metadata_text_file() {
 async fn get_file_metadata_image() {
     let dir = tempfile::tempdir().unwrap();
     let png = dir.path().join("photo.png");
-    fs::write(&png, &[0x89, 0x50, 0x4E, 0x47]).unwrap();
+    fs::write(&png, [0x89, 0x50, 0x4E, 0x47]).unwrap();
 
     let svc = make_service(dir.path());
     let meta = svc

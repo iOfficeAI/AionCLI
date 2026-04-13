@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
@@ -367,6 +367,89 @@ fn get_file_metadata_sync(path: &Path) -> Result<FileMetadata, AppError> {
     })
 }
 
+/// Remove a file or directory synchronously. Directories are removed recursively.
+fn remove_entry_sync(path: &Path) -> Result<(), AppError> {
+    let metadata = std::fs::metadata(path).map_err(|e| {
+        AppError::NotFound(format!(
+            "cannot remove '{}': {e}",
+            path.display()
+        ))
+    })?;
+
+    if metadata.is_dir() {
+        std::fs::remove_dir_all(path).map_err(|e| {
+            AppError::Internal(format!(
+                "cannot remove directory '{}': {e}",
+                path.display()
+            ))
+        })
+    } else {
+        std::fs::remove_file(path).map_err(|e| {
+            AppError::Internal(format!(
+                "cannot remove file '{}': {e}",
+                path.display()
+            ))
+        })
+    }
+}
+
+/// Rename a file or directory synchronously. Returns the new absolute path.
+fn rename_entry_sync(
+    path: &Path,
+    new_name: &str,
+) -> Result<PathBuf, AppError> {
+    let parent = path.parent().ok_or_else(|| {
+        AppError::BadRequest(format!(
+            "path '{}' has no parent",
+            path.display()
+        ))
+    })?;
+
+    let new_path = parent.join(new_name);
+
+    if new_path.exists() {
+        return Err(AppError::BadRequest(format!(
+            "target '{}' already exists",
+            new_path.display()
+        )));
+    }
+
+    std::fs::rename(path, &new_path).map_err(|e| {
+        AppError::Internal(format!(
+            "cannot rename '{}' to '{}': {e}",
+            path.display(),
+            new_path.display()
+        ))
+    })?;
+
+    Ok(new_path)
+}
+
+/// Copy a single file, creating parent directories as needed.
+fn copy_single_file_sync(
+    src: &Path,
+    dest: &Path,
+) -> Result<(), AppError> {
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            AppError::Internal(format!(
+                "cannot create directory '{}': {e}",
+                parent.display()
+            ))
+        })?;
+    }
+
+    std::fs::copy(src, dest).map_err(|e| {
+        AppError::Internal(format!(
+            "cannot copy '{}' to '{}': {e}",
+            src.display(),
+            dest.display()
+        ))
+    })?;
+
+    Ok(())
+}
+
 #[async_trait::async_trait]
 impl crate::traits::IFileService for FileService {
     async fn get_files_by_dir(
@@ -572,34 +655,213 @@ impl crate::traits::IFileService for FileService {
 
     async fn copy_files_to_workspace(
         &self,
-        _file_paths: &[String],
-        _workspace: &str,
-        _source_root: Option<&str>,
+        file_paths: &[String],
+        workspace: &str,
+        source_root: Option<&str>,
     ) -> Result<CopyResult, AppError> {
-        todo!("implemented in task 7.5")
+        let roots = self.allowed_roots_refs();
+        let ws_canonical = validate_path(workspace, &roots)?;
+
+        let sr_canonical = match source_root {
+            Some(sr) => Some(validate_path(sr, &roots)?),
+            None => None,
+        };
+
+        let file_paths_owned: Vec<String> = file_paths.to_vec();
+        let roots_owned: Vec<std::path::PathBuf> =
+            self.allowed_roots.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let roots_refs: Vec<&Path> =
+                roots_owned.iter().map(|p| p.as_path()).collect();
+            let mut copied = Vec::new();
+            let mut failed = Vec::new();
+
+            for fp in &file_paths_owned {
+                let src = match validate_path(fp, &roots_refs) {
+                    Ok(p) if p.is_file() => p,
+                    _ => {
+                        failed.push(fp.clone());
+                        continue;
+                    }
+                };
+
+                let relative = match &sr_canonical {
+                    Some(sr) => src
+                        .strip_prefix(sr)
+                        .map(|p| p.to_path_buf())
+                        .unwrap_or_else(|_| {
+                            Path::new(
+                                src.file_name()
+                                    .unwrap_or_default(),
+                            )
+                            .to_path_buf()
+                        }),
+                    None => Path::new(
+                        src.file_name().unwrap_or_default(),
+                    )
+                    .to_path_buf(),
+                };
+
+                let dest = ws_canonical.join(&relative);
+                match copy_single_file_sync(&src, &dest) {
+                    Ok(()) => copied.push(fp.clone()),
+                    Err(_) => failed.push(fp.clone()),
+                }
+            }
+
+            Ok(CopyResult {
+                copied_files: copied,
+                failed_files: failed,
+            })
+        })
+        .await
+        .map_err(|e| {
+            AppError::Internal(format!(
+                "copy task failed: {e}"
+            ))
+        })?
     }
 
     async fn remove_entry(
         &self,
-        _path: &str,
-        _workspace: &str,
+        path: &str,
+        workspace: &str,
     ) -> Result<(), AppError> {
-        todo!("implemented in task 7.5")
+        if has_traversal(path) {
+            return Err(AppError::BadRequest(format!(
+                "path '{}' contains invalid traversal patterns",
+                path
+            )));
+        }
+
+        let roots = self.allowed_roots_refs();
+        let canonical = validate_path(path, &roots)?;
+
+        let path_owned = canonical.clone();
+        tokio::task::spawn_blocking(move || {
+            remove_entry_sync(&path_owned)
+        })
+        .await
+        .map_err(|e| {
+            AppError::Internal(format!(
+                "remove entry task failed: {e}"
+            ))
+        })??;
+
+        // Compute relative path from workspace
+        let workspace_path = Path::new(workspace);
+        let relative_path = canonical
+            .strip_prefix(
+                std::fs::canonicalize(workspace_path)
+                    .unwrap_or_else(|_| {
+                        workspace_path.to_path_buf()
+                    }),
+            )
+            .unwrap_or(&canonical)
+            .to_string_lossy()
+            .into_owned();
+
+        // Broadcast contentUpdate delete event
+        let event = ContentUpdateEvent {
+            file_path: canonical
+                .to_string_lossy()
+                .into_owned(),
+            content: None,
+            workspace: workspace.to_owned(),
+            relative_path,
+            operation: ContentUpdateOperation::Delete,
+        };
+        let payload =
+            serde_json::to_value(&event).unwrap_or_default();
+        let msg = WebSocketMessage::new(
+            "fileStream.contentUpdate",
+            payload,
+        );
+        self.broadcaster.broadcast(msg);
+
+        // Invalidate workspace files cache
+        if let Ok(canonical_ws) =
+            std::fs::canonicalize(workspace_path)
+        {
+            self.invalidate_cache(
+                &canonical_ws.to_string_lossy(),
+            );
+        }
+
+        Ok(())
     }
 
     async fn rename_entry(
         &self,
-        _path: &str,
-        _new_name: &str,
+        path: &str,
+        new_name: &str,
     ) -> Result<String, AppError> {
-        todo!("implemented in task 7.5")
+        if has_traversal(path) {
+            return Err(AppError::BadRequest(format!(
+                "path '{}' contains invalid traversal patterns",
+                path
+            )));
+        }
+
+        if new_name.contains('/')
+            || new_name.contains('\\')
+        {
+            return Err(AppError::BadRequest(format!(
+                "new name '{}' must not contain path separators",
+                new_name
+            )));
+        }
+
+        let roots = self.allowed_roots_refs();
+        let canonical = validate_path(path, &roots)?;
+
+        let new_name_owned = new_name.to_owned();
+        let path_owned = canonical;
+        let new_path: PathBuf =
+            tokio::task::spawn_blocking(move || {
+                rename_entry_sync(&path_owned, &new_name_owned)
+            })
+            .await
+            .map_err(|e| {
+                AppError::Internal(format!(
+                    "rename entry task failed: {e}"
+                ))
+            })??;
+
+        Ok(new_path.to_string_lossy().into_owned())
     }
 
     async fn create_temp_file(
         &self,
-        _file_name: &str,
+        file_name: &str,
     ) -> Result<String, AppError> {
-        todo!("implemented in task 7.5")
+        let name = file_name.to_owned();
+
+        tokio::task::spawn_blocking(move || {
+            let tmp_dir = std::env::temp_dir().join("aionui");
+            std::fs::create_dir_all(&tmp_dir).map_err(|e| {
+                AppError::Internal(format!(
+                    "cannot create temp directory: {e}"
+                ))
+            })?;
+
+            let file_path = tmp_dir.join(&name);
+            std::fs::File::create(&file_path).map_err(|e| {
+                AppError::Internal(format!(
+                    "cannot create temp file '{}': {e}",
+                    file_path.display()
+                ))
+            })?;
+
+            Ok(file_path.to_string_lossy().into_owned())
+        })
+        .await
+        .map_err(|e| {
+            AppError::Internal(format!(
+                "create temp file task failed: {e}"
+            ))
+        })?
     }
 
     async fn get_image_base64(
@@ -797,7 +1059,7 @@ mod tests {
     fn get_file_metadata_sync_image_mime() {
         let dir = tempfile::tempdir().unwrap();
         let png = dir.path().join("icon.png");
-        fs::write(&png, &[0x89, 0x50, 0x4E, 0x47]).unwrap();
+        fs::write(&png, [0x89, 0x50, 0x4E, 0x47]).unwrap();
 
         let meta = get_file_metadata_sync(&png).unwrap();
         assert_eq!(meta.mime_type, "image/png");
@@ -919,5 +1181,112 @@ mod tests {
         let ok = write_file_sync(&file, &data).unwrap();
         assert!(ok);
         assert_eq!(fs::read(&file).unwrap(), data);
+    }
+
+    // -- remove_entry_sync tests (task 7.5) --
+
+    #[test]
+    fn remove_entry_sync_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("to_delete.txt");
+        fs::write(&file, "bye").unwrap();
+        assert!(file.exists());
+
+        remove_entry_sync(&file).unwrap();
+        assert!(!file.exists());
+    }
+
+    #[test]
+    fn remove_entry_sync_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        fs::create_dir(&sub).unwrap();
+        fs::write(sub.join("a.txt"), "a").unwrap();
+
+        remove_entry_sync(&sub).unwrap();
+        assert!(!sub.exists());
+    }
+
+    #[test]
+    fn remove_entry_sync_nonexistent() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = dir.path().join("ghost.txt");
+        let result = remove_entry_sync(&fake);
+        assert!(result.is_err());
+    }
+
+    // -- rename_entry_sync tests (task 7.5) --
+
+    #[test]
+    fn rename_entry_sync_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("old.txt");
+        fs::write(&old, "data").unwrap();
+
+        let new_path = rename_entry_sync(&old, "new.txt").unwrap();
+        assert!(!old.exists());
+        assert!(new_path.exists());
+        assert_eq!(fs::read_to_string(&new_path).unwrap(), "data");
+    }
+
+    #[test]
+    fn rename_entry_sync_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("old_dir");
+        fs::create_dir(&old).unwrap();
+
+        let new_path =
+            rename_entry_sync(&old, "new_dir").unwrap();
+        assert!(!old.exists());
+        assert!(new_path.is_dir());
+    }
+
+    #[test]
+    fn rename_entry_sync_target_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("old.txt");
+        let existing = dir.path().join("existing.txt");
+        fs::write(&old, "old").unwrap();
+        fs::write(&existing, "existing").unwrap();
+
+        let result = rename_entry_sync(&old, "existing.txt");
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("already exists")
+        );
+    }
+
+    // -- copy_single_file_sync tests (task 7.5) --
+
+    #[test]
+    fn copy_single_file_sync_basic() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src.txt");
+        let dest = dir.path().join("dest.txt");
+        fs::write(&src, "content").unwrap();
+
+        copy_single_file_sync(&src, &dest).unwrap();
+        assert_eq!(fs::read_to_string(&dest).unwrap(), "content");
+    }
+
+    #[test]
+    fn copy_single_file_sync_creates_parent_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src.txt");
+        let dest = dir.path().join("nested/deep/dest.txt");
+        fs::write(&src, "nested").unwrap();
+
+        copy_single_file_sync(&src, &dest).unwrap();
+        assert_eq!(fs::read_to_string(&dest).unwrap(), "nested");
+    }
+
+    #[test]
+    fn copy_single_file_sync_source_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("missing.txt");
+        let dest = dir.path().join("dest.txt");
+
+        let result = copy_single_file_sync(&src, &dest);
+        assert!(result.is_err());
     }
 }
