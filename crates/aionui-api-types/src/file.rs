@@ -234,10 +234,11 @@ pub enum SnapshotMode {
 }
 
 /// Information about a workspace snapshot.
+///
+/// API Spec: `branch: string | null` — always present in JSON output.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnapshotInfoResponse {
     pub mode: SnapshotMode,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
 }
 
@@ -491,7 +492,8 @@ mod tests {
         };
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["mode"], "snapshot");
-        assert!(json.get("branch").is_none());
+        // API Spec: branch is always present, null when snapshot mode
+        assert!(json["branch"].is_null());
     }
 
     #[test]
