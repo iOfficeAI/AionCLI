@@ -53,6 +53,23 @@ pub enum ExtensionError {
         reason: String,
     },
 
+    #[error("Lifecycle hook '{hook}' timed out after {timeout_secs}s for extension '{extension_name}'")]
+    HookTimeout {
+        extension_name: String,
+        hook: String,
+        timeout_secs: u64,
+    },
+
+    #[error("Lifecycle hook '{hook}' failed for extension '{extension_name}': {reason}")]
+    HookFailed {
+        extension_name: String,
+        hook: String,
+        reason: String,
+    },
+
+    #[error("Lifecycle hook script not found: {0}")]
+    HookNotFound(String),
+
     #[error("State persistence failed: {0}")]
     StatePersistence(String),
 
@@ -88,6 +105,11 @@ impl From<ExtensionError> for AppError {
             ExtensionError::ReservedWebuiRoute { .. } => AppError::BadRequest(err.to_string()),
             ExtensionError::ThemeCssNotFound(path) => {
                 AppError::NotFound(format!("Theme CSS not found: {path}"))
+            }
+            ExtensionError::HookTimeout { .. } => AppError::Internal(err.to_string()),
+            ExtensionError::HookFailed { .. } => AppError::Internal(err.to_string()),
+            ExtensionError::HookNotFound(path) => {
+                AppError::NotFound(format!("Hook script not found: {path}"))
             }
             ExtensionError::ResolutionFailed { .. } => AppError::Internal(err.to_string()),
             ExtensionError::StatePersistence(msg) => AppError::Internal(msg),
