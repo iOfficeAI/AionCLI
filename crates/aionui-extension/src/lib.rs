@@ -3,6 +3,7 @@ pub mod dependency;
 pub mod error;
 pub mod external_paths;
 pub mod hub;
+pub mod hub_routes;
 pub mod lifecycle;
 pub mod loader;
 pub mod manifest;
@@ -10,6 +11,8 @@ pub mod permission;
 pub mod registry;
 mod registry_helpers;
 pub mod resolvers;
+pub mod routes;
+pub mod skill_routes;
 pub mod skill_service;
 pub mod state;
 pub mod template;
@@ -34,6 +37,9 @@ pub use watcher::ExtensionWatcher;
 
 pub use external_paths::ExternalPathsManager;
 pub use hub::{HubIndexManager, HubInstaller};
+pub use hub_routes::{HubRouterState, hub_routes};
+pub use routes::{ExtensionRouterState, extension_routes};
+pub use skill_routes::{SkillRouterState, skill_routes};
 pub use skill_service::{
     delete_skill, detect_and_count_external_skills, detect_common_skill_paths,
     export_skill_with_symlink, get_skill_paths, import_skill, import_skill_with_symlink,

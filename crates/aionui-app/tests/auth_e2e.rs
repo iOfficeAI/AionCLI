@@ -18,7 +18,7 @@ use aionui_app::AppServices;
 async fn build_app() -> (axum::Router, AppServices) {
     let db = aionui_db::init_database_memory().await.unwrap();
     let services = AppServices::from_database(db).await.unwrap();
-    let router = aionui_app::create_router(&services);
+    let router = aionui_app::create_router(&services).await;
     (router, services)
 }
 

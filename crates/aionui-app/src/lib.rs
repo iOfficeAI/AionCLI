@@ -18,6 +18,11 @@ use aionui_auth::{
     security_headers_middleware,
 };
 use aionui_conversation::{ConversationRouterState, ConversationService, conversation_routes};
+use aionui_extension::{
+    ExtensionRegistry, ExtensionRouterState, ExtensionStateStore, ExternalPathsManager,
+    HubIndexManager, HubInstaller, HubRouterState, SkillRouterState, extension_routes, hub_routes,
+    skill_routes,
+};
 use aionui_db::{
     Database, IUserRepository, SqliteClientPreferenceRepository, SqliteConversationRepository,
     SqliteProviderRepository, SqliteRemoteAgentRepository, SqliteSettingsRepository,
@@ -184,10 +189,14 @@ pub struct ModuleStates {
     pub auxiliary: AuxiliaryRouterState,
     pub file: FileRouterState,
     pub mcp: McpRouterState,
+    pub extension: ExtensionRouterState,
+    pub hub: HubRouterState,
+    pub skill: SkillRouterState,
 }
 
 /// Build all default `ModuleStates` from application services.
-pub fn build_module_states(services: &AppServices) -> ModuleStates {
+pub async fn build_module_states(services: &AppServices) -> ModuleStates {
+    let (ext_state, hub_state, skill_state) = build_extension_states(services).await;
     ModuleStates {
         system: build_system_state(services),
         conversation: build_conversation_state(services),
@@ -197,6 +206,9 @@ pub fn build_module_states(services: &AppServices) -> ModuleStates {
         auxiliary: build_auxiliary_state(services),
         file: build_file_state(services),
         mcp: build_mcp_state(services),
+        extension: ext_state,
+        hub: hub_state,
+        skill: skill_state,
     }
 }
 
@@ -237,8 +249,8 @@ pub fn build_system_state(services: &AppServices) -> SystemRouterState {
 /// 1. Security response headers (X-Frame-Options, etc.)
 /// 2. CSRF protection (Double Submit Cookie)
 /// 3. Route handlers (auth routes + system routes + conversation routes + file routes + health check)
-pub fn create_router(services: &AppServices) -> Router {
-    let states = build_module_states(services);
+pub async fn create_router(services: &AppServices) -> Router {
+    let states = build_module_states(services).await;
     create_router_with_states(services, states)
 }
 
@@ -334,6 +346,53 @@ pub fn build_mcp_state(services: &AppServices) -> McpRouterState {
     }
 }
 
+/// Build the default extension-related router states.
+///
+/// Returns `(ExtensionRouterState, HubRouterState, SkillRouterState)`.
+pub async fn build_extension_states(
+    services: &AppServices,
+) -> (ExtensionRouterState, HubRouterState, SkillRouterState) {
+    let data_dir = dirs::home_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join(".aionui");
+
+    let state_store = ExtensionStateStore::new(data_dir.join("extension-states.json"));
+    let registry = ExtensionRegistry::new(
+        state_store,
+        services.event_bus.clone(),
+        env!("CARGO_PKG_VERSION").to_string(),
+    );
+
+    let hub_dir = data_dir.join("extensions");
+    let index_manager = HubIndexManager::new(hub_dir, registry.clone());
+    let installer = HubInstaller::new(index_manager.clone(), registry.clone());
+
+    // Skill paths: use app resource dir (binary's parent) for built-in resources.
+    let app_resource_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|pp| pp.to_path_buf()))
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let skill_paths = aionui_extension::resolve_skill_paths(&app_resource_dir);
+
+    let ext_paths_mgr = Arc::new(ExternalPathsManager::new(&data_dir).await);
+
+    let ext_state = ExtensionRouterState {
+        registry: registry.clone(),
+    };
+
+    let hub_state = HubRouterState {
+        index_manager,
+        installer,
+    };
+
+    let skill_state = SkillRouterState {
+        skill_paths,
+        external_paths_manager: ext_paths_mgr,
+    };
+
+    (ext_state, hub_state, skill_state)
+}
+
 /// Build the default `WsHandlerState` from application services.
 ///
 /// Tests can call this and override individual fields before passing
@@ -417,6 +476,18 @@ pub fn create_router_with_all_state(
 
     // MCP routes protected by auth middleware
     let mcp_authenticated = mcp_routes(states.mcp)
+        .route_layer(from_fn_with_state(auth_mw_state.clone(), auth_middleware));
+
+    // Extension routes protected by auth middleware
+    let extension_authenticated = extension_routes(states.extension)
+        .route_layer(from_fn_with_state(auth_mw_state.clone(), auth_middleware));
+
+    // Hub routes protected by auth middleware
+    let hub_authenticated = hub_routes(states.hub)
+        .route_layer(from_fn_with_state(auth_mw_state.clone(), auth_middleware));
+
+    // Skill routes protected by auth middleware
+    let skill_authenticated = skill_routes(states.skill)
         .route_layer(from_fn_with_state(auth_mw_state, auth_middleware));
 
     // WebSocket upgrade route — exempt from CSRF (no cookie-based
@@ -436,6 +507,9 @@ pub fn create_router_with_all_state(
         .merge(auxiliary_authenticated)
         .merge(file_authenticated)
         .merge(mcp_authenticated)
+        .merge(extension_authenticated)
+        .merge(hub_authenticated)
+        .merge(skill_authenticated)
         .layer(middleware::from_fn_with_state(
             services.cookie_config.clone(),
             csrf_middleware,

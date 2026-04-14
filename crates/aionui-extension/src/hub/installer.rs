@@ -147,6 +147,10 @@ impl HubInstaller {
 
     /// Uninstall an extension by removing its directory and hot-reloading.
     pub async fn uninstall(&self, name: &str) -> HubResult {
+        if let Err(msg) = validate_hub_name(name) {
+            return HubResult::err(msg);
+        }
+
         info!(name, "hub: uninstalling extension");
 
         let target_dir = self.index_manager.install_target_dir();
@@ -247,6 +251,18 @@ impl HubInstaller {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Validate an extension name to prevent path traversal attacks.
+fn validate_hub_name(name: &str) -> Result<(), String> {
+    if name.is_empty()
+        || name.contains('/')
+        || name.contains('\\')
+        || name.contains("..")
+    {
+        return Err(format!("Invalid extension name: '{name}'"));
+    }
+    Ok(())
+}
 
 /// Check if `index_version` is newer than `installed_version`.
 fn is_newer(index_version: &str, installed_version: &str) -> bool {
@@ -368,6 +384,22 @@ mod tests {
 
         let result = installer.verify_installation(tmp.path());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_hub_name_rejects_traversal() {
+        assert!(validate_hub_name("../etc").is_err());
+        assert!(validate_hub_name("foo/../../bar").is_err());
+        assert!(validate_hub_name("foo\\bar").is_err());
+        assert!(validate_hub_name("").is_err());
+        assert!(validate_hub_name("..").is_err());
+    }
+
+    #[test]
+    fn validate_hub_name_accepts_valid() {
+        assert!(validate_hub_name("my-extension").is_ok());
+        assert!(validate_hub_name("ext_v2").is_ok());
+        assert!(validate_hub_name("a").is_ok());
     }
 
     fn make_test_registry() -> ExtensionRegistry {

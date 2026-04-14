@@ -210,7 +210,7 @@ async fn build_app_with_mock_tasks() -> (
     let mock_tm = Arc::new(MockTaskManager::new());
     let services = services.with_worker_task_manager(mock_tm.clone());
 
-    let router = aionui_app::create_router(&services);
+    let router = aionui_app::create_router(&services).await;
     (router, services, mock_tm)
 }
 

@@ -8,6 +8,7 @@ aionui-common.workspace = true
 aionui-db.workspace = true
 aionui-api-types.workspace = true
 aionui-realtime.workspace = true
+axum.workspace = true
 dirs.workspace = true
 semver.workspace = true
 notify.workspace = true

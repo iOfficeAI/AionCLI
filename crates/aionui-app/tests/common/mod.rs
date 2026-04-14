@@ -14,7 +14,7 @@ use aionui_system::VersionCheckService;
 pub async fn build_app() -> (axum::Router, AppServices) {
     let db = aionui_db::init_database_memory().await.unwrap();
     let services = AppServices::from_database(db).await.unwrap();
-    let router = create_router(&services);
+    let router = create_router(&services).await;
     (router, services)
 }
 
@@ -24,7 +24,7 @@ pub async fn build_app_with_mock_version(
 ) -> (axum::Router, AppServices) {
     let db = aionui_db::init_database_memory().await.unwrap();
     let services = AppServices::from_database(db).await.unwrap();
-    let mut states = build_module_states(&services);
+    let mut states = build_module_states(&services).await;
     states.system.version_check_service = VersionCheckService::with_api_base(
         reqwest::Client::new(),
         current_version.to_owned(),

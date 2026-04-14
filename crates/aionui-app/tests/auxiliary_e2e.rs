@@ -44,7 +44,7 @@ async fn create_conversation(
 async fn build_app() -> (axum::Router, aionui_app::AppServices) {
     let db = aionui_db::init_database_memory().await.unwrap();
     let services = aionui_app::AppServices::from_database(db).await.unwrap();
-    let router = aionui_app::create_router(&services);
+    let router = aionui_app::create_router(&services).await;
     (router, services)
 }
 

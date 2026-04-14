@@ -54,7 +54,7 @@ async fn main() -> Result<()> {
         info!("No configured users detected — initial setup required via /api/auth/status");
     }
 
-    let router = create_router(&services);
+    let router = create_router(&services).await;
     let addr = config.socket_addr();
     let listener = TcpListener::bind(&addr).await?;
 
