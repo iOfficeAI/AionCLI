@@ -16,13 +16,17 @@ use crate::types::{ExtensionManifest, ExtensionSource, ExtensionState};
 pub enum DependencyIssue {
     /// A required dependency is not installed.
     Missing {
+        #[serde(rename = "ext")]
         extension: String,
+        #[serde(rename = "dep")]
         dependency: String,
         required: String,
     },
     /// A dependency exists but its version does not satisfy the requirement.
     VersionMismatch {
+        #[serde(rename = "ext")]
         extension: String,
+        #[serde(rename = "dep")]
         dependency: String,
         required: String,
         actual: String,

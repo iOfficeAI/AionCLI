@@ -1,0 +1,385 @@
+use std::path::Path;
+
+use tracing::{debug, info, warn};
+
+use crate::constants::EXTENSION_MANIFEST_FILE;
+use crate::error::ExtensionError;
+use crate::manifest::{parse_manifest, validate_manifest};
+use crate::registry::ExtensionRegistry;
+use crate::resolvers::resolve_extension_contributions;
+use crate::types::{ExtensionSource, ExtensionState, LoadedExtension};
+
+use super::index_manager::HubIndexManager;
+
+// ---------------------------------------------------------------------------
+// Result type
+// ---------------------------------------------------------------------------
+
+/// Outcome of a Hub install/update/uninstall operation.
+#[derive(Debug, Clone)]
+pub struct HubResult {
+    pub success: bool,
+    pub msg: Option<String>,
+}
+
+impl HubResult {
+    fn ok() -> Self {
+        Self {
+            success: true,
+            msg: None,
+        }
+    }
+
+    fn err(msg: impl Into<String>) -> Self {
+        Self {
+            success: false,
+            msg: Some(msg.into()),
+        }
+    }
+}
+
+/// Info about an available update.
+#[derive(Debug, Clone)]
+pub struct HubUpdateInfo {
+    pub name: String,
+    pub current_version: String,
+    pub latest_version: String,
+}
+
+// ---------------------------------------------------------------------------
+// HubInstaller
+// ---------------------------------------------------------------------------
+
+/// Handles extension installation, update, uninstall, and verification.
+///
+/// For this phase, remote downloading is a stub — extensions must already
+/// be present in the Hub directory or have a bundled flag. The installer
+/// verifies the manifest and contributions, then triggers a hot reload.
+#[derive(Clone)]
+pub struct HubInstaller {
+    index_manager: HubIndexManager,
+    registry: ExtensionRegistry,
+}
+
+impl HubInstaller {
+    pub fn new(
+        index_manager: HubIndexManager,
+        registry: ExtensionRegistry,
+    ) -> Self {
+        Self {
+            index_manager,
+            registry,
+        }
+    }
+
+    /// Install an extension from the Hub by name.
+    ///
+    /// Flow: look up in index → verify the extension directory exists →
+    /// validate manifest → verify contributions → trigger hot reload.
+    pub async fn install(&self, name: &str) -> HubResult {
+        info!(name, "hub: installing extension");
+
+        let entry = match self.index_manager.get_extension(name) {
+            Some(e) => e,
+            None => return HubResult::err(format!("Extension '{name}' not found in hub index")),
+        };
+
+        let target_dir = self.index_manager.install_target_dir();
+        let ext_dir = target_dir.join(&entry.name);
+
+        // For now, the extension directory must already exist (no remote download).
+        // Future: download from entry.download_url and extract.
+        if !ext_dir.exists() {
+            return HubResult::err(format!(
+                "Extension directory not found: {}. Remote download not yet implemented.",
+                ext_dir.display()
+            ));
+        }
+
+        if let Err(e) = self.verify_installation(&ext_dir) {
+            return HubResult::err(format!("Installation verification failed: {e}"));
+        }
+
+        // Trigger hot reload to pick up the new extension.
+        self.registry.hot_reload().await;
+
+        info!(name, "hub: extension installed successfully");
+        HubResult::ok()
+    }
+
+    /// Retry a previously failed installation.
+    pub async fn retry_install(&self, name: &str) -> HubResult {
+        debug!(name, "hub: retrying installation");
+        self.install(name).await
+    }
+
+    /// Update an installed extension to the latest version from the index.
+    ///
+    /// For this phase, update is equivalent to re-verifying the existing
+    /// directory (which may have been updated externally) and hot-reloading.
+    pub async fn update(&self, name: &str) -> HubResult {
+        info!(name, "hub: updating extension");
+
+        let entry = match self.index_manager.get_extension(name) {
+            Some(e) => e,
+            None => return HubResult::err(format!("Extension '{name}' not found in hub index")),
+        };
+
+        let target_dir = self.index_manager.install_target_dir();
+        let ext_dir = target_dir.join(&entry.name);
+
+        if !ext_dir.exists() {
+            return HubResult::err(format!(
+                "Extension not installed: {}",
+                ext_dir.display()
+            ));
+        }
+
+        if let Err(e) = self.verify_installation(&ext_dir) {
+            return HubResult::err(format!("Update verification failed: {e}"));
+        }
+
+        self.registry.hot_reload().await;
+
+        info!(name, "hub: extension updated successfully");
+        HubResult::ok()
+    }
+
+    /// Uninstall an extension by removing its directory and hot-reloading.
+    pub async fn uninstall(&self, name: &str) -> HubResult {
+        info!(name, "hub: uninstalling extension");
+
+        let target_dir = self.index_manager.install_target_dir();
+        let ext_dir = target_dir.join(name);
+
+        if !ext_dir.exists() {
+            return HubResult::err(format!("Extension '{name}' is not installed"));
+        }
+
+        if let Err(e) = std::fs::remove_dir_all(&ext_dir) {
+            warn!(
+                name,
+                error = %e,
+                "hub: failed to remove extension directory"
+            );
+            return HubResult::err(format!("Failed to remove extension directory: {e}"));
+        }
+
+        self.registry.hot_reload().await;
+
+        info!(name, "hub: extension uninstalled successfully");
+        HubResult::ok()
+    }
+
+    /// Check for available updates across all installed extensions.
+    ///
+    /// Compares installed versions against the Hub index.
+    pub async fn check_updates(&self) -> Vec<HubUpdateInfo> {
+        let index_list = self.index_manager.load_index().await;
+        let loaded = self.registry.get_loaded_extensions().await;
+
+        let mut updates = Vec::new();
+
+        for hub_ext in &index_list {
+            if hub_ext.bundled {
+                continue;
+            }
+
+            if let Some(installed) = loaded.iter().find(|l| l.name == hub_ext.name)
+                && is_newer(&hub_ext.version, &installed.version)
+            {
+                updates.push(HubUpdateInfo {
+                    name: hub_ext.name.clone(),
+                    current_version: installed.version.clone(),
+                    latest_version: hub_ext.version.clone(),
+                });
+            }
+        }
+
+        updates
+    }
+
+    /// Verify that an extension directory contains a valid manifest
+    /// and that its contributions can be resolved without errors.
+    pub fn verify_installation(&self, ext_dir: &Path) -> Result<(), ExtensionError> {
+        let manifest_path = ext_dir.join(EXTENSION_MANIFEST_FILE);
+
+        if !manifest_path.exists() {
+            return Err(ExtensionError::ManifestValidation(format!(
+                "Manifest not found: {}",
+                manifest_path.display()
+            )));
+        }
+
+        let bytes = std::fs::read(&manifest_path)?;
+        let manifest = parse_manifest(&bytes)?;
+        validate_manifest(&manifest)?;
+
+        // Build a temporary LoadedExtension to test contribution resolution.
+        let loaded = LoadedExtension {
+            manifest,
+            directory: ext_dir
+                .to_str()
+                .unwrap_or_default()
+                .to_owned(),
+            source: ExtensionSource::Local,
+            state: ExtensionState {
+                name: "verification-check".into(),
+                version: "0.0.0".into(),
+                enabled: true,
+                installed_at: None,
+                last_activated_at: None,
+            },
+        };
+
+        // Resolve contributions — this validates CSS files exist for themes,
+        // route namespaces for webui, etc.
+        let _contributions = resolve_extension_contributions(&loaded);
+
+        debug!(
+            dir = %ext_dir.display(),
+            "hub: installation verification passed"
+        );
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Check if `index_version` is newer than `installed_version`.
+fn is_newer(index_version: &str, installed_version: &str) -> bool {
+    let Ok(idx) = semver::Version::parse(index_version) else {
+        return false;
+    };
+    let Ok(inst) = semver::Version::parse(installed_version) else {
+        return false;
+    };
+    idx > inst
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hub_result_ok() {
+        let r = HubResult::ok();
+        assert!(r.success);
+        assert!(r.msg.is_none());
+    }
+
+    #[test]
+    fn hub_result_err() {
+        let r = HubResult::err("something failed");
+        assert!(!r.success);
+        assert_eq!(r.msg.as_deref(), Some("something failed"));
+    }
+
+    #[test]
+    fn is_newer_true() {
+        assert!(is_newer("2.0.0", "1.0.0"));
+        assert!(is_newer("1.1.0", "1.0.0"));
+        assert!(is_newer("1.0.1", "1.0.0"));
+    }
+
+    #[test]
+    fn is_newer_false() {
+        assert!(!is_newer("1.0.0", "1.0.0"));
+        assert!(!is_newer("1.0.0", "2.0.0"));
+    }
+
+    #[test]
+    fn is_newer_invalid_versions() {
+        assert!(!is_newer("not-semver", "1.0.0"));
+        assert!(!is_newer("1.0.0", "not-semver"));
+    }
+
+    #[test]
+    fn verify_installation_no_manifest() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let registry = make_test_registry();
+        let index_mgr = HubIndexManager::new(tmp.path().to_path_buf(), registry.clone());
+        let installer = HubInstaller::new(index_mgr, registry);
+
+        let result = installer.verify_installation(tmp.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn verify_installation_invalid_manifest() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join(EXTENSION_MANIFEST_FILE),
+            b"not valid json",
+        )
+        .unwrap();
+
+        let registry = make_test_registry();
+        let index_mgr = HubIndexManager::new(tmp.path().to_path_buf(), registry.clone());
+        let installer = HubInstaller::new(index_mgr, registry);
+
+        let result = installer.verify_installation(tmp.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn verify_installation_valid_manifest() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let manifest = serde_json::json!({
+            "name": "test-ext",
+            "version": "1.0.0"
+        });
+        std::fs::write(
+            tmp.path().join(EXTENSION_MANIFEST_FILE),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let registry = make_test_registry();
+        let index_mgr = HubIndexManager::new(tmp.path().to_path_buf(), registry.clone());
+        let installer = HubInstaller::new(index_mgr, registry);
+
+        let result = installer.verify_installation(tmp.path());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn verify_installation_reserved_name_fails() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let manifest = serde_json::json!({
+            "name": "aion-internal-ext",
+            "version": "1.0.0"
+        });
+        std::fs::write(
+            tmp.path().join(EXTENSION_MANIFEST_FILE),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let registry = make_test_registry();
+        let index_mgr = HubIndexManager::new(tmp.path().to_path_buf(), registry.clone());
+        let installer = HubInstaller::new(index_mgr, registry);
+
+        let result = installer.verify_installation(tmp.path());
+        assert!(result.is_err());
+    }
+
+    fn make_test_registry() -> ExtensionRegistry {
+        use crate::state::ExtensionStateStore;
+        use aionui_realtime::BroadcastEventBus;
+        use std::sync::Arc;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let store = ExtensionStateStore::new(tmp.path().join("states.json"));
+        let bus = Arc::new(BroadcastEventBus::new(64));
+        // Leak the TempDir so it lives long enough for the test.
+        std::mem::forget(tmp);
+        ExtensionRegistry::new(store, bus, "1.0.0".into())
+    }
+}

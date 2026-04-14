@@ -2,6 +2,7 @@ pub mod constants;
 pub mod dependency;
 pub mod error;
 pub mod external_paths;
+pub mod hub;
 pub mod lifecycle;
 pub mod loader;
 pub mod manifest;
@@ -32,6 +33,7 @@ pub use types::*;
 pub use watcher::ExtensionWatcher;
 
 pub use external_paths::ExternalPathsManager;
+pub use hub::{HubIndexManager, HubInstaller};
 pub use skill_service::{
     delete_skill, detect_and_count_external_skills, detect_common_skill_paths,
     export_skill_with_symlink, get_skill_paths, import_skill, import_skill_with_symlink,
