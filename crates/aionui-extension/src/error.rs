@@ -21,6 +21,23 @@ pub enum ExtensionError {
     #[error("Path traversal detected: {0}")]
     PathTraversal(String),
 
+    #[error("Engine incompatible: extension '{name}' requires aionui {required}, got {actual}")]
+    EngineIncompatible {
+        name: String,
+        required: String,
+        actual: String,
+    },
+
+    #[error("API version incompatible: extension '{name}' requires API {required}, supported {supported}")]
+    ApiVersionIncompatible {
+        name: String,
+        required: String,
+        supported: String,
+    },
+
+    #[error("State persistence failed: {0}")]
+    StatePersistence(String),
+
     #[error("{0}")]
     Io(#[from] std::io::Error),
 
@@ -43,6 +60,11 @@ impl From<ExtensionError> for AppError {
             ExtensionError::PathTraversal(path) => {
                 AppError::BadRequest(format!("Path traversal detected: {path}"))
             }
+            ExtensionError::EngineIncompatible { .. } => AppError::BadRequest(err.to_string()),
+            ExtensionError::ApiVersionIncompatible { .. } => {
+                AppError::BadRequest(err.to_string())
+            }
+            ExtensionError::StatePersistence(msg) => AppError::Internal(msg),
             ExtensionError::Io(e) => AppError::Internal(e.to_string()),
             ExtensionError::JsonParse(e) => AppError::BadRequest(e.to_string()),
         }

@@ -75,9 +75,11 @@ mod tests {
     #[test]
     fn test_lifecycle_timeouts_ordering() {
         // onInstall should have the longest timeout
-        assert!(LIFECYCLE_ON_INSTALL_TIMEOUT_SECS >= LIFECYCLE_ON_ACTIVATE_TIMEOUT_SECS);
-        assert!(LIFECYCLE_ON_INSTALL_TIMEOUT_SECS >= LIFECYCLE_ON_DEACTIVATE_TIMEOUT_SECS);
-        assert!(LIFECYCLE_ON_UNINSTALL_TIMEOUT_SECS >= LIFECYCLE_ON_DEACTIVATE_TIMEOUT_SECS);
+        const {
+            assert!(LIFECYCLE_ON_INSTALL_TIMEOUT_SECS >= LIFECYCLE_ON_ACTIVATE_TIMEOUT_SECS);
+            assert!(LIFECYCLE_ON_INSTALL_TIMEOUT_SECS >= LIFECYCLE_ON_DEACTIVATE_TIMEOUT_SECS);
+            assert!(LIFECYCLE_ON_UNINSTALL_TIMEOUT_SECS >= LIFECYCLE_ON_DEACTIVATE_TIMEOUT_SECS);
+        }
     }
 
     #[test]
@@ -89,8 +91,10 @@ mod tests {
 
     #[test]
     fn test_debounce_values_positive() {
-        assert!(DEBOUNCE_MS > 0);
-        assert!(STATE_PERSIST_DEBOUNCE_MS > 0);
-        assert!(ACTIVITY_SNAPSHOT_TTL_MS > 0);
+        const {
+            assert!(DEBOUNCE_MS > 0);
+            assert!(STATE_PERSIST_DEBOUNCE_MS > 0);
+            assert!(ACTIVITY_SNAPSHOT_TTL_MS > 0);
+        }
     }
 }

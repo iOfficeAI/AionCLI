@@ -139,5 +139,8 @@ base64 = "0.22"
 # HTTP body utilities (testing)
 http-body-util = "0.1"
 
+# Testing
+tempfile = "3"
+
 # Random
 getrandom = "0.2"
