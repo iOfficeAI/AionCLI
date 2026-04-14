@@ -26,7 +26,11 @@ use aionui_db::{
 use aionui_file::{
     FileRouterState, FileService, FileWatchService, SnapshotService, file_routes,
 };
-use aionui_mcp::{McpConfigService, McpRouterState, mcp_routes};
+use aionui_mcp::{
+    AionrsAdapter, AionuiAdapter, ClaudeAdapter, CodeBuddyAdapter, CodexAdapter, GeminiAdapter,
+    IFlowAdapter, McpAgentAdapter, McpConfigService, McpRouterState, McpSyncService,
+    OpencodeAdapter, QwenAdapter, mcp_routes,
+};
 use aionui_realtime::{
     BroadcastEventBus, NoopMessageRouter, WebSocketManager, WsHandlerState, ws_upgrade_handler,
 };
@@ -301,9 +305,24 @@ pub fn build_file_state(services: &AppServices) -> FileRouterState {
 /// Build the default `McpRouterState` from application services.
 pub fn build_mcp_state(services: &AppServices) -> McpRouterState {
     let pool = services.database.pool().clone();
-    let repo = Arc::new(aionui_db::SqliteMcpServerRepository::new(pool));
+    let repo: Arc<dyn aionui_db::IMcpServerRepository> =
+        Arc::new(aionui_db::SqliteMcpServerRepository::new(pool));
+
+    let adapters: Vec<Arc<dyn McpAgentAdapter>> = vec![
+        Arc::new(ClaudeAdapter),
+        Arc::new(GeminiAdapter),
+        Arc::new(QwenAdapter),
+        Arc::new(IFlowAdapter),
+        Arc::new(CodexAdapter),
+        Arc::new(CodeBuddyAdapter),
+        Arc::new(OpencodeAdapter),
+        Arc::new(AionrsAdapter),
+        Arc::new(AionuiAdapter::new(repo.clone())),
+    ];
+
     McpRouterState {
-        config_service: McpConfigService::new(repo),
+        config_service: McpConfigService::new(repo.clone()),
+        sync_service: McpSyncService::new(repo, adapters),
     }
 }
 

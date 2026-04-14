@@ -292,6 +292,7 @@ dependencies = [
  "aionui-system",
  "async-trait",
  "axum",
+ "dashmap",
  "dirs",
  "oauth2",
  "reqwest",
@@ -300,6 +301,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "toml",
+ "tracing",
 ]
 
 [[package]]
