@@ -171,12 +171,14 @@ dependencies = [
  "aionui-db",
  "aionui-realtime",
  "async-trait",
+ "getrandom 0.2.17",
  "reqwest",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite 0.26.2",
+ "tracing",
 ]
 
 [[package]]

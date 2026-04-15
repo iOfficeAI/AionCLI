@@ -22,5 +22,7 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 async-trait.workspace = true
+tracing.workspace = true
+getrandom.workspace = true
 reqwest = { workspace = true, optional = true }
 tokio-tungstenite = { workspace = true, optional = true }
