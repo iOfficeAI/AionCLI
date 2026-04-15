@@ -6,3 +6,6 @@ pub mod lark;
 
 #[cfg(feature = "dingtalk")]
 pub mod dingtalk;
+
+#[cfg(feature = "weixin")]
+pub mod weixin;
