@@ -5,7 +5,7 @@
 //! is out of scope for this service-layer test).
 //!
 //! Covers test-plan items: CJ-1..CJ-12, SK-1..SK-7, SC-1..SC-8,
-//! OC-1, ICronService trait integration.
+//! OC-1, SR-1, ICronService trait integration.
 
 use std::sync::{Arc, Mutex};
 
@@ -874,4 +874,72 @@ async fn update_max_retries() {
     };
     let updated = svc.update_job(&job.id, req).await.unwrap();
     assert_eq!(updated.max_retries, 5);
+}
+
+// ── SC-1: At type — future timestamp, nextRunAtMs == atMs ────────
+
+#[tokio::test]
+async fn sc1_at_type_future_timestamp() {
+    let (svc, _, _) = setup().await;
+    let target_ms = now_ms() + 3_600_000;
+    let req = make_create_req(
+        "At Future",
+        CronScheduleDto::At {
+            at_ms: target_ms,
+            description: Some("once in 1h".into()),
+        },
+    );
+    let job = svc.add_job(req).await.unwrap();
+    assert_eq!(job.next_run_at, Some(target_ms));
+}
+
+// ── SC-2: At type — past timestamp, nextRunAtMs == atMs ──────────
+
+#[tokio::test]
+async fn sc2_at_type_past_timestamp() {
+    let (svc, _, _) = setup().await;
+    let target_ms = now_ms() - 3_600_000;
+    let req = make_create_req(
+        "At Past",
+        CronScheduleDto::At {
+            at_ms: target_ms,
+            description: Some("once in the past".into()),
+        },
+    );
+    let job = svc.add_job(req).await.unwrap();
+    assert_eq!(job.next_run_at, Some(target_ms));
+}
+
+// ── SR-1: System resume detects missed jobs ──────────────────────
+
+#[tokio::test]
+async fn sr1_system_resume_missed_job() {
+    let (svc, repo, bc) = setup().await;
+
+    let req = make_create_req("Resume Job", every_60s());
+    let job = svc.add_job(req).await.unwrap();
+    bc.take_events();
+
+    let past_ms = now_ms() - 10_000;
+    let params = aionui_db::UpdateCronJobParams {
+        next_run_at: Some(Some(past_ms)),
+        ..Default::default()
+    };
+    repo.update(&job.id, &params).await.unwrap();
+
+    svc.handle_system_resume().await;
+
+    let updated = svc.get_job(&job.id).await.unwrap();
+    assert!(
+        updated.last_run_at.is_some(),
+        "missed job should have been executed (last_run_at set)"
+    );
+    assert!(
+        updated.next_run_at.is_some(),
+        "job should be rescheduled after execution"
+    );
+    assert!(
+        updated.next_run_at.unwrap() > now_ms() - 2000,
+        "next_run_at should be in the future"
+    );
 }

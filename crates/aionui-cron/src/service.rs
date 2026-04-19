@@ -474,48 +474,48 @@ impl CronService {
     }
 
     async fn update_job_after_success(&self, job_id: &str, _conversation_id: &str) {
+        let run_count = match self.repo.get_by_id(job_id).await {
+            Ok(Some(r)) => r.run_count,
+            Ok(None) => return,
+            Err(e) => {
+                error!(job_id, error = %e, "Failed to read job for run_count");
+                return;
+            }
+        };
         let now = now_ms();
         let params = UpdateCronJobParams {
             last_run_at: Some(Some(now)),
             last_status: Some(Some("ok".into())),
             last_error: Some(None),
             retry_count: Some(0),
+            run_count: Some(run_count + 1),
             ..Default::default()
         };
         if let Err(e) = self.repo.update(job_id, &params).await {
             error!(job_id, error = %e, "Failed to update job after success");
-            return;
         }
-        self.increment_run_count(job_id).await;
     }
 
     async fn update_job_after_error(&self, job_id: &str, message: &str) {
+        let run_count = match self.repo.get_by_id(job_id).await {
+            Ok(Some(r)) => r.run_count,
+            Ok(None) => return,
+            Err(e) => {
+                error!(job_id, error = %e, "Failed to read job for run_count");
+                return;
+            }
+        };
         let now = now_ms();
         let params = UpdateCronJobParams {
             last_run_at: Some(Some(now)),
             last_status: Some(Some("error".into())),
             last_error: Some(Some(message.to_owned())),
             retry_count: Some(0),
+            run_count: Some(run_count + 1),
             ..Default::default()
         };
         if let Err(e) = self.repo.update(job_id, &params).await {
             error!(job_id, error = %e, "Failed to update job after error");
-            return;
-        }
-        self.increment_run_count(job_id).await;
-    }
-
-    async fn increment_run_count(&self, job_id: &str) {
-        let row = match self.repo.get_by_id(job_id).await {
-            Ok(Some(r)) => r,
-            _ => return,
-        };
-        let params = UpdateCronJobParams {
-            run_count: Some(row.run_count + 1),
-            ..Default::default()
-        };
-        if let Err(e) = self.repo.update(job_id, &params).await {
-            error!(job_id, error = %e, "Failed to increment run count");
         }
     }
 
@@ -531,6 +531,14 @@ impl CronService {
                 error!(job_id = %job.id, error = %e, "Failed to disable at-type job");
             }
             self.scheduler.cancel_job(&job.id);
+
+            let disabled = CronJob {
+                enabled: false,
+                next_run_at: None,
+                ..job.clone()
+            };
+            self.broadcast_event("cron.jobUpdated", &cron_job_to_response(&disabled));
+
             info!(job_id = %job.id, "At-type job executed, auto-disabled");
             return;
         }
