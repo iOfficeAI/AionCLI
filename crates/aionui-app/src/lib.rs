@@ -39,6 +39,7 @@ use aionui_mcp::{
 use aionui_channel::{ChannelRouterState, channel_routes};
 #[cfg(feature = "weixin")]
 use aionui_channel::weixin_login_route;
+use aionui_team::{TeamRouterState, TeamSessionService, team_routes};
 use aionui_realtime::{
     BroadcastEventBus, NoopMessageRouter, WebSocketManager, WsHandlerState, ws_upgrade_handler,
 };
@@ -196,6 +197,7 @@ pub struct ModuleStates {
     pub hub: HubRouterState,
     pub skill: SkillRouterState,
     pub channel: ChannelRouterState,
+    pub team: TeamRouterState,
 }
 
 /// Build all default `ModuleStates` from application services.
@@ -214,6 +216,7 @@ pub async fn build_module_states(services: &AppServices) -> ModuleStates {
         hub: hub_state,
         skill: skill_state,
         channel: build_channel_state(services),
+        team: build_team_state(services),
     }
 }
 
@@ -390,6 +393,23 @@ pub fn build_channel_state(services: &AppServices) -> ChannelRouterState {
     }
 }
 
+/// Build the default `TeamRouterState` from application services.
+pub fn build_team_state(services: &AppServices) -> TeamRouterState {
+    let pool = services.database.pool().clone();
+    let team_repo: Arc<dyn aionui_db::ITeamRepository> =
+        Arc::new(aionui_db::SqliteTeamRepository::new(pool.clone()));
+    let conv_repo: Arc<dyn aionui_db::IConversationRepository> =
+        Arc::new(SqliteConversationRepository::new(pool));
+    let conv_service =
+        ConversationService::new(conv_repo, services.event_bus.clone());
+    let service = Arc::new(TeamSessionService::new(
+        team_repo,
+        conv_service,
+        services.event_bus.clone(),
+    ));
+    TeamRouterState { service }
+}
+
 /// Build the default extension-related router states.
 ///
 /// Returns `(ExtensionRouterState, HubRouterState, SkillRouterState)`.
@@ -539,6 +559,10 @@ pub fn create_router_with_all_state(
     let weixin_login_authenticated = weixin_login_route(states.channel.clone())
         .route_layer(from_fn_with_state(auth_mw_state.clone(), auth_middleware));
     let channel_authenticated = channel_routes(states.channel)
+        .route_layer(from_fn_with_state(auth_mw_state.clone(), auth_middleware));
+
+    // Team routes protected by auth middleware
+    let team_authenticated = team_routes(states.team)
         .route_layer(from_fn_with_state(auth_mw_state, auth_middleware));
 
     // WebSocket upgrade route — exempt from CSRF (no cookie-based
@@ -561,7 +585,8 @@ pub fn create_router_with_all_state(
         .merge(extension_authenticated)
         .merge(hub_authenticated)
         .merge(skill_authenticated)
-        .merge(channel_authenticated);
+        .merge(channel_authenticated)
+        .merge(team_authenticated);
 
     // Conditionally merge WeChat login SSE route (feature-gated)
     #[cfg(feature = "weixin")]

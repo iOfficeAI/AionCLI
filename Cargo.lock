@@ -389,11 +389,13 @@ version = "0.1.0"
 dependencies = [
  "aionui-ai-agent",
  "aionui-api-types",
+ "aionui-auth",
  "aionui-common",
  "aionui-conversation",
  "aionui-db",
  "aionui-realtime",
  "async-trait",
+ "axum",
  "dashmap",
  "serde",
  "serde_json",
