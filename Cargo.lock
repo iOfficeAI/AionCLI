@@ -375,11 +375,13 @@ dependencies = [
  "open",
  "reqwest",
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
  "which",
+ "wiremock",
 ]
 
 [[package]]
@@ -3417,6 +3419,7 @@ dependencies = [
  "bytes",
  "encoding_rs",
  "futures-core",
+ "futures-util",
  "h2 0.4.13",
  "http 1.4.0",
  "http-body 1.0.1",
@@ -3428,6 +3431,7 @@ dependencies = [
  "js-sys",
  "log",
  "mime",
+ "mime_guess",
  "native-tls",
  "percent-encoding",
  "pin-project-lite",
