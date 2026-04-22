@@ -496,6 +496,86 @@ async fn rm3_read_builtin_rule_rejects_path_traversal() {
 }
 
 // ---------------------------------------------------------------------------
+// SK — Built-in skill file reading (E4 / `POST /api/skills/builtin-skill`)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn sk1_read_builtin_skill_not_found() {
+    let (mut app, services) = build_app().await;
+    let (token, csrf) = setup_and_login(&mut app, &services, "user1", "pass1").await;
+
+    let resp = app
+        .oneshot(json_with_token(
+            "POST",
+            "/api/skills/builtin-skill",
+            json!({"fileName": "nonexistent.md"}),
+            &token,
+            &csrf,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let json = body_json(resp).await;
+    assert_eq!(json["success"], true);
+    assert_eq!(json["data"], "");
+}
+
+#[tokio::test]
+async fn sk2_read_builtin_skill_happy_path_returns_file_content() {
+    let tmp = TempDir::new().unwrap();
+    let (mut app, services, paths) = build_app_with_skill_paths(tmp.path()).await;
+    let (token, csrf) = setup_and_login(&mut app, &services, "user1", "pass1").await;
+
+    std::fs::write(
+        paths.builtin_skills_dir.join("cowork-skills.md"),
+        "## Cowork skills\n\n- git\n- bash\n",
+    )
+    .unwrap();
+
+    let resp = app
+        .oneshot(json_with_token(
+            "POST",
+            "/api/skills/builtin-skill",
+            json!({"fileName": "cowork-skills.md"}),
+            &token,
+            &csrf,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let json = body_json(resp).await;
+    assert_eq!(json["success"], true);
+    assert_eq!(json["data"], "## Cowork skills\n\n- git\n- bash\n");
+}
+
+#[tokio::test]
+async fn sk3_read_builtin_skill_rejects_path_traversal() {
+    let (mut app, services) = build_app().await;
+    let (token, csrf) = setup_and_login(&mut app, &services, "user1", "pass1").await;
+
+    for bad in ["../escape.md", "/etc/passwd", "nested/file.md", ""] {
+        let resp = app
+            .clone()
+            .oneshot(json_with_token(
+                "POST",
+                "/api/skills/builtin-skill",
+                json!({"fileName": bad}),
+                &token,
+                &csrf,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::BAD_REQUEST,
+            "fileName={bad:?} should be rejected",
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // SL — Skill listing (E1 / `GET /api/skills`)
 // ---------------------------------------------------------------------------
 
