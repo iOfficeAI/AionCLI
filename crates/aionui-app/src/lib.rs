@@ -435,16 +435,13 @@ pub fn build_cron_state(services: &AppServices) -> CronRouterState {
 
     let conv_repo: Arc<dyn aionui_db::IConversationRepository> =
         Arc::new(SqliteConversationRepository::new(pool));
-    let conv_service = Arc::new(ConversationService::new(
-        conv_repo.clone(),
-        services.event_bus.clone(),
-    ));
+    let conv_service = ConversationService::new(conv_repo.clone(), services.event_bus.clone());
 
     let busy_guard = Arc::new(aionui_cron::busy_guard::CronBusyGuard::new());
     let executor = Arc::new(aionui_cron::executor::JobExecutor::new(
         services.worker_task_manager.clone(),
         conv_repo,
-        conv_service,
+        Arc::new(conv_service.clone()),
         busy_guard,
     ));
 
@@ -472,7 +469,10 @@ pub fn build_cron_state(services: &AppServices) -> CronRouterState {
         .unwrap()
         .replace(cron_service.clone());
 
-    CronRouterState { cron_service }
+    CronRouterState {
+        cron_service,
+        conversation_service: conv_service,
+    }
 }
 
 /// Build the default `OfficeRouterState` from application services.

@@ -323,6 +323,16 @@ impl ConversationService {
         rows.into_iter().map(row_to_response).collect()
     }
 
+    /// List conversations spawned by a specific cron job.
+    pub async fn list_by_cron_job(
+        &self,
+        user_id: &str,
+        cron_job_id: &str,
+    ) -> Result<Vec<ConversationResponse>, AppError> {
+        let rows = self.repo.list_by_cron_job(user_id, cron_job_id).await?;
+        rows.into_iter().map(row_to_response).collect()
+    }
+
     /// List messages for a conversation with page-based pagination.
     pub async fn list_messages(
         &self,

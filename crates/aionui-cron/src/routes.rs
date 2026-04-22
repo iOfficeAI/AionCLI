@@ -5,8 +5,8 @@ use axum::http::StatusCode;
 use axum::routing::{get, post};
 
 use aionui_api_types::{
-    ApiResponse, CreateCronJobRequest, CronJobResponse, HasSkillResponse, ListCronJobsQuery,
-    RunNowResponse, SaveCronSkillRequest, UpdateCronJobRequest,
+    ApiResponse, ConversationResponse, CreateCronJobRequest, CronJobResponse, HasSkillResponse,
+    ListCronJobsQuery, RunNowResponse, SaveCronSkillRequest, UpdateCronJobRequest,
 };
 use aionui_auth::CurrentUser;
 use aionui_common::AppError;
@@ -22,6 +22,10 @@ pub fn cron_routes(state: CronRouterState) -> Router {
             get(get_job).put(update_job).delete(delete_job),
         )
         .route("/api/cron/jobs/{id}/run", post(run_now))
+        .route(
+            "/api/cron/jobs/{id}/conversations",
+            get(list_conversations_by_cron_job),
+        )
         .route("/api/cron/jobs/{id}/skill", get(has_skill).post(save_skill))
         .with_state(state)
 }
@@ -94,6 +98,18 @@ async fn save_skill(
     let Json(req) = body.map_err(|e| AppError::BadRequest(e.to_string()))?;
     state.cron_service.save_skill(&id, req).await?;
     Ok(Json(ApiResponse::success()))
+}
+
+async fn list_conversations_by_cron_job(
+    State(state): State<CronRouterState>,
+    Extension(user): Extension<CurrentUser>,
+    Path(id): Path<String>,
+) -> Result<Json<ApiResponse<Vec<ConversationResponse>>>, AppError> {
+    let items = state
+        .conversation_service
+        .list_by_cron_job(&user.id, &id)
+        .await?;
+    Ok(Json(ApiResponse::ok(items)))
 }
 
 async fn has_skill(
