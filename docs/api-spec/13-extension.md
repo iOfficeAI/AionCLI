@@ -625,3 +625,246 @@ validateDependencies(extensions)
 | `WebuiContribution` | WebUI 贡献 | `aionui-extension` |
 | `ResolvedSettingsTab` | 解析后的设置选项卡 | `aionui-extension` |
 | `ResolvedModelProvider` | 解析后的模型提供商 | `aionui-extension`（导出供 `aionui-system` 使用） |
+
+---
+
+## Skill Library
+
+> **Pilot scope (2026-04-22):** The Skill Library endpoints E1–E5 described
+> below are the first module migrated under the
+> [`docs/backend-migration/plans/2026-04-22-skill-library-pilot-plan.md`](../../../AionUi/docs/backend-migration/plans/2026-04-22-skill-library-pilot-plan.md)
+> pilot. Renderer callers already target `/api/skills/*` via `ipcBridge.fs.*`
+> (see `src/common/adapter/ipcBridge.ts` lines 301–329 in AionUi). Four of the
+> five endpoints (E1, E3, E4, E5) already have a Rust implementation in
+> `crates/aionui-extension/src/skill_routes.rs`; this section pins the
+> pilot-required contract and calls out the deltas that Task 2 must close.
+
+### TypeScript baseline (source of truth)
+
+The legacy behavior is defined by the renderer-side declarations in
+`AionUi/src/common/adapter/ipcBridge.ts` and the resolver / disk layout in the
+Electron main process. For reference:
+
+| ID | Renderer API                         | HTTP                             | TS resolver / disk source                                                                                                                          |
+| -- | ------------------------------------ | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| E1 | `ipcBridge.fs.listAvailableSkills`   | `GET /api/skills`                | Merge of: user skills (`~/.aionui/skills/`) + built-in skills (`src/process/resources/skills/` in dev / app-resource dir in prod) + `ExtensionRegistry.getSkills()`. Extension contributions resolved by `src/process/extensions/resolvers/SkillResolver.ts`. |
+| E2 | `ipcBridge.fs.listBuiltinAutoSkills` | `GET /api/skills/builtin-auto`   | Scans `<builtin_skills_dir>/_builtin/` only (auto-injected subdirectory — see `src/process/utils/initStorage.ts:352` `getBuiltinAutoSkillsDir`). Currently contains `cron/`, `aionui-skills/`, `office-cli/`, `skill-creator/`. |
+| E3 | `ipcBridge.fs.readBuiltinRule`       | `POST /api/skills/builtin-rule`  | Reads a filename under `<builtin_rules_dir>`. Returns empty string if the file is missing (graceful degradation). Traversal-safe.                  |
+| E4 | `ipcBridge.fs.readBuiltinSkill`      | `POST /api/skills/builtin-skill` | Reads a filename under `<builtin_skills_dir>`. Same graceful-degradation + traversal-safe semantics as E3.                                         |
+| E5 | `ipcBridge.fs.readSkillInfo`         | `POST /api/skills/info`          | Reads `<skillPath>/SKILL.md` frontmatter. `skillPath` is user-supplied. Falls back to directory name when frontmatter `name` is empty.             |
+
+The HTTP handlers are no longer present in `src/process/bridge/` — the TS
+migration commit [`5c4b010f5`](https://github.com/) moved them out; the
+renderer now speaks HTTP directly to the backend, so baseline behavior must be
+read from the `ipcBridge` type signatures and the `src/process/extensions/**`
+resolvers. The `ExtensionRegistry._skills` cache currently only stores
+`{ name, description, location }` per extension-contributed skill — the
+`isCustom` and `source` fields were added to the renderer contract but never
+written back into the resolver; Rust must derive them from origin directory.
+
+### Endpoints
+
+#### E1 — `GET /api/skills`
+
+List every skill available to the app: built-in skills, user-imported custom
+skills, and extension-contributed skills.
+
+- **Method / path:** `GET /api/skills`
+- **Request body:** none
+- **Response body:** `ApiResponse<SkillListItem[]>`, sorted by `name` asc.
+  ```ts
+  type SkillListItem = {
+    name: string;
+    description: string;
+    location: string;                          // absolute path on disk
+    isCustom: boolean;                         // true ⇔ user-copied into userSkillsDir
+    source: 'builtin' | 'custom' | 'extension';
+  };
+  ```
+  Example:
+  ```json
+  {
+    "success": true,
+    "data": [
+      {
+        "name": "cron",
+        "description": "Schedule recurring tasks on a cron expression",
+        "location": "/Applications/AionUi.app/Contents/Resources/skills/_builtin/cron",
+        "isCustom": false,
+        "source": "builtin"
+      },
+      {
+        "name": "my-skill",
+        "description": "A user-imported skill",
+        "location": "/Users/alice/.aionui/skills/my-skill",
+        "isCustom": true,
+        "source": "custom"
+      }
+    ]
+  }
+  ```
+- **Source of truth on disk:** `SkillPaths.builtin_skills_dir` + user custom
+  skills at `SkillPaths.user_skills_dir`, merged with
+  `ExtensionRegistry.get_skills()` (once extension loading is wired in the
+  backend). User skills override built-ins with the same name.
+- **Error cases:** none expected under normal operation; a missing directory
+  is treated as an empty list. I/O errors propagate as `500`.
+- **Delta vs. current backend:** `SkillListItemResponse` in
+  `crates/aionui-api-types/src/skill.rs` is missing the `source` field. Task
+  2.2 must extend the struct with `source: SkillSource` (enum:
+  `Builtin | Custom | Extension`, serialized lowercase) and populate it in
+  `skill_service::list_available_skills`. Extension-contributed skills are not
+  yet merged in — for the pilot, emit only `Builtin` / `Custom`; `Extension`
+  is reserved for when `ExtensionRegistry` lands in Rust.
+
+#### E2 — `GET /api/skills/builtin-auto`
+
+List the subset of built-in skills that are auto-injected into every
+assistant (the `_builtin/` subdirectory of the built-in skills dir).
+
+- **Method / path:** `GET /api/skills/builtin-auto`
+- **Request body:** none
+- **Response body:** `ApiResponse<BuiltinAutoSkill[]>`
+  ```ts
+  type BuiltinAutoSkill = {
+    name: string;
+    description: string;
+  };
+  ```
+  Example:
+  ```json
+  {
+    "success": true,
+    "data": [
+      { "name": "cron", "description": "Schedule recurring tasks on a cron expression" },
+      { "name": "skill-creator", "description": "Scaffold a new skill" }
+    ]
+  }
+  ```
+- **Source of truth on disk:** `<SkillPaths.builtin_skills_dir>/_builtin/` —
+  scan each direct child directory, read its `SKILL.md` frontmatter for
+  `name` and `description`.
+- **Error cases:** if `_builtin/` does not exist, return an empty array (do
+  not error). Unreadable `SKILL.md` entries are skipped with a warn log.
+- **Delta vs. current backend:** **not implemented at all.** Task 2.3 must
+  add the route, the handler, and a service function
+  (`skill_service::list_builtin_auto_skills`). Reuse the existing
+  `scan_skill_dirs` helper but point it at the `_builtin/` subdirectory.
+
+#### E3 — `POST /api/skills/builtin-rule`
+
+Read the content of a built-in rule file.
+
+- **Method / path:** `POST /api/skills/builtin-rule`
+- **Request body:**
+  ```ts
+  type Request = { fileName: string };
+  ```
+  Example: `{ "fileName": "code-review.md" }`
+- **Response body:** `ApiResponse<string>` — raw file content. Empty string
+  if the file does not exist (by design, matches TS fallback).
+- **Source of truth on disk:** `<SkillPaths.builtin_rules_dir>/<fileName>`.
+- **Error cases:**
+  - `fileName` contains `/`, `\\`, `..`, or is absolute → `400 BadRequest`
+    via `ExtensionError::PathTraversal`.
+  - File exists but is unreadable → `500`.
+  - File does not exist → `200` with empty string body (graceful, matches
+    the TS baseline).
+- **Delta vs. current backend:** implemented at
+  `skill_routes::read_builtin_rule` and `skill_service::read_builtin_rule`.
+  No change required beyond adding the `ApiResponse<String>` integration
+  test under the pilot.
+
+#### E4 — `POST /api/skills/builtin-skill`
+
+Read the content of a file under the built-in skills directory (same shape
+as E3 but for skills instead of rules).
+
+- **Method / path:** `POST /api/skills/builtin-skill`
+- **Request body:** `{ fileName: string }` — may include a relative
+  sub-path like `cron/SKILL.md` (the TS baseline permits reading individual
+  skill files; see `validate_filename` in `skill_service.rs`).
+- **Response body:** `ApiResponse<string>` — raw file content, empty string
+  when missing.
+- **Source of truth on disk:** `<SkillPaths.builtin_skills_dir>/<fileName>`.
+- **Error cases:** same as E3 (path traversal rejected; missing file
+  returns empty).
+- **Delta vs. current backend:** implemented at
+  `skill_routes::read_builtin_skill` and
+  `skill_service::read_builtin_skill`. Verify that `validate_filename`
+  correctly allows legitimate nested paths like `cron/SKILL.md` (the
+  current implementation rejects any `/`, which would break the TS
+  baseline use). If so, Task 2.5 must relax the guard to reject only `..`
+  segments and absolute paths, while still preventing traversal — see
+  Step 2.5 in the pilot plan.
+- **Open question (resolved by reading current guard):** the TS baseline
+  accepts plain filenames (`"some-file.md"`); it is not clear whether the
+  renderer ever requests nested paths. Inspect all renderer call sites of
+  `readBuiltinSkill` / `readBuiltinRule` in Step 2.5 and adjust the guard
+  to match actual call-site needs. Default: keep the strict
+  "no-path-separators" guard that the backend has today; note in the
+  commit body if the check had to be loosened.
+
+#### E5 — `POST /api/skills/info`
+
+Read the frontmatter of a `SKILL.md` at an arbitrary on-disk path.
+
+- **Method / path:** `POST /api/skills/info`
+- **Request body:**
+  ```ts
+  type Request = { skillPath: string };
+  ```
+  `skillPath` may be a directory (which will read `<dir>/SKILL.md`) or a
+  direct path to the `SKILL.md` file itself.
+- **Response body:** `ApiResponse<ReadSkillInfoResponse>`
+  ```ts
+  type ReadSkillInfoResponse = { name: string; description: string };
+  ```
+  Example:
+  ```json
+  {
+    "success": true,
+    "data": { "name": "cron", "description": "Schedule recurring tasks" }
+  }
+  ```
+  When frontmatter has an empty `name`, the backend falls back to the
+  directory basename of `skillPath`.
+- **Source of truth on disk:** caller-supplied. There is no enclosing
+  directory restriction (the UI lets the user browse to any skill folder).
+- **Error cases:**
+  - `skillPath` does not resolve to an existing file → `ExtensionError::SkillNotFound`.
+  - `SKILL.md` has no parsable frontmatter → `ExtensionError::InvalidSkillPath`.
+- **Delta vs. current backend:** implemented at
+  `skill_routes::read_skill_info` and `skill_service::read_skill_info`.
+  Verify that the `name`-empty fallback to directory basename is exercised
+  by Task 2.6's test matrix.
+
+### Contract summary
+
+| ID | Method | Path                         | Request              | Response                              | Impl status (as of 2026-04-22)          |
+| -- | ------ | ---------------------------- | -------------------- | ------------------------------------- | --------------------------------------- |
+| E1 | GET    | `/api/skills`                | —                    | `SkillListItem[]`                     | Partial — **`source` field missing**    |
+| E2 | GET    | `/api/skills/builtin-auto`   | —                    | `BuiltinAutoSkill[]`                  | **Not implemented**                     |
+| E3 | POST   | `/api/skills/builtin-rule`   | `{ fileName }`       | `string`                              | Implemented                             |
+| E4 | POST   | `/api/skills/builtin-skill`  | `{ fileName }`       | `string`                              | Implemented                             |
+| E5 | POST   | `/api/skills/info`           | `{ skillPath }`      | `{ name, description }`               | Implemented                             |
+
+### Deltas to close in Task 2
+
+1. **E1 — add `source` field.** Extend `SkillListItemResponse` in
+   `aionui-api-types` with `source: SkillSource` and populate it in
+   `list_available_skills`. Extension-contributed entries defer to a future
+   milestone; the pilot only needs `Builtin` / `Custom`.
+2. **E2 — new endpoint.** Register the `/api/skills/builtin-auto` route,
+   implement `skill_service::list_builtin_auto_skills` scanning
+   `<builtin_skills_dir>/_builtin/`, add unit + HTTP integration tests.
+3. **Integration tests for E3/E4/E5.** The existing implementations have
+   unit tests in `skill_service.rs` but none of the HTTP-level tests
+   prescribed by the pilot plan (`crates/aionui-extension/tests/skills_http_test.rs`).
+   Add them in Steps 2.4–2.6 as `tokio::test`s using `axum::Router::oneshot`.
+4. **Response envelope.** The pilot plan's contract table omits the
+   `ApiResponse<T>` envelope (`{ success, data, message }`). The backend
+   already wraps every response in `ApiResponse`; renderer-side HTTP bridge
+   auto-unwraps `data`. No change required here — this note is for the
+   frontend-dev teammate to verify against `httpGet`/`httpPost` behavior.
+
