@@ -2,9 +2,13 @@ mod common;
 
 use axum::http::StatusCode;
 use serde_json::json;
+use tempfile::TempDir;
 use tower::ServiceExt;
 
-use common::{body_json, build_app, get_with_token, json_with_token, setup_and_login};
+use common::{
+    body_json, build_app, build_app_with_skill_paths, get_with_token, json_with_token,
+    setup_and_login,
+};
 
 // ---------------------------------------------------------------------------
 // EQ — Extension query (unauthenticated → rejected)
@@ -439,4 +443,92 @@ async fn rm1_read_builtin_rule_not_found() {
     assert_eq!(json["success"], true);
     // File not found → returns empty string (graceful degradation)
     assert_eq!(json["data"], "");
+}
+
+// ---------------------------------------------------------------------------
+// SL — Skill listing (E1 / `GET /api/skills`)
+// ---------------------------------------------------------------------------
+
+fn write_skill(dir: &std::path::Path, name: &str, description: &str) {
+    let skill = dir.join(name);
+    std::fs::create_dir_all(&skill).unwrap();
+    let frontmatter = format!("---\nname: {name}\ndescription: {description}\n---\nBody");
+    std::fs::write(skill.join("SKILL.md"), frontmatter).unwrap();
+}
+
+#[tokio::test]
+async fn sl1_list_skills_tags_builtin_and_custom_with_source_field() {
+    let tmp = TempDir::new().unwrap();
+    let (mut app, services, paths) = build_app_with_skill_paths(tmp.path()).await;
+    let (token, _csrf) = setup_and_login(&mut app, &services, "user1", "pass1").await;
+
+    write_skill(&paths.builtin_skills_dir, "review", "Built-in review skill");
+    write_skill(&paths.user_skills_dir, "my-skill", "A user-imported skill");
+
+    let resp = app
+        .oneshot(get_with_token("/api/skills", &token))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let json = body_json(resp).await;
+    assert_eq!(json["success"], true);
+    let arr = json["data"].as_array().unwrap();
+    assert_eq!(arr.len(), 2);
+
+    let by_name: std::collections::HashMap<_, _> = arr
+        .iter()
+        .map(|v| (v["name"].as_str().unwrap().to_owned(), v.clone()))
+        .collect();
+
+    let review = &by_name["review"];
+    assert_eq!(review["source"], "builtin");
+    assert_eq!(review["isCustom"], false);
+    assert!(
+        review["location"].as_str().unwrap().contains("review"),
+        "location should point at the skill dir",
+    );
+
+    let my_skill = &by_name["my-skill"];
+    assert_eq!(my_skill["source"], "custom");
+    assert_eq!(my_skill["isCustom"], true);
+}
+
+#[tokio::test]
+async fn sl2_list_skills_user_custom_overrides_builtin() {
+    let tmp = TempDir::new().unwrap();
+    let (mut app, services, paths) = build_app_with_skill_paths(tmp.path()).await;
+    let (token, _csrf) = setup_and_login(&mut app, &services, "user1", "pass1").await;
+
+    write_skill(&paths.builtin_skills_dir, "review", "Built-in review");
+    write_skill(&paths.user_skills_dir, "review", "Custom review override");
+
+    let resp = app
+        .oneshot(get_with_token("/api/skills", &token))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let json = body_json(resp).await;
+    let arr = json["data"].as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["description"], "Custom review override");
+    assert_eq!(arr[0]["source"], "custom");
+}
+
+#[tokio::test]
+async fn sl3_list_skills_returns_empty_array_when_no_skills() {
+    let tmp = TempDir::new().unwrap();
+    let (mut app, services, _paths) = build_app_with_skill_paths(tmp.path()).await;
+    let (token, _csrf) = setup_and_login(&mut app, &services, "user1", "pass1").await;
+
+    let resp = app
+        .oneshot(get_with_token("/api/skills", &token))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let json = body_json(resp).await;
+    assert_eq!(json["success"], true);
+    assert_eq!(json["data"].as_array().unwrap().len(), 0);
 }

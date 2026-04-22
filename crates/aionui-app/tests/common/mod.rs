@@ -7,6 +7,7 @@ use tower::ServiceExt;
 use wiremock::MockServer;
 
 use aionui_app::{AppServices, build_module_states, create_router, create_router_with_states};
+use aionui_extension::{ExternalPathsManager, SkillPaths, SkillRouterState};
 use aionui_system::VersionCheckService;
 
 pub async fn build_app() -> (axum::Router, AppServices) {
@@ -14,6 +15,49 @@ pub async fn build_app() -> (axum::Router, AppServices) {
     let services = AppServices::from_database(db).await.unwrap();
     let router = create_router(&services).await;
     (router, services)
+}
+
+/// Build an app whose skill router reads from the given temp directories.
+///
+/// Use for HTTP integration tests that need deterministic on-disk layouts
+/// (E1 `/api/skills`, E2 `/api/skills/builtin-auto`, E3/E4 built-in reads,
+/// E5 `/api/skills/info`). Returns the router, services, and the
+/// `SkillPaths` so the test can seed fixtures at known locations.
+#[allow(dead_code)]
+pub async fn build_app_with_skill_paths(
+    root: &std::path::Path,
+) -> (axum::Router, AppServices, SkillPaths) {
+    let db = aionui_db::init_database_memory().await.unwrap();
+    let services = AppServices::from_database(db).await.unwrap();
+    let mut states = build_module_states(&services).await;
+
+    let paths = SkillPaths {
+        data_dir: root.to_path_buf(),
+        user_skills_dir: root.join("skills"),
+        builtin_skills_dir: root.join("builtin-skills"),
+        builtin_rules_dir: root.join("builtin-rules"),
+        assistant_rules_dir: root.join("assistant-rules"),
+        assistant_skills_dir: root.join("assistant-skills"),
+    };
+    for dir in [
+        &paths.user_skills_dir,
+        &paths.builtin_skills_dir,
+        &paths.builtin_rules_dir,
+        &paths.assistant_rules_dir,
+        &paths.assistant_skills_dir,
+    ] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+
+    let ext_paths_mgr =
+        std::sync::Arc::new(ExternalPathsManager::with_file(root.join("paths.json")).await);
+    states.skill = SkillRouterState {
+        skill_paths: paths.clone(),
+        external_paths_manager: ext_paths_mgr,
+    };
+
+    let router = create_router_with_states(&services, states);
+    (router, services, paths)
 }
 
 pub async fn build_app_with_noop_opener() -> (axum::Router, AppServices) {

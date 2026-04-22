@@ -148,6 +148,20 @@ pub async fn delete_assistant_skill(
 // C. Skill listing & info
 // ---------------------------------------------------------------------------
 
+/// Origin of a listed skill.
+///
+/// Matches the renderer contract in
+/// `src/common/adapter/ipcBridge.ts::listAvailableSkills`, which filters the
+/// Skills Hub UI by this value. `Extension` is reserved for
+/// extension-contributed skills once `ExtensionRegistry` is wired into the
+/// Rust backend; the pilot only emits `Builtin` / `Custom`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillSource {
+    Builtin,
+    Custom,
+    Extension,
+}
+
 /// A discovered skill item for listing.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkillListItem {
@@ -155,6 +169,7 @@ pub struct SkillListItem {
     pub description: String,
     pub location: String,
     pub is_custom: bool,
+    pub source: SkillSource,
 }
 
 /// List all available skills (built-in + user custom), deduplicated.
@@ -175,6 +190,7 @@ pub async fn list_available_skills(
                     description: item.description,
                     location: item.path,
                     is_custom: false,
+                    source: SkillSource::Builtin,
                 },
             );
         }
@@ -190,6 +206,7 @@ pub async fn list_available_skills(
                     description: item.description,
                     location: item.path,
                     is_custom: true,
+                    source: SkillSource::Custom,
                 },
             );
         }
@@ -976,9 +993,14 @@ mod tests {
         let review = skills.iter().find(|s| s.name == "review").unwrap();
         assert!(review.is_custom);
         assert_eq!(review.description, "Custom review skill");
+        assert_eq!(review.source, SkillSource::Custom);
 
         let debug_skill = skills.iter().find(|s| s.name == "debug").unwrap();
         assert!(!debug_skill.is_custom);
+        assert_eq!(debug_skill.source, SkillSource::Builtin);
+
+        let my_skill = skills.iter().find(|s| s.name == "my-skill").unwrap();
+        assert_eq!(my_skill.source, SkillSource::Custom);
     }
 
     #[tokio::test]

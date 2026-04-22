@@ -11,12 +11,20 @@ use aionui_api_types::{
     ImportSkillRequest, ImportSkillResponse, NamedPathResponse, ReadAssistantRuleRequest,
     ReadBuiltinResourceRequest, ReadSkillInfoRequest, ReadSkillInfoResponse,
     RemoveExternalPathRequest, ScanForSkillsRequest, ScanForSkillsResponse, ScannedSkillResponse,
-    SkillListItemResponse, SkillPathsResponse, WriteAssistantRuleRequest,
+    SkillListItemResponse, SkillPathsResponse, SkillSourceResponse, WriteAssistantRuleRequest,
 };
 use aionui_common::AppError;
 
 use crate::external_paths::ExternalPathsManager;
-use crate::skill_service::{self, SkillPaths};
+use crate::skill_service::{self, SkillPaths, SkillSource};
+
+fn to_source_response(source: SkillSource) -> SkillSourceResponse {
+    match source {
+        SkillSource::Builtin => SkillSourceResponse::Builtin,
+        SkillSource::Custom => SkillSourceResponse::Custom,
+        SkillSource::Extension => SkillSourceResponse::Extension,
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Router state
@@ -106,6 +114,7 @@ async fn list_skills(
             description: s.description,
             location: s.location,
             is_custom: s.is_custom,
+            source: to_source_response(s.source),
         })
         .collect();
     Ok(Json(ApiResponse::ok(resp)))

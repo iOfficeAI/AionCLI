@@ -4,6 +4,18 @@ use serde::{Deserialize, Serialize};
 // A. Skill list & info
 // ---------------------------------------------------------------------------
 
+/// Origin of a listed skill — `builtin`, `custom`, or `extension`.
+///
+/// Matches the renderer contract in
+/// `src/common/adapter/ipcBridge.ts::listAvailableSkills`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SkillSourceResponse {
+    Builtin,
+    Custom,
+    Extension,
+}
+
 /// Single item in the available skills list (`GET /api/skills`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -12,6 +24,7 @@ pub struct SkillListItemResponse {
     pub description: String,
     pub location: String,
     pub is_custom: bool,
+    pub source: SkillSourceResponse,
 }
 
 /// Request body for `POST /api/skills/info`.
@@ -181,11 +194,29 @@ mod tests {
             description: "Does things".into(),
             location: "/home/user/.aionui/skills/my-skill".into(),
             is_custom: true,
+            source: SkillSourceResponse::Custom,
         };
         let json = serde_json::to_value(&item).unwrap();
         assert_eq!(json["name"], "my-skill");
         assert_eq!(json["isCustom"], true);
+        assert_eq!(json["source"], "custom");
         assert!(json.get("is_custom").is_none());
+    }
+
+    #[test]
+    fn test_skill_source_serializes_lowercase() {
+        assert_eq!(
+            serde_json::to_value(SkillSourceResponse::Builtin).unwrap(),
+            serde_json::json!("builtin")
+        );
+        assert_eq!(
+            serde_json::to_value(SkillSourceResponse::Custom).unwrap(),
+            serde_json::json!("custom")
+        );
+        assert_eq!(
+            serde_json::to_value(SkillSourceResponse::Extension).unwrap(),
+            serde_json::json!("extension")
+        );
     }
 
     #[test]
