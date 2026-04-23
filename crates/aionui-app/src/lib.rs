@@ -34,9 +34,9 @@ use aionui_db::{
     SqliteSettingsRepository, SqliteUserRepository,
 };
 use aionui_extension::{
-    ExtensionRegistry, ExtensionRouterState, ExtensionStateStore, ExternalPathsManager,
-    HubIndexManager, HubInstaller, HubRouterState, SkillRouterState, extension_routes, hub_routes,
-    skill_routes,
+    AssistantRuleDispatcher, ExtensionRegistry, ExtensionRouterState, ExtensionStateStore,
+    ExternalPathsManager, HubIndexManager, HubInstaller, HubRouterState, SkillRouterState,
+    extension_routes, hub_routes, skill_routes,
 };
 use aionui_file::{FileRouterState, FileService, FileWatchService, SnapshotService, file_routes};
 use aionui_mcp::{
@@ -226,8 +226,16 @@ pub struct ModuleStates {
 
 /// Build all default `ModuleStates` from application services.
 pub async fn build_module_states(services: &AppServices) -> ModuleStates {
-    let (ext_state, hub_state, skill_state) = build_extension_states(services).await;
+    let (ext_state, hub_state, mut skill_state) = build_extension_states(services).await;
     let assistant = build_assistant_state(services, ext_state.registry.clone());
+
+    // Wire the AssistantService as the source-dispatch implementation for
+    // the existing assistant-rule / assistant-skill endpoints in
+    // aionui-extension. This replaces the legacy user-directory-only paths
+    // with builtin / extension / user routing.
+    let dispatcher: Arc<dyn AssistantRuleDispatcher> = assistant.service.clone();
+    skill_state.assistant_dispatcher = Some(dispatcher);
+
     ModuleStates {
         system: build_system_state(services),
         conversation: build_conversation_state(services),
@@ -251,9 +259,9 @@ pub async fn build_module_states(services: &AppServices) -> ModuleStates {
 
 /// Build the default `AssistantRouterState` from application services.
 ///
-/// T1a scaffolding: wires the stub service (whose repository methods are
-/// `unimplemented!()`) behind a route skeleton that returns 500 for every
-/// endpoint. T1b replaces both the service and repository bodies.
+/// Loads the built-in assistant manifest from
+/// `{exe_dir}/assets/builtin-assistants/` (or dev fallback), constructs
+/// the user-data repositories, and assembles the full `AssistantService`.
 pub fn build_assistant_state(
     services: &AppServices,
     extension_registry: ExtensionRegistry,
@@ -263,7 +271,7 @@ pub fn build_assistant_state(
         Arc::new(SqliteAssistantRepository::new(pool.clone()));
     let override_repo: Arc<dyn IAssistantOverrideRepository> =
         Arc::new(SqliteAssistantOverrideRepository::new(pool));
-    let builtin = Arc::new(BuiltinAssistantRegistry::empty());
+    let builtin = Arc::new(BuiltinAssistantRegistry::load());
     let service = Arc::new(AssistantService::new(
         repo,
         override_repo,
@@ -596,6 +604,9 @@ pub async fn build_extension_states(
     let skill_state = SkillRouterState {
         skill_paths,
         external_paths_manager: ext_paths_mgr,
+        // Wired in `build_module_states` once the AssistantService is built
+        // (the service implements `AssistantRuleDispatcher`).
+        assistant_dispatcher: None,
     };
 
     (ext_state, hub_state, skill_state)

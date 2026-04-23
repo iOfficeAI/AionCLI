@@ -325,6 +325,23 @@ impl ExtensionRegistry {
         guard.contributions.assistants.clone()
     }
 
+    /// Return `true` if any extension contributes an assistant with this id.
+    pub async fn has_assistant(&self, id: &str) -> bool {
+        let guard = self.inner.read().await;
+        guard.contributions.assistants.iter().any(|a| a.id == id)
+    }
+
+    /// Lookup a single extension-contributed assistant by id.
+    pub async fn get_assistant_by_id(&self, id: &str) -> Option<ResolvedAssistant> {
+        let guard = self.inner.read().await;
+        guard
+            .contributions
+            .assistants
+            .iter()
+            .find(|a| a.id == id)
+            .cloned()
+    }
+
     pub async fn get_acp_adapters(&self) -> Vec<ResolvedAcpAdapter> {
         let guard = self.inner.read().await;
         guard.contributions.acp_adapters.clone()

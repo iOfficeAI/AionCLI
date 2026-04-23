@@ -8,6 +8,7 @@ aionui-common.workspace = true
 aionui-db.workspace = true
 aionui-api-types.workspace = true
 aionui-realtime.workspace = true
+async-trait.workspace = true
 axum.workspace = true
 dirs.workspace = true
 semver.workspace = true
@@ -19,4 +20,7 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+async-trait.workspace = true
+http-body-util.workspace = true
 tempfile.workspace = true
+tower = { workspace = true, features = ["util"] }

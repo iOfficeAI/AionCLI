@@ -54,6 +54,7 @@ pub async fn build_app_with_skill_paths(
     states.skill = SkillRouterState {
         skill_paths: paths.clone(),
         external_paths_manager: ext_paths_mgr,
+        assistant_dispatcher: states.skill.assistant_dispatcher.clone(),
     };
 
     let router = create_router_with_states(&services, states);

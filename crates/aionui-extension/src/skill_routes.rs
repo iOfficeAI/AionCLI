@@ -16,6 +16,7 @@ use aionui_api_types::{
 };
 use aionui_common::AppError;
 
+use crate::classifier::AssistantRuleDispatcher;
 use crate::external_paths::ExternalPathsManager;
 use crate::skill_service::{self, SkillPaths, SkillSource};
 
@@ -36,6 +37,11 @@ fn to_source_response(source: SkillSource) -> SkillSourceResponse {
 pub struct SkillRouterState {
     pub skill_paths: SkillPaths,
     pub external_paths_manager: Arc<ExternalPathsManager>,
+    /// Optional dispatcher that routes assistant-rule / assistant-skill
+    /// read/write/delete by source (builtin / extension / user). When
+    /// `None`, the legacy user-directory-only behavior is preserved.
+    #[allow(clippy::type_complexity)]
+    pub assistant_dispatcher: Option<Arc<dyn AssistantRuleDispatcher>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -307,11 +313,20 @@ async fn read_builtin_skill(
 // ---------------------------------------------------------------------------
 
 /// `POST /api/skills/assistant-rule/read` — read an assistant rule.
+///
+/// Dispatches by source via [`AssistantRuleDispatcher`] when wired; falls
+/// back to user-directory-only legacy behavior otherwise.
 async fn read_assistant_rule(
     State(state): State<SkillRouterState>,
     body: Result<Json<ReadAssistantRuleRequest>, JsonRejection>,
 ) -> Result<Json<ApiResponse<String>>, AppError> {
     let Json(req) = body.map_err(|e| AppError::BadRequest(e.to_string()))?;
+    if let Some(dispatcher) = &state.assistant_dispatcher {
+        let content = dispatcher
+            .read_rule(&req.assistant_id, req.locale.as_deref())
+            .await?;
+        return Ok(Json(ApiResponse::ok(content)));
+    }
     let content = skill_service::read_assistant_rule(
         &state.skill_paths,
         &req.assistant_id,
@@ -322,11 +337,19 @@ async fn read_assistant_rule(
 }
 
 /// `POST /api/skills/assistant-rule/write` — write an assistant rule.
+///
+/// Dispatches by source: builtin / extension ids reject with 400.
 async fn write_assistant_rule(
     State(state): State<SkillRouterState>,
     body: Result<Json<WriteAssistantRuleRequest>, JsonRejection>,
 ) -> Result<Json<ApiResponse<bool>>, AppError> {
     let Json(req) = body.map_err(|e| AppError::BadRequest(e.to_string()))?;
+    if let Some(dispatcher) = &state.assistant_dispatcher {
+        dispatcher
+            .write_rule(&req.assistant_id, req.locale.as_deref(), &req.content)
+            .await?;
+        return Ok(Json(ApiResponse::ok(true)));
+    }
     let ok = skill_service::write_assistant_rule(
         &state.skill_paths,
         &req.assistant_id,
@@ -342,6 +365,10 @@ async fn delete_assistant_rule(
     State(state): State<SkillRouterState>,
     AxumPath(id): AxumPath<String>,
 ) -> Result<Json<ApiResponse<bool>>, AppError> {
+    if let Some(dispatcher) = &state.assistant_dispatcher {
+        let ok = dispatcher.delete_rule(&id).await?;
+        return Ok(Json(ApiResponse::ok(ok)));
+    }
     let ok = skill_service::delete_assistant_rule(&state.skill_paths, &id).await?;
     Ok(Json(ApiResponse::ok(ok)))
 }
@@ -351,11 +378,19 @@ async fn delete_assistant_rule(
 // ---------------------------------------------------------------------------
 
 /// `POST /api/skills/assistant-skill/read` — read an assistant skill.
+///
+/// Dispatches by source via [`AssistantRuleDispatcher`] when wired.
 async fn read_assistant_skill(
     State(state): State<SkillRouterState>,
     body: Result<Json<ReadAssistantRuleRequest>, JsonRejection>,
 ) -> Result<Json<ApiResponse<String>>, AppError> {
     let Json(req) = body.map_err(|e| AppError::BadRequest(e.to_string()))?;
+    if let Some(dispatcher) = &state.assistant_dispatcher {
+        let content = dispatcher
+            .read_skill(&req.assistant_id, req.locale.as_deref())
+            .await?;
+        return Ok(Json(ApiResponse::ok(content)));
+    }
     let content = skill_service::read_assistant_skill(
         &state.skill_paths,
         &req.assistant_id,
@@ -366,11 +401,19 @@ async fn read_assistant_skill(
 }
 
 /// `POST /api/skills/assistant-skill/write` — write an assistant skill.
+///
+/// Dispatches by source: builtin / extension ids reject with 400.
 async fn write_assistant_skill(
     State(state): State<SkillRouterState>,
     body: Result<Json<WriteAssistantRuleRequest>, JsonRejection>,
 ) -> Result<Json<ApiResponse<bool>>, AppError> {
     let Json(req) = body.map_err(|e| AppError::BadRequest(e.to_string()))?;
+    if let Some(dispatcher) = &state.assistant_dispatcher {
+        dispatcher
+            .write_skill(&req.assistant_id, req.locale.as_deref(), &req.content)
+            .await?;
+        return Ok(Json(ApiResponse::ok(true)));
+    }
     let ok = skill_service::write_assistant_skill(
         &state.skill_paths,
         &req.assistant_id,
@@ -386,6 +429,10 @@ async fn delete_assistant_skill(
     State(state): State<SkillRouterState>,
     AxumPath(id): AxumPath<String>,
 ) -> Result<Json<ApiResponse<bool>>, AppError> {
+    if let Some(dispatcher) = &state.assistant_dispatcher {
+        let ok = dispatcher.delete_skill(&id).await?;
+        return Ok(Json(ApiResponse::ok(ok)));
+    }
     let ok = skill_service::delete_assistant_skill(&state.skill_paths, &id).await?;
     Ok(Json(ApiResponse::ok(ok)))
 }
@@ -482,6 +529,7 @@ mod tests {
         SkillRouterState {
             skill_paths: paths,
             external_paths_manager: ext_mgr,
+            assistant_dispatcher: None,
         }
     }
 
