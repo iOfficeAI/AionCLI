@@ -10,11 +10,12 @@ use sha2::{Digest, Sha256};
 use tower_http::cors::{Any, CorsLayer};
 
 use aionui_ai_agent::{
-    AcpRouterState, AcpSkillManager, AgentFactoryDeps, AuxiliaryRouterState,
+    AcpRouterState, AcpSkillManager, AgentFactoryDeps, AgentRegistry, AuxiliaryRouterState,
     ConnectionTestRouterState, ConnectionTestService, IWorkerTaskManager, RemoteAgentRouterState,
     RemoteAgentService, WorkerTaskManagerImpl, acp_routes, auxiliary_routes, build_agent_factory,
     connection_test_routes, remote_agent_routes,
 };
+use aionui_api_types::{AgentSource, DetectedAgent, EnvVar};
 use aionui_auth::{
     AuthRouterState, AuthState, CookieConfig, JwtService, QrTokenStore, auth_middleware,
     auth_routes, csrf_middleware, extract_token_from_ws_headers, resolve_jwt_secret,
@@ -23,6 +24,7 @@ use aionui_auth::{
 #[cfg(feature = "weixin")]
 use aionui_channel::weixin_login_route;
 use aionui_channel::{ChannelRouterState, channel_routes};
+use aionui_common::AcpBackend;
 use aionui_conversation::{ConversationRouterState, ConversationService, conversation_routes};
 use aionui_cron::{CronEventEmitter, CronRouterState, cron_routes};
 use aionui_db::{
@@ -99,6 +101,7 @@ pub struct AppServices {
     pub ws_manager: Arc<WebSocketManager>,
     pub event_bus: Arc<BroadcastEventBus>,
     pub worker_task_manager: Arc<dyn IWorkerTaskManager>,
+    pub agent_registry: Arc<AgentRegistry>,
     /// Raw JWT secret string, used to derive encryption keys.
     pub jwt_secret_raw: String,
     pub data_dir: String,
@@ -156,10 +159,12 @@ impl AppServices {
 
         let encryption_key = derive_encryption_key(&secret);
         let remote_agent_repo = Arc::new(SqliteRemoteAgentRepository::new(database.pool().clone()));
+        let agent_registry = Arc::new(AgentRegistry::new());
         let factory = build_agent_factory(AgentFactoryDeps {
             skill_manager: AcpSkillManager::new(),
             remote_agent_repo,
             encryption_key,
+            agent_registry: agent_registry.clone(),
         });
         let worker_task_manager: Arc<dyn IWorkerTaskManager> =
             Arc::new(WorkerTaskManagerImpl::new(factory));
@@ -173,6 +178,7 @@ impl AppServices {
             ws_manager: Arc::new(WebSocketManager::new()),
             event_bus: Arc::new(BroadcastEventBus::new(256)),
             worker_task_manager,
+            agent_registry,
             jwt_secret_raw: secret,
             data_dir,
             local,
@@ -220,9 +226,42 @@ pub struct ModuleStates {
     pub shell: ShellRouterState,
 }
 
+/// Convert extension-contributed ACP adapters into `DetectedAgent` values.
+async fn resolve_extension_agents(registry: &ExtensionRegistry) -> Vec<DetectedAgent> {
+    registry
+        .get_acp_adapters()
+        .await
+        .into_iter()
+        .filter(|a| {
+            a.connection_type
+                .as_deref()
+                .is_none_or(|ct| ct == "cli" || ct == "stdio")
+        })
+        .map(|a| DetectedAgent {
+            id: a.id,
+            name: a.name,
+            backend: AcpBackend::Custom,
+            available: true,
+            source: AgentSource::Extension,
+            command: a.default_cli_path.or(a.cli_command),
+            args: a.acp_args,
+            env: a
+                .env
+                .into_iter()
+                .map(|(k, v)| EnvVar { name: k, value: v })
+                .collect(),
+        })
+        .collect()
+}
+
 /// Build all default `ModuleStates` from application services.
 pub async fn build_module_states(services: &AppServices) -> ModuleStates {
     let (ext_state, hub_state, skill_state) = build_extension_states(services).await;
+
+    let extensions = resolve_extension_agents(&ext_state.registry).await;
+    // TODO: load custom agent configs from settings/DB and convert to DetectedAgent
+    services.agent_registry.initialize(extensions, vec![]).await;
+
     ModuleStates {
         system: build_system_state(services),
         conversation: build_conversation_state(services),
@@ -309,6 +348,7 @@ pub fn build_remote_agent_state(services: &AppServices) -> RemoteAgentRouterStat
 pub fn build_acp_state(services: &AppServices) -> AcpRouterState {
     AcpRouterState {
         worker_task_manager: services.worker_task_manager.clone(),
+        agent_registry: services.agent_registry.clone(),
     }
 }
 

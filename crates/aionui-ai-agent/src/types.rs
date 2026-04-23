@@ -36,10 +36,16 @@ pub struct BuildTaskOptions {
 /// ACP-specific fields extracted from `extra` in [`BuildTaskOptions`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AcpBuildExtra {
+    /// Agent registry ID. When provided, `backend`/`cli_path` are resolved
+    /// from the registry and need not be supplied by the caller.
+    #[serde(default)]
+    pub agent_id: Option<String>,
     /// ACP sub-backend identifier.
-    pub backend: AcpBackend,
-    /// Path to the CLI executable.
-    pub cli_path: String,
+    #[serde(default)]
+    pub backend: Option<AcpBackend>,
+    /// Path to the CLI executable (resolved from registry when `agent_id` is set).
+    #[serde(default)]
+    pub cli_path: Option<String>,
     /// Whether the user picked a custom workspace path.
     #[serde(default)]
     pub custom_workspace: bool,

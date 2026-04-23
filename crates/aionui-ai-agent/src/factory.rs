@@ -5,6 +5,7 @@ use aionui_db::IRemoteAgentRepository;
 use tracing::warn;
 
 use crate::agent_manager::AgentManagerHandle;
+use crate::agent_registry::AgentRegistry;
 use crate::remote_agent::RemoteAgentConfig;
 use crate::skill_manager::AcpSkillManager;
 use crate::task_manager::AgentFactory;
@@ -22,6 +23,7 @@ pub struct AgentFactoryDeps {
     pub skill_manager: Arc<AcpSkillManager>,
     pub remote_agent_repo: Arc<dyn IRemoteAgentRepository>,
     pub encryption_key: [u8; 32],
+    pub agent_registry: Arc<AgentRegistry>,
 }
 
 /// Build a production agent factory that dispatches to concrete agent types.
@@ -53,8 +55,25 @@ async fn build_agent(
 
     match options.agent_type {
         AgentType::Acp => {
-            let config: AcpBuildExtra = serde_json::from_value(options.extra)
+            let mut config: AcpBuildExtra = serde_json::from_value(options.extra)
                 .map_err(|e| AppError::BadRequest(format!("Invalid ACP build options: {e}")))?;
+
+            if let Some(ref agent_id) = config.agent_id {
+                let detected = deps
+                    .agent_registry
+                    .get_by_id(agent_id)
+                    .await
+                    .ok_or_else(|| {
+                        AppError::BadRequest(format!("Agent '{agent_id}' not found in registry"))
+                    })?;
+                if config.backend.is_none() {
+                    config.backend = Some(detected.backend);
+                }
+                if config.cli_path.is_none() {
+                    config.cli_path = detected.command;
+                }
+            }
+
             let agent = AcpAgentManager::new(conversation_id, workspace, config).await?;
             Ok(Arc::new(agent))
         }

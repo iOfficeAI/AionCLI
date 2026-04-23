@@ -16,6 +16,7 @@ use aionui_common::{AgentType, AppError};
 use crate::acp_agent::AcpAgentManager;
 use crate::acp_service;
 use crate::agent_manager::AgentManagerHandle;
+use crate::agent_registry::AgentRegistry;
 use crate::task_manager::IWorkerTaskManager;
 use crate::types::{AcpModelInfo, AcpSessionConfigOption};
 
@@ -23,6 +24,7 @@ use crate::types::{AcpModelInfo, AcpSessionConfigOption};
 #[derive(Clone)]
 pub struct AcpRouterState {
     pub worker_task_manager: Arc<dyn IWorkerTaskManager>,
+    pub agent_registry: Arc<AgentRegistry>,
 }
 
 /// Build the ACP management router.
@@ -103,20 +105,22 @@ async fn detect_cli(
 }
 
 async fn list_agents(
-    State(_state): State<AcpRouterState>,
+    State(state): State<AcpRouterState>,
     Extension(_user): Extension<CurrentUser>,
 ) -> Result<Json<ApiResponse<Vec<AcpAgentInfo>>>, AppError> {
-    let agents = acp_service::get_available_agents();
-    Ok(Json(ApiResponse::ok(agents)))
+    let agents = state.agent_registry.get_all().await;
+    let infos: Vec<AcpAgentInfo> = agents.into_iter().map(Into::into).collect();
+    Ok(Json(ApiResponse::ok(infos)))
 }
 
 async fn refresh_agents(
-    State(_state): State<AcpRouterState>,
+    State(state): State<AcpRouterState>,
     Extension(_user): Extension<CurrentUser>,
 ) -> Result<Json<ApiResponse<Vec<AcpAgentInfo>>>, AppError> {
-    // Re-scan available agents (semantically a refresh of the cached list)
-    let agents = acp_service::get_available_agents();
-    Ok(Json(ApiResponse::ok(agents)))
+    state.agent_registry.refresh_builtins().await;
+    let agents = state.agent_registry.get_all().await;
+    let infos: Vec<AcpAgentInfo> = agents.into_iter().map(Into::into).collect();
+    Ok(Json(ApiResponse::ok(infos)))
 }
 
 async fn test_custom_agent(

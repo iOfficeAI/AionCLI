@@ -96,9 +96,8 @@ async fn list_agents_returns_array() {
     let body = body_json(resp).await;
     assert_eq!(body["success"], true);
     assert!(body["data"].is_array());
-    // Should contain at least known agents like "claude"
     let agents = body["data"].as_array().unwrap();
-    assert!(agents.iter().any(|a| a["id"] == "claude"));
+    assert!(agents.iter().any(|a| a["backend"] == "aionrs"));
 }
 
 #[tokio::test]

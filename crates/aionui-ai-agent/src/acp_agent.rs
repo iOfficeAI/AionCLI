@@ -132,9 +132,15 @@ impl AcpAgentManager {
         workspace: String,
         config: AcpBuildExtra,
     ) -> Result<Self, AppError> {
-        let backend = config.backend;
+        let backend = config
+            .backend
+            .ok_or_else(|| AppError::BadRequest("ACP backend is required".into()))?;
+        let cli_path = config
+            .cli_path
+            .as_deref()
+            .ok_or_else(|| AppError::BadRequest("CLI path is required for ACP agent".into()))?;
 
-        let spawn_config = Self::build_spawn_config(&config.cli_path, &workspace, &config);
+        let spawn_config = Self::build_spawn_config(cli_path, &workspace, &config);
         let process = CliAgentProcess::spawn(spawn_config).await?;
 
         // Take the pre-subscribed receiver (created before background tasks start)
@@ -764,8 +770,9 @@ mod tests {
     #[test]
     fn build_spawn_config_basic() {
         let config = AcpBuildExtra {
-            backend: AcpBackend::Claude,
-            cli_path: "/usr/bin/claude".into(),
+            agent_id: None,
+            backend: Some(AcpBackend::Claude),
+            cli_path: Some("/usr/bin/claude".into()),
             custom_workspace: false,
             agent_name: None,
             custom_agent_id: None,
@@ -784,8 +791,9 @@ mod tests {
     #[test]
     fn build_spawn_config_with_agent_name() {
         let config = AcpBuildExtra {
-            backend: AcpBackend::Claude,
-            cli_path: "/usr/bin/claude".into(),
+            agent_id: None,
+            backend: Some(AcpBackend::Claude),
+            cli_path: Some("/usr/bin/claude".into()),
             custom_workspace: false,
             agent_name: Some("security-reviewer".into()),
             custom_agent_id: None,
@@ -802,8 +810,9 @@ mod tests {
     #[test]
     fn build_spawn_config_with_custom_agent_id() {
         let config = AcpBuildExtra {
-            backend: AcpBackend::Custom,
-            cli_path: "/usr/bin/custom-agent".into(),
+            agent_id: None,
+            backend: Some(AcpBackend::Custom),
+            cli_path: Some("/usr/bin/custom-agent".into()),
             custom_workspace: true,
             agent_name: None,
             custom_agent_id: Some("my-agent-123".into()),

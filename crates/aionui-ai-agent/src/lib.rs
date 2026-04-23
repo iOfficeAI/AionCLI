@@ -3,6 +3,7 @@ pub mod acp_agent;
 pub mod acp_routes;
 pub mod acp_service;
 pub mod agent_manager;
+pub mod agent_registry;
 pub mod aionrs_agent;
 pub mod api_client;
 pub mod auxiliary_routes;
@@ -27,6 +28,7 @@ pub mod types;
 pub use acp_agent::AcpAgentManager;
 pub use acp_routes::{AcpRouterState, acp_routes};
 pub use agent_manager::{AgentManagerHandle, IAgentManager, approval_key};
+pub use agent_registry::AgentRegistry;
 pub use aionrs_agent::AionrsAgentManager;
 pub use api_client::{
     AnthropicRotatingClient, ApiClientError, ApiKeyManager, ApiKeyStatus, ClientOptions,

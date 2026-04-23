@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::id::fnv1a_hex8;
+
 /// Type of AI agent backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -42,6 +44,91 @@ pub enum AcpBackend {
     Remote,
     Aionrs,
     Custom,
+}
+
+impl AcpBackend {
+    /// All backends that have a detectable CLI binary.
+    pub const CLI_BACKENDS: &[AcpBackend] = &[
+        AcpBackend::Claude,
+        AcpBackend::Qwen,
+        AcpBackend::Codex,
+        AcpBackend::Codebuddy,
+        AcpBackend::Kiro,
+        AcpBackend::Opencode,
+        AcpBackend::Copilot,
+        AcpBackend::Goose,
+        AcpBackend::Cursor,
+        AcpBackend::Droid,
+        AcpBackend::Auggie,
+        AcpBackend::Kimi,
+        AcpBackend::Qoder,
+        AcpBackend::Vibe,
+        AcpBackend::Nanobot,
+        AcpBackend::Hermes,
+        AcpBackend::Snow,
+    ];
+
+    pub fn cli_binary_name(&self) -> Option<&'static str> {
+        match self {
+            AcpBackend::Claude => Some("claude"),
+            AcpBackend::Qwen => Some("qwen"),
+            AcpBackend::Codex => Some("codex"),
+            AcpBackend::Codebuddy => Some("codebuddy"),
+            AcpBackend::Kiro => Some("kiro"),
+            AcpBackend::Opencode => Some("opencode"),
+            AcpBackend::Copilot => Some("copilot"),
+            AcpBackend::Goose => Some("goose"),
+            AcpBackend::Cursor => Some("cursor"),
+            AcpBackend::Droid => Some("droid"),
+            AcpBackend::Auggie => Some("auggie"),
+            AcpBackend::Kimi => Some("kimi"),
+            AcpBackend::Qoder => Some("qoder"),
+            AcpBackend::Vibe => Some("vibe"),
+            AcpBackend::Nanobot => Some("nanobot"),
+            AcpBackend::Hermes => Some("hermes"),
+            AcpBackend::Snow => Some("snow"),
+            AcpBackend::IFlow
+            | AcpBackend::Gemini
+            | AcpBackend::OpenclawGateway
+            | AcpBackend::Remote
+            | AcpBackend::Aionrs
+            | AcpBackend::Custom => None,
+        }
+    }
+
+    pub fn id(&self) -> String {
+        let hash = fnv1a_hex8(self.display_name().as_bytes());
+        // SAFETY: fnv1a_hex8 only produces ASCII hex digits
+        unsafe { std::str::from_utf8_unchecked(&hash) }.into()
+    }
+
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            AcpBackend::Claude => "Claude",
+            AcpBackend::Gemini => "Gemini",
+            AcpBackend::Qwen => "Qwen",
+            AcpBackend::IFlow => "iFlow",
+            AcpBackend::Codex => "Codex",
+            AcpBackend::Codebuddy => "CodeBuddy",
+            AcpBackend::Droid => "Droid",
+            AcpBackend::Goose => "Goose",
+            AcpBackend::Auggie => "Auggie",
+            AcpBackend::Kimi => "Kimi",
+            AcpBackend::Opencode => "OpenCode",
+            AcpBackend::Copilot => "Copilot",
+            AcpBackend::Qoder => "Qoder",
+            AcpBackend::OpenclawGateway => "OpenClaw Gateway",
+            AcpBackend::Vibe => "Vibe",
+            AcpBackend::Nanobot => "Nanobot",
+            AcpBackend::Cursor => "Cursor",
+            AcpBackend::Kiro => "Kiro",
+            AcpBackend::Hermes => "Hermes",
+            AcpBackend::Snow => "Snow",
+            AcpBackend::Remote => "Remote",
+            AcpBackend::Aionrs => "Aionrs",
+            AcpBackend::Custom => "Custom",
+        }
+    }
 }
 
 /// Runtime status of a conversation.
@@ -340,5 +427,63 @@ mod tests {
             let parsed: McpServerStatus = serde_json::from_str(&json).unwrap();
             assert_eq!(parsed, variant, "deserialize {expected_json}");
         }
+    }
+
+    #[test]
+    fn test_acp_backend_cli_binary_name_known() {
+        assert_eq!(AcpBackend::Claude.cli_binary_name(), Some("claude"));
+        assert_eq!(AcpBackend::Qwen.cli_binary_name(), Some("qwen"));
+        assert_eq!(AcpBackend::Codex.cli_binary_name(), Some("codex"));
+        assert_eq!(AcpBackend::Kiro.cli_binary_name(), Some("kiro"));
+        assert_eq!(AcpBackend::Goose.cli_binary_name(), Some("goose"));
+        assert_eq!(AcpBackend::Cursor.cli_binary_name(), Some("cursor"));
+        assert_eq!(AcpBackend::Snow.cli_binary_name(), Some("snow"));
+    }
+
+    #[test]
+    fn test_acp_backend_cli_binary_name_none() {
+        assert_eq!(AcpBackend::IFlow.cli_binary_name(), None);
+        assert_eq!(AcpBackend::Gemini.cli_binary_name(), None);
+        assert_eq!(AcpBackend::OpenclawGateway.cli_binary_name(), None);
+        assert_eq!(AcpBackend::Remote.cli_binary_name(), None);
+        assert_eq!(AcpBackend::Aionrs.cli_binary_name(), None);
+        assert_eq!(AcpBackend::Custom.cli_binary_name(), None);
+    }
+
+    #[test]
+    fn test_acp_backend_display_name() {
+        assert_eq!(AcpBackend::Claude.display_name(), "Claude");
+        assert_eq!(AcpBackend::IFlow.display_name(), "iFlow");
+        assert_eq!(AcpBackend::Codebuddy.display_name(), "CodeBuddy");
+        assert_eq!(AcpBackend::Opencode.display_name(), "OpenCode");
+        assert_eq!(
+            AcpBackend::OpenclawGateway.display_name(),
+            "OpenClaw Gateway"
+        );
+    }
+
+    #[test]
+    fn test_acp_backend_cli_backends_only_contains_some() {
+        for backend in AcpBackend::CLI_BACKENDS {
+            assert!(
+                backend.cli_binary_name().is_some(),
+                "{backend:?} is in CLI_BACKENDS but cli_binary_name() returns None"
+            );
+        }
+    }
+
+    #[test]
+    fn test_acp_backend_id_deterministic() {
+        let a = AcpBackend::Claude.id();
+        let b = AcpBackend::Claude.id();
+        assert_eq!(a, b);
+        assert_eq!(a.len(), 8);
+    }
+
+    #[test]
+    fn test_acp_backend_id_unique_per_variant() {
+        let claude_id = AcpBackend::Claude.id();
+        let codex_id = AcpBackend::Codex.id();
+        assert_ne!(claude_id, codex_id);
     }
 }

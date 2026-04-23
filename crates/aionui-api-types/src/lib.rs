@@ -1,5 +1,6 @@
 //! All HTTP request/response DTOs shared across the API surface.
 mod acp;
+mod agent_discovery;
 mod auth;
 mod channel;
 mod confirmation;
@@ -25,6 +26,7 @@ pub use acp::{
     DetectCliRequest, DetectCliResponse, ProbeModelRequest, SetConfigOptionRequest, SetModeRequest,
     SetModelRequest, TestCustomAgentRequest, TestCustomAgentResponse,
 };
+pub use agent_discovery::{AgentSource, DetectedAgent, EnvVar};
 pub use auth::{
     AuthStatusResponse, ChangePasswordRequest, LoginRequest, LoginResponse, PublicUser,
     QrLoginRequest, RefreshResponse, RefreshTokenRequest, UserInfoResponse, WsTokenResponse,

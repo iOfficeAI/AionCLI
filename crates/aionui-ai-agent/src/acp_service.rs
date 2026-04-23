@@ -2,102 +2,14 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use aionui_api_types::{
-    AcpAgentInfo, AcpEnvResponse, AcpHealthCheckResponse, DetectCliResponse,
-    TestCustomAgentResponse,
+    AcpEnvResponse, AcpHealthCheckResponse, DetectCliResponse, TestCustomAgentResponse,
 };
 use aionui_common::{AcpBackend, AppError};
 use tracing::debug;
 
-/// Known ACP backend CLI binary names.
-///
-/// Returns the expected executable name for a given ACP backend,
-/// or `None` for backends that don't have a standalone CLI.
-fn cli_binary_name(backend: AcpBackend) -> Option<&'static str> {
-    match backend {
-        AcpBackend::Claude => Some("claude"),
-        AcpBackend::Qwen => Some("qwen"),
-        AcpBackend::Codex => Some("codex"),
-        AcpBackend::Codebuddy => Some("codebuddy"),
-        AcpBackend::Kiro => Some("kiro"),
-        AcpBackend::Opencode => Some("opencode"),
-        AcpBackend::Copilot => Some("copilot"),
-        AcpBackend::Goose => Some("goose"),
-        AcpBackend::Cursor => Some("cursor"),
-        AcpBackend::Droid => Some("droid"),
-        AcpBackend::Auggie => Some("auggie"),
-        AcpBackend::Kimi => Some("kimi"),
-        AcpBackend::Qoder => Some("qoder"),
-        AcpBackend::Vibe => Some("vibe"),
-        AcpBackend::Nanobot => Some("nanobot"),
-        AcpBackend::Hermes => Some("hermes"),
-        AcpBackend::Snow => Some("snow"),
-        // These backends don't have a direct CLI to detect
-        AcpBackend::IFlow => None,
-        AcpBackend::Gemini => None,
-        AcpBackend::OpenclawGateway => None,
-        AcpBackend::Remote => None,
-        AcpBackend::Aionrs => None,
-        AcpBackend::Custom => None,
-    }
-}
-
-/// Predefined list of known ACP agents.
-fn known_agents() -> Vec<AcpAgentInfo> {
-    vec![
-        AcpAgentInfo {
-            id: "claude".into(),
-            name: "Claude".into(),
-            backend: AcpBackend::Claude,
-            available: false,
-        },
-        AcpAgentInfo {
-            id: "codex".into(),
-            name: "Codex".into(),
-            backend: AcpBackend::Codex,
-            available: false,
-        },
-        AcpAgentInfo {
-            id: "codebuddy".into(),
-            name: "CodeBuddy".into(),
-            backend: AcpBackend::Codebuddy,
-            available: false,
-        },
-        AcpAgentInfo {
-            id: "qwen".into(),
-            name: "Qwen".into(),
-            backend: AcpBackend::Qwen,
-            available: false,
-        },
-        AcpAgentInfo {
-            id: "kiro".into(),
-            name: "Kiro".into(),
-            backend: AcpBackend::Kiro,
-            available: false,
-        },
-        AcpAgentInfo {
-            id: "opencode".into(),
-            name: "OpenCode".into(),
-            backend: AcpBackend::Opencode,
-            available: false,
-        },
-        AcpAgentInfo {
-            id: "copilot".into(),
-            name: "Copilot".into(),
-            backend: AcpBackend::Copilot,
-            available: false,
-        },
-        AcpAgentInfo {
-            id: "goose".into(),
-            name: "Goose".into(),
-            backend: AcpBackend::Goose,
-            available: false,
-        },
-    ]
-}
-
 /// Detect the CLI path for a given ACP backend using PATH lookup.
 pub fn detect_cli(backend: AcpBackend) -> DetectCliResponse {
-    let binary = match cli_binary_name(backend) {
+    let binary = match backend.cli_binary_name() {
         Some(name) => name,
         None => return DetectCliResponse { path: None },
     };
@@ -110,26 +22,13 @@ pub fn detect_cli(backend: AcpBackend) -> DetectCliResponse {
     DetectCliResponse { path }
 }
 
-/// Get the list of available ACP agents, checking CLI availability.
-pub fn get_available_agents() -> Vec<AcpAgentInfo> {
-    known_agents()
-        .into_iter()
-        .map(|mut agent| {
-            if let Some(binary) = cli_binary_name(agent.backend) {
-                agent.available = which::which(binary).is_ok();
-            }
-            agent
-        })
-        .collect()
-}
-
 /// Perform a health check for an ACP backend.
 ///
 /// Checks CLI availability and measures detection latency.
 pub fn health_check(backend: AcpBackend) -> AcpHealthCheckResponse {
     let start = Instant::now();
 
-    let binary = match cli_binary_name(backend) {
+    let binary = match backend.cli_binary_name() {
         Some(name) => name,
         None => {
             return AcpHealthCheckResponse {
@@ -185,24 +84,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cli_binary_name_known_backends() {
-        assert_eq!(cli_binary_name(AcpBackend::Claude), Some("claude"));
-        assert_eq!(cli_binary_name(AcpBackend::Qwen), Some("qwen"));
-        assert_eq!(cli_binary_name(AcpBackend::Codex), Some("codex"));
-        assert_eq!(cli_binary_name(AcpBackend::Codebuddy), Some("codebuddy"));
-        assert_eq!(cli_binary_name(AcpBackend::Kiro), Some("kiro"));
-    }
-
-    #[test]
-    fn cli_binary_name_returns_none_for_non_cli_backends() {
-        assert_eq!(cli_binary_name(AcpBackend::IFlow), None);
-        assert_eq!(cli_binary_name(AcpBackend::Gemini), None);
-        assert_eq!(cli_binary_name(AcpBackend::Custom), None);
-        assert_eq!(cli_binary_name(AcpBackend::Remote), None);
-        assert_eq!(cli_binary_name(AcpBackend::Aionrs), None);
-    }
-
-    #[test]
     fn detect_cli_non_cli_backend_returns_none() {
         let resp = detect_cli(AcpBackend::Custom);
         assert!(resp.path.is_none());
@@ -218,27 +99,7 @@ mod tests {
     #[test]
     fn get_env_returns_at_least_path() {
         let resp = get_env();
-        // PATH should generally be available in any environment
         assert!(resp.env.contains_key("PATH") || resp.env.contains_key("HOME"));
-    }
-
-    #[test]
-    fn get_available_agents_returns_known_list() {
-        let agents = get_available_agents();
-        assert!(!agents.is_empty());
-        // Claude should be in the list
-        assert!(agents.iter().any(|a| a.id == "claude"));
-    }
-
-    #[test]
-    fn known_agents_list_is_complete() {
-        let agents = known_agents();
-        let ids: Vec<&str> = agents.iter().map(|a| a.id.as_str()).collect();
-        assert!(ids.contains(&"claude"));
-        assert!(ids.contains(&"codex"));
-        assert!(ids.contains(&"codebuddy"));
-        assert!(ids.contains(&"qwen"));
-        assert!(ids.contains(&"kiro"));
     }
 
     #[test]
