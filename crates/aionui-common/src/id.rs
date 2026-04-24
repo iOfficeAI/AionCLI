@@ -32,7 +32,7 @@ pub const fn fnv1a_hex8(input: &[u8]) -> [u8; 8] {
 pub fn generate_id_with_length(length: Option<usize>) -> String {
     match length {
         Some(len) if len < 36 => {
-            let num_bytes = (len + 1) / 2;
+            let num_bytes = len.div_ceil(2);
             let mut buf = vec![0u8; num_bytes];
             getrandom::getrandom(&mut buf).expect("getrandom failed");
             let hex: String = buf.iter().map(|b| format!("{b:02x}")).collect();
