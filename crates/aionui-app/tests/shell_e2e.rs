@@ -7,10 +7,7 @@ use tower::ServiceExt;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use common::{
-    body_json, build_app_with_noop_opener, extract_csrf_token, get_request, json_with_token,
-    setup_and_login,
-};
+use common::{body_json, build_app_with_noop_opener, json_with_token, setup_and_login};
 
 // ---------------------------------------------------------------------------
 // Helper: build multipart/form-data body

@@ -35,6 +35,8 @@ aion-protocol.workspace = true
 aion-config.workspace = true
 aion-tools.workspace = true
 uuid.workspace = true
+agent-client-protocol = { version = "0.11.1", features = ["unstable_session_model", "unstable_session_close", "unstable_session_usage"] }
+tokio-util = { version = "0.7", features = ["compat"] }
 
 [dev-dependencies]
 tempfile = "3"

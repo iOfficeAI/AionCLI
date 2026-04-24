@@ -111,13 +111,13 @@ impl StreamRelay {
                 "confirmation.add"
             };
             let payload = json!({
-                "conversationId": self.conversation_id,
+                "conversation_id": self.conversation_id,
                 "id": conf.id,
-                "callId": conf.call_id,
+                "call_id": conf.call_id,
                 "title": conf.title,
                 "action": conf.action,
                 "description": conf.description,
-                "commandType": conf.command_type,
+                "command_type": conf.command_type,
                 "options": conf.options,
             });
             let msg = WebSocketMessage::new(event_name, payload);
@@ -125,7 +125,7 @@ impl StreamRelay {
         } else {
             // Fallback: broadcast raw data with conversation ID
             let payload = json!({
-                "conversationId": self.conversation_id,
+                "conversation_id": self.conversation_id,
                 "data": data,
             });
             let msg = WebSocketMessage::new("confirmation.add", payload);
@@ -144,8 +144,8 @@ impl StreamRelay {
         };
 
         let payload = json!({
-            "conversationId": self.conversation_id,
-            "msgId": self.assistant_msg_id,
+            "conversation_id": self.conversation_id,
+            "msg_id": self.assistant_msg_id,
             "type": event_data.get("type").cloned().unwrap_or(json!("unknown")),
             "data": event_data.get("data").cloned().unwrap_or(json!({})),
             "hidden": false,
@@ -265,7 +265,7 @@ impl StreamRelay {
 
     fn send_turn_completed_status(&self, status: &str) {
         let payload = json!({
-            "conversationId": self.conversation_id,
+            "conversation_id": self.conversation_id,
             "status": status,
         });
         let msg = WebSocketMessage::new("turn.completed", payload);
@@ -468,7 +468,7 @@ mod tests {
         // Should have turn.completed event
         let turn_event = ws_events.iter().find(|e| e.name == "turn.completed");
         assert!(turn_event.is_some());
-        assert_eq!(turn_event.unwrap().data["conversationId"], "conv-1");
+        assert_eq!(turn_event.unwrap().data["conversation_id"], "conv-1");
         assert_eq!(turn_event.unwrap().data["status"], "finished");
     }
 

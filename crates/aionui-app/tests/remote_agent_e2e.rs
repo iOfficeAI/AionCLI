@@ -98,7 +98,7 @@ async fn t1_3_create_missing_required_fields() {
 
 #[tokio::test]
 async fn t1_4_create_unauthenticated() {
-    let (mut app, _services) = build_app().await;
+    let (app, _services) = build_app().await;
 
     let body = bearer_agent_body();
     let req = axum::http::Request::builder()
@@ -309,7 +309,7 @@ async fn t6_1_test_connection_invalid_protocol() {
 
 #[tokio::test]
 async fn t6_2_test_connection_unauthenticated() {
-    let (mut app, _services) = build_app().await;
+    let (app, _services) = build_app().await;
 
     let body = json!({
         "url": "wss://remote.example.com"

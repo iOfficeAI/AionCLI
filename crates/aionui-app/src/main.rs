@@ -28,7 +28,9 @@ struct Cli {
 fn init_tracing() {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                "info,aionui_ai_agent=debug,aionui_conversation=debug,aionui_realtime=debug".into()
+            }),
         )
         .with_target(true)
         .init();

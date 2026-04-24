@@ -43,7 +43,12 @@ impl AgentRegistry {
     }
 
     pub async fn get_by_id(&self, id: &str) -> Option<DetectedAgent> {
-        self.agents.read().await.iter().find(|a| a.id == id).cloned()
+        self.agents
+            .read()
+            .await
+            .iter()
+            .find(|a| a.id == id)
+            .cloned()
     }
 
     /// Re-scan builtin agents only (PATH may have changed).
@@ -88,25 +93,64 @@ impl AgentRegistry {
     }
 
     fn detect_builtin_agents() -> Vec<DetectedAgent> {
+        // TODO: 改成使用打包进应用的 bundled bun，而不是 PATH 里的 bun。
+        // 目前还不清楚如何从 Rust 侧获取 bundled bun 的路径。
+        let bun_path = which::which("bun").ok();
+
         AcpBackend::CLI_BACKENDS
             .iter()
             .filter_map(|&backend| {
-                let binary = backend.cli_binary_name()?;
-                let path = which::which(binary).ok()?;
-                let command = path.to_string_lossy().into_owned();
+                if let Some(bridge_pkg) = backend.bridge_package() {
+                    // Bridge-based backend: needs bun/npx to run the bridge package
+                    let bun = bun_path.as_ref()?;
+                    let bun_cmd = bun.to_string_lossy().into_owned();
 
-                debug!(backend = ?backend, %command, "Detected builtin agent");
+                    // Also check that the native CLI exists (indicates the tool is installed)
+                    if let Some(binary) = backend.cli_binary_name() {
+                        which::which(binary).ok()?;
+                    }
 
-                Some(DetectedAgent {
-                    id: backend.id(),
-                    name: backend.display_name().into(),
-                    backend,
-                    available: true,
-                    source: AgentSource::Builtin,
-                    command: Some(command),
-                    args: vec![],
-                    env: vec![],
-                })
+                    let mut args = vec![
+                        "x".to_owned(),
+                        "--bun".to_owned(),
+                        bridge_pkg.to_owned(),
+                    ];
+                    for extra in backend.bridge_extra_args() {
+                        args.push((*extra).to_owned());
+                    }
+
+                    debug!(backend = ?backend, command = %bun_cmd, ?args, "Detected bridge-based agent");
+
+                    Some(DetectedAgent {
+                        id: backend.id(),
+                        name: backend.display_name().into(),
+                        backend,
+                        available: true,
+                        source: AgentSource::Builtin,
+                        command: Some(bun_cmd),
+                        args,
+                        env: vec![],
+                    })
+                } else {
+                    // Direct CLI backend: native binary + ACP args
+                    let binary = backend.cli_binary_name()?;
+                    let path = which::which(binary).ok()?;
+                    let command = path.to_string_lossy().into_owned();
+                    let args = backend.args().unwrap_or(&["--experimental-acp"]);
+
+                    debug!(backend = ?backend, %command, ?args, "Detected direct-CLI agent");
+
+                    Some(DetectedAgent {
+                        id: backend.id(),
+                        name: backend.display_name().into(),
+                        backend,
+                        available: true,
+                        source: AgentSource::Builtin,
+                        command: Some(command),
+                        args: args.iter().map(|s| (*s).to_owned()).collect(),
+                        env: vec![],
+                    })
+                }
             })
             .collect()
     }

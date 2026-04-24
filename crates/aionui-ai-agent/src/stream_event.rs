@@ -1,4 +1,8 @@
+use agent_client_protocol::schema::{
+    ContentBlock, SessionNotification, SessionUpdate, ToolCallStatus as SdkToolCallStatus,
+};
 use serde::{Deserialize, Serialize};
+use tracing::debug;
 
 /// Events emitted by an Agent during a message processing turn.
 ///
@@ -186,6 +190,129 @@ pub struct ErrorEventData {
     pub message: String,
     #[serde(default)]
     pub code: Option<String>,
+}
+
+// ── SDK SessionNotification → AgentStreamEvent conversion ────────────────────
+
+/// Convert an SDK [`SessionNotification`] into zero or more [`AgentStreamEvent`]s.
+///
+/// Each `SessionUpdate` variant is mapped to the closest existing event type.
+/// Unknown or unmappable variants produce a debug log and are skipped (not
+/// silently swallowed, not panicked).
+pub fn session_notification_to_events(notif: &SessionNotification) -> Vec<AgentStreamEvent> {
+    let session_id = notif.session_id.to_string();
+    let mut events = Vec::new();
+
+    match &notif.update {
+        SessionUpdate::AgentMessageChunk(chunk) => {
+            if let ContentBlock::Text(text) = &chunk.content {
+                events.push(AgentStreamEvent::Text(TextEventData {
+                    content: text.text.clone(),
+                }));
+            }
+        }
+
+        SessionUpdate::AgentThoughtChunk(chunk) => {
+            if let ContentBlock::Text(text) = &chunk.content {
+                events.push(AgentStreamEvent::Thinking(ThinkingEventData {
+                    content: text.text.clone(),
+                    subject: None,
+                    duration: None,
+                    status: Some("in_progress".into()),
+                }));
+            }
+        }
+
+        SessionUpdate::UserMessageChunk(_chunk) => {
+            // User message echoes are not forwarded to the event stream.
+            // The frontend already has the user's message.
+        }
+
+        SessionUpdate::ToolCall(tc) => {
+            let status = map_sdk_tool_status(&tc.status);
+            events.push(AgentStreamEvent::ToolCall(ToolCallEventData {
+                call_id: tc.tool_call_id.to_string(),
+                name: tc.title.clone(),
+                args: tc.raw_input.clone().unwrap_or_default(),
+                status,
+            }));
+        }
+
+        SessionUpdate::ToolCallUpdate(tcu) => {
+            let status = tcu
+                .fields
+                .status
+                .as_ref()
+                .map(map_sdk_tool_status)
+                .unwrap_or(ToolCallStatus::Running);
+
+            events.push(AgentStreamEvent::ToolCall(ToolCallEventData {
+                call_id: tcu.tool_call_id.to_string(),
+                name: tcu.fields.title.clone().unwrap_or_default(),
+                args: tcu.fields.raw_input.clone().unwrap_or_default(),
+                status,
+            }));
+        }
+
+        SessionUpdate::Plan(plan) => {
+            let entries: Vec<serde_json::Value> = plan
+                .entries
+                .iter()
+                .map(|e| serde_json::to_value(e).unwrap_or_default())
+                .collect();
+
+            events.push(AgentStreamEvent::Plan(PlanEventData {
+                session_id: Some(session_id),
+                entries,
+            }));
+        }
+
+        SessionUpdate::AvailableCommandsUpdate(update) => {
+            let commands: Vec<serde_json::Value> = update
+                .available_commands
+                .iter()
+                .map(|c| serde_json::to_value(c).unwrap_or_default())
+                .collect();
+
+            events.push(AgentStreamEvent::AvailableCommands(
+                AvailableCommandsEventData { commands },
+            ));
+        }
+
+        SessionUpdate::CurrentModeUpdate(_update) => {
+            // Mode changes are tracked internally by acp_agent.rs.
+            // The frontend receives mode info through the mode API endpoint.
+            debug!("SessionUpdate::CurrentModeUpdate received, not forwarded to event stream");
+        }
+
+        SessionUpdate::ConfigOptionUpdate(_update) => {
+            // Config changes are tracked internally.
+            debug!("SessionUpdate::ConfigOptionUpdate received, not forwarded to event stream");
+        }
+
+        SessionUpdate::SessionInfoUpdate(_update) => {
+            // Session info updates (title changes etc.) are not forwarded.
+            debug!("SessionUpdate::SessionInfoUpdate received, not forwarded to event stream");
+        }
+
+        // Future SDK variants or feature-gated variants — log and skip.
+        _ => {
+            debug!("Unknown SessionUpdate variant received, skipping");
+        }
+    }
+
+    events
+}
+
+/// Map SDK [`ToolCallStatus`](SdkToolCallStatus) to our [`ToolCallStatus`].
+fn map_sdk_tool_status(sdk: &SdkToolCallStatus) -> ToolCallStatus {
+    match sdk {
+        SdkToolCallStatus::Pending | SdkToolCallStatus::InProgress => ToolCallStatus::Running,
+        SdkToolCallStatus::Completed => ToolCallStatus::Completed,
+        SdkToolCallStatus::Failed => ToolCallStatus::Error,
+        // Future SDK variants — default to Running
+        _ => ToolCallStatus::Running,
+    }
 }
 
 #[cfg(test)]
