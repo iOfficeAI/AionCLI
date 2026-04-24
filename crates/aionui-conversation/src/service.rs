@@ -9,7 +9,8 @@ use aionui_api_types::{
     WebSocketMessage,
 };
 use aionui_common::{
-    AppError, ConversationSource, ConversationStatus, PaginatedResult, generate_id, now_ms,
+    AppError, ConversationSource, ConversationStatus, PaginatedResult, generate_id,
+    generate_short_id, now_ms,
 };
 use aionui_db::{ConversationFilters, ConversationRowUpdate, IConversationRepository, SortOrder};
 use aionui_realtime::EventBroadcaster;
@@ -65,7 +66,7 @@ impl ConversationService {
         user_id: &str,
         req: CreateConversationRequest,
     ) -> Result<ConversationResponse, AppError> {
-        let id = generate_id();
+        let id = generate_short_id();
         let now = now_ms();
         let source = req.source.unwrap_or(ConversationSource::Aionui);
 

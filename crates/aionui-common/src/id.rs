@@ -25,9 +25,31 @@ pub const fn fnv1a_hex8(input: &[u8]) -> [u8; 8] {
     out
 }
 
-/// Generate a time-ordered globally unique ID (UUID v7).
+/// Generate a cryptographically random hex ID of `length` characters.
+///
+/// Matches the frontend `uuid(length)` convention: random bytes → hex string → truncate.
+/// When `length` is `None` or `>= 36`, returns a full UUID v7 string instead.
+pub fn generate_id_with_length(length: Option<usize>) -> String {
+    match length {
+        Some(len) if len < 36 => {
+            let num_bytes = (len + 1) / 2;
+            let mut buf = vec![0u8; num_bytes];
+            getrandom::getrandom(&mut buf).expect("getrandom failed");
+            let hex: String = buf.iter().map(|b| format!("{b:02x}")).collect();
+            hex[..len].to_string()
+        }
+        _ => Uuid::now_v7().to_string(),
+    }
+}
+
+/// Generate a full UUID v7 string (36 chars).
 pub fn generate_id() -> String {
-    Uuid::now_v7().to_string()
+    generate_id_with_length(None)
+}
+
+/// Generate a short random hex ID (default 8 chars), compatible with the frontend `uuid()` convention.
+pub fn generate_short_id() -> String {
+    generate_id_with_length(Some(8))
 }
 
 /// Generate a prefixed ID (e.g., "cron_01234...", "mcp_01234...").
@@ -79,6 +101,38 @@ mod tests {
         let prefix = "a".repeat(1000);
         let id = generate_prefixed_id(&prefix);
         assert!(id.starts_with(&prefix));
+    }
+
+    #[test]
+    fn test_generate_short_id_length() {
+        let id = generate_short_id();
+        assert_eq!(id.len(), 8);
+        assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn test_generate_id_with_length_custom() {
+        let id = generate_id_with_length(Some(12));
+        assert_eq!(id.len(), 12);
+        assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn test_generate_id_with_length_none_returns_full_uuid() {
+        let id = generate_id_with_length(None);
+        assert!(Uuid::parse_str(&id).is_ok());
+    }
+
+    #[test]
+    fn test_generate_id_with_length_large_returns_full_uuid() {
+        let id = generate_id_with_length(Some(32));
+        assert!(Uuid::parse_str(&id).is_ok());
+    }
+
+    #[test]
+    fn test_short_id_uniqueness() {
+        let ids: HashSet<String> = (0..1000).map(|_| generate_short_id()).collect();
+        assert_eq!(ids.len(), 1000);
     }
 
     #[test]
