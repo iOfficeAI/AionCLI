@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use aionui_common::{AgentType, AppError, now_ms};
+use aionui_common::{AcpBackend, AgentType, AppError, now_ms};
 use aionui_db::IRemoteAgentRepository;
 use tracing::warn;
 
@@ -54,10 +54,23 @@ async fn build_agent(
 ) -> Result<AgentManagerHandle, AppError> {
     let conversation_id = options.conversation_id.clone();
     let workspace = if options.workspace.is_empty() {
-        let dir =
-            deps.data_dir
-                .join("tmp")
-                .join(format!("{:?}-temp-{}", options.agent_type, now_ms()));
+        let label = match options.agent_type {
+            AgentType::Acp => {
+                let backend = options
+                    .extra
+                    .get("backend")
+                    .and_then(|v| serde_json::from_value::<AcpBackend>(v.clone()).ok());
+                match backend {
+                    Some(b) => format!("acp-{}", b.display_name()).to_lowercase(),
+                    None => "acp".to_string(),
+                }
+            }
+            other => format!("{other:?}").to_lowercase(),
+        };
+        let dir = deps
+            .data_dir
+            .join("tmp")
+            .join(format!("{label}-temp-{}", now_ms()));
         std::fs::create_dir_all(&dir)
             .map_err(|e| AppError::Internal(format!("Failed to create temp workspace: {e}")))?;
         dir.to_string_lossy().into_owned()
