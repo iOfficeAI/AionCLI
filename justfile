@@ -6,6 +6,7 @@ default:
 build:
     cargo build --release
     cp target/release/aionui-backend ~/.cargo/bin/
+    codesign --force --sign - ~/.cargo/bin/aionui-backend
 
 # Build in debug mode
 build-debug:

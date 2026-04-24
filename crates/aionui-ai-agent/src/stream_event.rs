@@ -14,6 +14,7 @@ pub enum AgentStreamEvent {
     /// Start of a new response turn.
     Start(StartEventData),
     /// Incremental text content.
+    #[serde(rename = "content")]
     Text(TextEventData),
     /// Tip / notification (error, success, warning).
     Tips(TipsEventData),
@@ -326,7 +327,7 @@ mod tests {
             content: "Hello world".into(),
         });
         let json = serde_json::to_value(&event).unwrap();
-        assert_eq!(json["type"], "text");
+        assert_eq!(json["type"], "content");
         assert_eq!(json["data"]["content"], "Hello world");
 
         let parsed: AgentStreamEvent = serde_json::from_value(json).unwrap();

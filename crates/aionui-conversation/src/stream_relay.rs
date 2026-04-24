@@ -43,13 +43,26 @@ impl StreamRelay {
     /// Run the relay loop. Consumes `self` and runs until the agent stream ends.
     pub async fn run(self, mut rx: broadcast::Receiver<AgentStreamEvent>) {
         let mut text_buffer = String::new();
+        let mut thinking_buffer = String::new();
+        let mut thinking_started_at: Option<i64> = None;
         let mut record_created = false;
         let mut flush_counter: u32 = 0;
         let mut seen_confirmations: HashSet<String> = HashSet::new();
+        let mut has_thinking = false;
 
         loop {
             match rx.recv().await {
                 Ok(event) => {
+                    if let AgentStreamEvent::Thinking(ref data) = event {
+                        has_thinking = true;
+                        if data.status.as_deref() != Some("done") {
+                            if thinking_started_at.is_none() {
+                                thinking_started_at = Some(now_ms());
+                            }
+                            thinking_buffer.push_str(&data.content);
+                        }
+                    }
+
                     self.forward_to_websocket(&event);
                     self.maybe_broadcast_confirmation(&event, &mut seen_confirmations);
 
@@ -63,12 +76,20 @@ impl StreamRelay {
                     }
 
                     if self.is_terminal(&event) {
+                        if has_thinking {
+                            self.send_thinking_done();
+                        }
+                        self.persist_thinking(&thinking_buffer, thinking_started_at).await;
                         self.finalize(&text_buffer, &record_created, &event).await;
                         self.send_turn_completed(&event);
                         break;
                     }
                 }
                 Err(broadcast::error::RecvError::Closed) => {
+                    if has_thinking {
+                        self.send_thinking_done();
+                    }
+                    self.persist_thinking(&thinking_buffer, thinking_started_at).await;
                     // Channel closed without finish/error — still finalize
                     self.finalize(
                         &text_buffer,
@@ -257,6 +278,46 @@ impl StreamRelay {
             .await;
     }
 
+    /// Persist accumulated thinking content as a message in the database.
+    /// This ensures thinking blocks survive page refreshes.
+    async fn persist_thinking(&self, thinking_buffer: &str, started_at: Option<i64>) {
+        if thinking_buffer.is_empty() {
+            return;
+        }
+        let content = json!({
+            "content": thinking_buffer,
+            "status": "done",
+        })
+        .to_string();
+        let row = MessageRow {
+            id: generate_id(),
+            conversation_id: self.conversation_id.clone(),
+            msg_id: Some(self.assistant_msg_id.clone()),
+            r#type: "thinking".into(),
+            content,
+            position: Some("left".into()),
+            status: Some("finish".into()),
+            hidden: false,
+            created_at: started_at.unwrap_or_else(now_ms),
+        };
+        if let Err(e) = self.repo.insert_message(&row).await {
+            warn!(error = %e, "Failed to persist thinking message");
+        }
+    }
+
+    /// Send a `thinking` event with `status: "done"` to close the thinking UI.
+    fn send_thinking_done(&self) {
+        let thinking_done = AgentStreamEvent::Thinking(
+            aionui_ai_agent::stream_event::ThinkingEventData {
+                content: String::new(),
+                subject: None,
+                duration: None,
+                status: Some("done".into()),
+            },
+        );
+        self.forward_to_websocket(&thinking_done);
+    }
+
     /// Send a `turn.completed` WebSocket event.
     fn send_turn_completed(&self, _event: &AgentStreamEvent) {
         // All terminal events resolve to "finished" status
@@ -264,9 +325,12 @@ impl StreamRelay {
     }
 
     fn send_turn_completed_status(&self, status: &str) {
+        let can_send = status == "finished";
         let payload = json!({
             "conversation_id": self.conversation_id,
+            "session_id": self.conversation_id,
             "status": status,
+            "canSendMessage": can_send,
         });
         let msg = WebSocketMessage::new("turn.completed", payload);
         self.broadcaster.broadcast(msg);
@@ -468,8 +532,11 @@ mod tests {
         // Should have turn.completed event
         let turn_event = ws_events.iter().find(|e| e.name == "turn.completed");
         assert!(turn_event.is_some());
-        assert_eq!(turn_event.unwrap().data["conversation_id"], "conv-1");
-        assert_eq!(turn_event.unwrap().data["status"], "finished");
+        let data = &turn_event.unwrap().data;
+        assert_eq!(data["conversation_id"], "conv-1");
+        assert_eq!(data["session_id"], "conv-1");
+        assert_eq!(data["status"], "finished");
+        assert_eq!(data["canSendMessage"], true);
     }
 
     // ── Helpers ──────────────────────────────────────────────────

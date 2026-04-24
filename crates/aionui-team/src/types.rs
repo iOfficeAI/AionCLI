@@ -87,6 +87,7 @@ impl TeammateStatus {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TeamAgent {
+    #[serde(default)]
     pub slot_id: String,
     #[serde(alias = "agentName")]
     pub name: String,
