@@ -15,6 +15,36 @@ pub enum AgentType {
     Aionrs,
 }
 
+impl AgentType {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            AgentType::Gemini => "Gemini",
+            AgentType::Acp => "ACP",
+            AgentType::OpenclawGateway => "OpenClaw Gateway",
+            AgentType::Nanobot => "Nanobot",
+            AgentType::Remote => "Remote",
+            AgentType::Aionrs => "Aion CLI",
+        }
+    }
+
+    pub fn serde_name(&self) -> &'static str {
+        match self {
+            AgentType::Gemini => "gemini",
+            AgentType::Acp => "acp",
+            AgentType::OpenclawGateway => "openclaw-gateway",
+            AgentType::Nanobot => "nanobot",
+            AgentType::Remote => "remote",
+            AgentType::Aionrs => "aionrs",
+        }
+    }
+
+    pub fn id(&self) -> String {
+        let hash = fnv1a_hex8(self.serde_name().as_bytes());
+        // SAFETY: fnv1a_hex8 only produces ASCII hex digits
+        unsafe { std::str::from_utf8_unchecked(&hash) }.into()
+    }
+}
+
 /// ACP sub-backend identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -345,6 +375,41 @@ pub enum McpServerStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_agent_type_display_names() {
+        assert_eq!(AgentType::OpenclawGateway.display_name(), "OpenClaw Gateway");
+        assert_eq!(AgentType::Aionrs.display_name(), "Aion CLI");
+        assert_eq!(AgentType::Nanobot.display_name(), "Nanobot");
+        assert_eq!(AgentType::Gemini.display_name(), "Gemini");
+        assert_eq!(AgentType::Remote.display_name(), "Remote");
+        assert_eq!(AgentType::Acp.display_name(), "ACP");
+    }
+
+    #[test]
+    fn test_agent_type_id_stability() {
+        let id = AgentType::Aionrs.id();
+        assert_eq!(id.len(), 8);
+        assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(AgentType::Aionrs.id(), AgentType::Aionrs.id());
+    }
+
+    #[test]
+    fn test_agent_type_id_unique_per_variant() {
+        let ids: Vec<String> = [
+            AgentType::Gemini,
+            AgentType::Acp,
+            AgentType::OpenclawGateway,
+            AgentType::Nanobot,
+            AgentType::Remote,
+            AgentType::Aionrs,
+        ]
+        .iter()
+        .map(|t| t.id())
+        .collect();
+        let unique: std::collections::HashSet<&String> = ids.iter().collect();
+        assert_eq!(unique.len(), ids.len());
+    }
 
     #[test]
     fn test_agent_type_serde_roundtrip() {
