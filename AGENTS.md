@@ -160,7 +160,7 @@ Prohibited:
 > ⚠️ **When to run what:**
 > - During development: only test the crate you're working on → `cargo test -p aionui-<crate>`
 > - After implementation complete: full verification → `cargo test --workspace`
-> - Do NOT run `cargo test --workspace` at the start of a task or after creating a worktree.
+> - Do NOT run `cargo test --workspace` at the start of a task.
 >
 > ⚠️ **Performance:**
 > - `cargo test --workspace` takes 10+ minutes. MUST use `run_in_background: true` when calling via Bash tool, otherwise it will timeout.
