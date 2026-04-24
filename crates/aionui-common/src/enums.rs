@@ -129,6 +129,57 @@ impl AcpBackend {
             AcpBackend::Custom => "Custom",
         }
     }
+
+    /// ACP bridge package for backends that require an NPX/bun bridge.
+    ///
+    /// Returns `None` for backends whose native CLI speaks ACP directly.
+    pub fn bridge_package(&self) -> Option<&'static str> {
+        match self {
+            AcpBackend::Claude => Some("@agentclientprotocol/claude-agent-acp@0.29.2"),
+            AcpBackend::Codex => Some("@zed-industries/codex-acp@0.9.5"),
+            AcpBackend::Codebuddy => Some("@tencent-ai/codebuddy-code@2.73.0"),
+            _ => None,
+        }
+    }
+
+    /// Extra arguments appended when spawning via bridge package.
+    ///
+    /// Only relevant when [`bridge_package`](Self::bridge_package) returns `Some`.
+    pub fn bridge_extra_args(&self) -> &'static [&'static str] {
+        match self {
+            AcpBackend::Codebuddy => &["--acp"],
+            _ => &[],
+        }
+    }
+
+    /// CLI arguments for direct-CLI backends (no bridge).
+    ///
+    /// These are appended after the CLI command itself.
+    /// Returns `None` for bridge-based backends (use [`bridge_package`] instead)
+    /// and for backends that don't have a standalone CLI.
+    pub fn args(&self) -> Option<&'static [&'static str]> {
+        match self {
+            // Bridge-based — args handled by bridge_package + bridge_extra_args
+            AcpBackend::Claude | AcpBackend::Codex | AcpBackend::Codebuddy => None,
+            // Direct CLI with specific ACP args
+            AcpBackend::Goose => Some(&["acp"]),
+            AcpBackend::Droid => Some(&["exec", "--output-format", "acp"]),
+            AcpBackend::Auggie => Some(&["--acp"]),
+            AcpBackend::Kimi => Some(&["acp"]),
+            AcpBackend::Opencode => Some(&["acp"]),
+            AcpBackend::Copilot => Some(&["--acp", "--stdio"]),
+            AcpBackend::Qoder => Some(&["--acp"]),
+            AcpBackend::Vibe => Some(&[]),
+            AcpBackend::Cursor => Some(&["acp"]),
+            AcpBackend::Kiro => Some(&["acp"]),
+            AcpBackend::Hermes => Some(&["acp"]),
+            AcpBackend::Snow => Some(&["--acp"]),
+            AcpBackend::Qwen => Some(&["--acp"]),
+            AcpBackend::Nanobot => Some(&["--experimental-acp"]),
+            // Non-CLI backends
+            _ => None,
+        }
+    }
 }
 
 /// Runtime status of a conversation.

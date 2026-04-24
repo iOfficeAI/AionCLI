@@ -938,7 +938,7 @@ async fn sr1_system_resume_missed_job() {
 
 #[tokio::test]
 async fn cd1_cascade_delete_by_conversation() {
-    let (svc, repo, bc) = setup().await;
+    let (svc, _repo, bc) = setup().await;
 
     let mut req_a = make_create_req("Cascade A", every_60s());
     req_a.conversation_id = "conv_cascade".into();

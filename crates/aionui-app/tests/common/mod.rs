@@ -1,4 +1,5 @@
 //! Shared test helpers for aionui-app E2E tests.
+#![allow(dead_code)]
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};

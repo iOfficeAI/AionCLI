@@ -70,7 +70,6 @@ pub fn test_custom_agent(
     _acp_args: &[String],
     _env: &HashMap<String, String>,
 ) -> Result<TestCustomAgentResponse, AppError> {
-    // Verify the command exists
     which::which(command)
         .map_err(|_| AppError::BadRequest(format!("Command '{command}' not found in PATH")))?;
 

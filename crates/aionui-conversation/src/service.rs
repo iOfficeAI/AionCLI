@@ -568,16 +568,9 @@ impl ConversationService {
         // Subscribe to agent events before sending (no events lost)
         let rx = agent.subscribe();
 
-        // Send message to the agent
-        let send_data = SendMessageData {
-            content: req.content,
-            msg_id: req.msg_id,
-            files: req.files,
-            inject_skills: req.inject_skills,
-        };
-        agent.send_message(send_data).await?;
-
-        // Spawn background relay: agent stream → WebSocket + DB
+        // Spawn background relay BEFORE sending — prompt() blocks until the
+        // agent turn completes, so the relay must already be running to
+        // consume streaming events as they arrive.
         let relay = StreamRelay::new(
             conversation_id.to_owned(),
             generate_id(),
@@ -586,7 +579,23 @@ impl ConversationService {
         );
         tokio::spawn(relay.run(rx));
 
-        debug!(conversation_id, "Message sent, stream relay started");
+        // Send message to the agent in a background task.
+        // prompt() blocks until the PromptResponse arrives (turn completed),
+        // but the HTTP handler should return 202 immediately.
+        let send_data = SendMessageData {
+            content: req.content,
+            msg_id: req.msg_id,
+            files: req.files,
+            inject_skills: req.inject_skills,
+        };
+        let conv_id = conversation_id.to_owned();
+        tokio::spawn(async move {
+            if let Err(e) = agent.send_message(send_data).await {
+                tracing::error!(conversation_id = %conv_id, error = %e, "Agent send_message failed");
+            }
+        });
+
+        debug!(conversation_id, "Message dispatched, stream relay started");
         Ok(())
     }
 

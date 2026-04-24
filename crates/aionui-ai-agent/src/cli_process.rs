@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use aionui_common::AppError;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, Command};
+use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::{Mutex, broadcast, watch};
 use tracing::{debug, error, trace, warn};
 
@@ -29,27 +29,39 @@ pub struct CliSpawnConfig {
 /// Default broadcast channel capacity for stdout events.
 const EVENT_CHANNEL_CAPACITY: usize = 256;
 
-/// Manages a CLI subprocess with JSON-over-stdin/stdout communication.
+/// Maximum stderr ring-buffer size in bytes.
+const STDERR_BUFFER_MAX: usize = 8192;
+
+/// Manages a CLI subprocess with optional JSON-over-stdin/stdout communication.
 ///
-/// Events are read from stdout as line-delimited JSON (`serde_json::Value`).
-/// Messages are sent to the subprocess via stdin as JSON lines.
-/// The specific Agent implementation (ACP, Gemini, etc.) is responsible for
-/// interpreting the raw JSON into typed [`AgentStreamEvent`](crate::AgentStreamEvent) values.
+/// Supports two modes:
+///
+/// 1. **Legacy mode** (Gemini, OpenClaw, Nanobot): stdout is read as line-delimited
+///    JSON and broadcast via `subscribe()`. Messages are sent via `send()`.
+///
+/// 2. **SDK mode** (ACP): call [`take_stdio`](Self::take_stdio) to hand raw
+///    stdin/stdout to the ACP SDK transport. After this, `send()` and `subscribe()`
+///    are no longer available.
 pub struct CliAgentProcess {
     /// Stdin writer, wrapped in Mutex for concurrent send safety.
-    /// Set to `None` once stdin is closed (process exited or explicit close).
-    stdin: Mutex<Option<tokio::process::ChildStdin>>,
+    /// Set to `None` once stdin is closed, taken, or process exited.
+    stdin: Mutex<Option<ChildStdin>>,
+    /// Raw stdout handle. Only available before background tasks start or
+    /// in SDK mode (taken by `take_stdio`). `None` once consumed.
+    stdout: Mutex<Option<ChildStdout>>,
     /// OS-level process ID.
     pid: u32,
-    /// Broadcast sender for parsed stdout events.
+    /// Broadcast sender for parsed stdout events (legacy mode only).
     event_tx: broadcast::Sender<serde_json::Value>,
     /// Watch channel that transitions from `None` → `Some(ExitStatus)` on exit.
     exit_rx: watch::Receiver<Option<ExitStatus>>,
-    /// Pre-subscribed receiver created before background tasks start.
+    /// Pre-subscribed receiver created before background tasks start (legacy mode).
     /// Take this via [`take_initial_receiver`] to guarantee no events are lost.
     initial_rx: InitialReceiver,
-    /// Handle to the stdout reader task (for cleanup).
-    _stdout_handle: Arc<tokio::task::JoinHandle<()>>,
+    /// Stderr ring buffer for diagnostics.
+    stderr_buffer: Arc<Mutex<String>>,
+    /// Handle to the stdout reader task (legacy mode, for cleanup).
+    _stdout_handle: Option<Arc<tokio::task::JoinHandle<()>>>,
     /// Handle to the stderr reader task (for cleanup).
     _stderr_handle: Arc<tokio::task::JoinHandle<()>>,
     /// Handle to the exit monitor task (for cleanup).
@@ -57,13 +69,15 @@ pub struct CliAgentProcess {
 }
 
 impl CliAgentProcess {
-    /// Spawn a new CLI subprocess.
+    /// Spawn a new CLI subprocess in **legacy mode**.
     ///
     /// The child process is started with stdin, stdout, and stderr piped.
     /// Background tasks are spawned to:
     /// - Read stdout line-by-line and parse each line as JSON
-    /// - Read stderr and log warnings
+    /// - Read stderr and buffer the last [`STDERR_BUFFER_MAX`] bytes
     /// - Monitor process exit
+    ///
+    /// This is used by Gemini, OpenClaw, Nanobot agents.
     pub async fn spawn(config: CliSpawnConfig) -> Result<Self, AppError> {
         let mut cmd = Command::new(&config.command);
         cmd.args(&config.args)
@@ -131,7 +145,9 @@ impl CliAgentProcess {
             debug!(pid, "Stdout reader finished");
         });
 
-        // Background task: read stderr → log warnings
+        // Background task: read stderr → ring buffer + log
+        let stderr_buffer = Arc::new(Mutex::new(String::new()));
+        let stderr_buf_clone = Arc::clone(&stderr_buffer);
         let stderr_handle = tokio::spawn(async move {
             let reader = BufReader::new(stderr);
             let mut lines = reader.lines();
@@ -140,6 +156,13 @@ impl CliAgentProcess {
                 let trimmed = line.trim();
                 if !trimmed.is_empty() {
                     warn!(pid, stderr = trimmed, "CLI process stderr");
+                }
+                let mut buf = stderr_buf_clone.lock().await;
+                buf.push_str(&line);
+                buf.push('\n');
+                if buf.len() > STDERR_BUFFER_MAX {
+                    let cut = buf.len() - STDERR_BUFFER_MAX;
+                    buf.drain(..cut);
                 }
             }
 
@@ -163,24 +186,138 @@ impl CliAgentProcess {
 
         Ok(Self {
             stdin: Mutex::new(Some(stdin)),
+            stdout: Mutex::new(None), // stdout consumed by reader task
             pid,
             event_tx,
             exit_rx,
             initial_rx: std::sync::Mutex::new(Some(initial_rx)),
-            _stdout_handle: Arc::new(stdout_handle),
+            stderr_buffer,
+            _stdout_handle: Some(Arc::new(stdout_handle)),
             _stderr_handle: Arc::new(stderr_handle),
             _exit_handle: Arc::new(exit_handle),
         })
     }
 
-    /// Send a JSON message to the subprocess via stdin.
+    /// Spawn a new CLI subprocess in **SDK mode**.
+    ///
+    /// Unlike [`spawn`](Self::spawn), this does NOT start a stdout reader task.
+    /// Instead, the raw stdin/stdout handles are available via [`take_stdio`](Self::take_stdio)
+    /// for the ACP SDK transport to own.
+    ///
+    /// Background tasks are still spawned for:
+    /// - stderr buffering
+    /// - Process exit monitoring
+    pub async fn spawn_for_sdk(config: CliSpawnConfig) -> Result<Self, AppError> {
+        let mut cmd = Command::new(&config.command);
+        cmd.args(&config.args)
+            .envs(&config.env)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
+
+        if let Some(ref cwd) = config.cwd {
+            cmd.current_dir(cwd);
+        }
+
+        let mut child: Child = cmd.spawn().map_err(|e| {
+            error!(command = %config.command, error = %e, "Failed to spawn CLI process");
+            AppError::Internal(format!(
+                "Failed to spawn CLI process '{}': {}",
+                config.command, e
+            ))
+        })?;
+
+        let pid = child.id().ok_or_else(|| {
+            AppError::Internal("Failed to obtain PID from spawned process".into())
+        })?;
+        debug!(pid, command = %config.command, "CLI process spawned (SDK mode)");
+
+        let stdout = child.stdout.take().ok_or_else(|| {
+            AppError::Internal("Failed to capture stdout from child process".into())
+        })?;
+        let stderr = child.stderr.take().ok_or_else(|| {
+            AppError::Internal("Failed to capture stderr from child process".into())
+        })?;
+        let stdin = child.stdin.take().ok_or_else(|| {
+            AppError::Internal("Failed to capture stdin for child process".into())
+        })?;
+
+        let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
+        let (exit_tx, exit_rx) = watch::channel(None);
+
+        // Background task: read stderr → ring buffer + log
+        let stderr_buffer = Arc::new(Mutex::new(String::new()));
+        let stderr_buf_clone = Arc::clone(&stderr_buffer);
+        let stderr_handle = tokio::spawn(async move {
+            let reader = BufReader::new(stderr);
+            let mut lines = reader.lines();
+
+            while let Ok(Some(line)) = lines.next_line().await {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    warn!(pid, stderr = trimmed, "CLI process stderr");
+                }
+                let mut buf = stderr_buf_clone.lock().await;
+                buf.push_str(&line);
+                buf.push('\n');
+                if buf.len() > STDERR_BUFFER_MAX {
+                    let cut = buf.len() - STDERR_BUFFER_MAX;
+                    buf.drain(..cut);
+                }
+            }
+
+            debug!(pid, "Stderr reader finished");
+        });
+
+        // Background task: monitor process exit
+        let exit_handle = tokio::spawn(async move {
+            match child.wait().await {
+                Ok(status) => {
+                    debug!(pid, ?status, "CLI process exited");
+                    let _ = exit_tx.send(Some(status));
+                }
+                Err(e) => {
+                    error!(pid, error = %e, "Failed to wait on CLI process");
+                    let _ = exit_tx.send(None);
+                }
+            }
+        });
+
+        Ok(Self {
+            stdin: Mutex::new(Some(stdin)),
+            stdout: Mutex::new(Some(stdout)),
+            pid,
+            event_tx,
+            exit_rx,
+            initial_rx: std::sync::Mutex::new(None),
+            stderr_buffer,
+            _stdout_handle: None,
+            _stderr_handle: Arc::new(stderr_handle),
+            _exit_handle: Arc::new(exit_handle),
+        })
+    }
+
+    /// Take ownership of stdin and stdout for the SDK transport.
+    ///
+    /// Only available in SDK mode (after [`spawn_for_sdk`](Self::spawn_for_sdk)).
+    /// Can only be called once. Returns `None` on subsequent calls or if
+    /// spawned in legacy mode.
+    pub async fn take_stdio(&self) -> Option<(ChildStdin, ChildStdout)> {
+        let stdin = self.stdin.lock().await.take()?;
+        let stdout = self.stdout.lock().await.take()?;
+        Some((stdin, stdout))
+    }
+
+    /// Send a JSON message to the subprocess via stdin (legacy mode).
     ///
     /// The message is serialized as a single line followed by a newline.
-    /// Returns an error if stdin has been closed (process exited).
+    /// Returns an error if stdin has been closed (process exited) or taken
+    /// by [`take_stdio`](Self::take_stdio).
     pub async fn send(&self, message: &serde_json::Value) -> Result<(), AppError> {
         let mut guard = self.stdin.lock().await;
         let stdin = guard.as_mut().ok_or_else(|| {
-            AppError::Internal("Cannot send: stdin is closed (process exited)".into())
+            AppError::Internal("Cannot send: stdin is closed (process exited or taken)".into())
         })?;
 
         let mut buf = serde_json::to_vec(message)
@@ -200,7 +337,7 @@ impl CliAgentProcess {
         Ok(())
     }
 
-    /// Subscribe to the event stream from stdout.
+    /// Subscribe to the event stream from stdout (legacy mode).
     ///
     /// Returns a broadcast receiver that yields raw `serde_json::Value` events
     /// as they are parsed from the subprocess stdout.
@@ -208,7 +345,8 @@ impl CliAgentProcess {
         self.event_tx.subscribe()
     }
 
-    /// Take the pre-subscribed receiver created before background tasks started.
+    /// Take the pre-subscribed receiver created before background tasks started
+    /// (legacy mode).
     ///
     /// This receiver captures all events from the very first output line.
     /// Can only be called once; subsequent calls return `None`.
@@ -281,6 +419,16 @@ impl CliAgentProcess {
         let _ = rx.changed().await;
         *rx.borrow()
     }
+
+    /// Take the buffered stderr content (consuming).
+    ///
+    /// Returns the last [`STDERR_BUFFER_MAX`] bytes of stderr output.
+    /// Used for error diagnostics in `AcpError::StartupCrash` and
+    /// `AcpError::Disconnected`.
+    pub async fn take_stderr(&self) -> String {
+        let mut buf = self.stderr_buffer.lock().await;
+        std::mem::take(&mut *buf)
+    }
 }
 
 /// Send SIGKILL to a process by PID.
@@ -335,6 +483,17 @@ mod tests {
         }
     }
 
+    fn simple_script_config(script: &str) -> CliSpawnConfig {
+        CliSpawnConfig {
+            command: "sh".into(),
+            args: vec!["-c".into(), script.into()],
+            env: HashMap::new(),
+            cwd: None,
+        }
+    }
+
+    // ── Legacy mode tests ────────────────────────────────────────────
+
     #[tokio::test]
     async fn spawn_and_receive_event() {
         let config = echo_json_config(r#"{"type":"text","data":{"content":"hello"}}"#);
@@ -349,7 +508,6 @@ mod tests {
         assert_eq!(event["type"], "text");
         assert_eq!(event["data"]["content"], "hello");
 
-        // Process should exit after echo
         let status = timeout(Duration::from_secs(5), proc.wait_for_exit())
             .await
             .expect("Timed out waiting for exit");
@@ -359,12 +517,7 @@ mod tests {
     #[tokio::test]
     async fn spawn_multiple_events() {
         let script = r#"echo '{"type":"start","data":{}}' && echo '{"type":"text","data":{"content":"line1"}}' && echo '{"type":"finish","data":{}}'  "#;
-        let config = CliSpawnConfig {
-            command: "sh".into(),
-            args: vec!["-c".into(), script.into()],
-            env: HashMap::new(),
-            cwd: None,
-        };
+        let config = simple_script_config(script);
         let proc = CliAgentProcess::spawn(config).await.unwrap();
         let mut rx = proc.subscribe();
 
@@ -385,12 +538,7 @@ mod tests {
     #[tokio::test]
     async fn non_json_lines_are_skipped() {
         let script = r#"echo 'not json' && echo '{"type":"ok","data":{}}' && echo 'also not json'"#;
-        let config = CliSpawnConfig {
-            command: "sh".into(),
-            args: vec!["-c".into(), script.into()],
-            env: HashMap::new(),
-            cwd: None,
-        };
+        let config = simple_script_config(script);
         let proc = CliAgentProcess::spawn(config).await.unwrap();
         let mut rx = proc.subscribe();
 
@@ -399,22 +547,14 @@ mod tests {
             .expect("Timed out")
             .expect("Channel closed");
 
-        // Only the valid JSON line should come through
         assert_eq!(event["type"], "ok");
-
-        // Process exits, no more events
         proc.wait_for_exit().await;
     }
 
     #[tokio::test]
     async fn empty_lines_are_skipped() {
         let script = "echo '' && echo '  ' && echo '{\"type\":\"data\",\"data\":{}}' && echo ''";
-        let config = CliSpawnConfig {
-            command: "sh".into(),
-            args: vec!["-c".into(), script.into()],
-            env: HashMap::new(),
-            cwd: None,
-        };
+        let config = simple_script_config(script);
         let proc = CliAgentProcess::spawn(config).await.unwrap();
         let mut rx = proc.subscribe();
 
@@ -427,17 +567,7 @@ mod tests {
 
     #[tokio::test]
     async fn send_json_to_stdin() {
-        // `cat` echoes stdin to stdout
-        let config = CliSpawnConfig {
-            command: "sh".into(),
-            args: vec![
-                "-c".into(),
-                // Read one line from stdin, echo it, then exit
-                "read line && echo \"$line\"".into(),
-            ],
-            env: HashMap::new(),
-            cwd: None,
-        };
+        let config = simple_script_config("read line && echo \"$line\"");
         let proc = CliAgentProcess::spawn(config).await.unwrap();
         let mut rx = proc.subscribe();
 
@@ -455,31 +585,21 @@ mod tests {
 
     #[tokio::test]
     async fn send_after_exit_returns_error() {
-        let config = CliSpawnConfig {
-            command: "sh".into(),
-            args: vec!["-c".into(), "true".into()],
-            env: HashMap::new(),
-            cwd: None,
-        };
+        let config = simple_script_config("true");
         let proc = CliAgentProcess::spawn(config).await.unwrap();
 
-        // Wait for process to exit
         proc.wait_for_exit().await;
-        // Close stdin since process exited
         proc.close_stdin().await;
 
         let result = proc.send(&json!({"type":"test"})).await;
         assert!(result.is_err());
     }
 
+    // ── Lifecycle tests (apply to both modes) ────────────────────────
+
     #[tokio::test]
     async fn is_running_reflects_process_state() {
-        let config = CliSpawnConfig {
-            command: "sh".into(),
-            args: vec!["-c".into(), "sleep 10".into()],
-            env: HashMap::new(),
-            cwd: None,
-        };
+        let config = simple_script_config("sleep 10");
         let proc = CliAgentProcess::spawn(config).await.unwrap();
 
         assert!(proc.is_running());
@@ -487,8 +607,6 @@ mod tests {
 
         proc.kill(Duration::from_millis(100)).await.unwrap();
 
-        // After kill, process should no longer be running
-        // Give a moment for exit status to propagate
         timeout(Duration::from_secs(5), proc.wait_for_exit())
             .await
             .unwrap();
@@ -498,37 +616,20 @@ mod tests {
 
     #[tokio::test]
     async fn kill_with_grace_period_exits_cleanly() {
-        // Process that exits quickly when stdin closes
-        let config = CliSpawnConfig {
-            command: "sh".into(),
-            args: vec!["-c".into(), "read line".into()],
-            env: HashMap::new(),
-            cwd: None,
-        };
+        let config = simple_script_config("read line");
         let proc = CliAgentProcess::spawn(config).await.unwrap();
         assert!(proc.is_running());
 
-        // kill with generous grace period — process should exit when stdin closes
         proc.kill(Duration::from_secs(5)).await.unwrap();
         assert!(!proc.is_running());
     }
 
     #[tokio::test]
     async fn kill_force_kills_after_grace_period() {
-        // Process that ignores stdin close (trap + infinite loop)
-        let config = CliSpawnConfig {
-            command: "sh".into(),
-            args: vec![
-                "-c".into(),
-                "trap '' TERM; while true; do sleep 1; done".into(),
-            ],
-            env: HashMap::new(),
-            cwd: None,
-        };
+        let config = simple_script_config("trap '' TERM; while true; do sleep 1; done");
         let proc = CliAgentProcess::spawn(config).await.unwrap();
         assert!(proc.is_running());
 
-        // Very short grace period → should force kill
         let result = proc.kill(Duration::from_millis(100)).await;
         assert!(result.is_ok());
 
@@ -573,12 +674,7 @@ mod tests {
 
     #[tokio::test]
     async fn pid_is_nonzero_for_valid_process() {
-        let config = CliSpawnConfig {
-            command: "sh".into(),
-            args: vec!["-c".into(), "sleep 10".into()],
-            env: HashMap::new(),
-            cwd: None,
-        };
+        let config = simple_script_config("sleep 10");
         let proc = CliAgentProcess::spawn(config).await.unwrap();
         assert!(proc.pid() > 0);
         proc.kill(Duration::from_millis(100)).await.unwrap();
@@ -586,21 +682,14 @@ mod tests {
 
     #[tokio::test]
     async fn wait_for_exit_returns_immediately_if_already_exited() {
-        let config = CliSpawnConfig {
-            command: "sh".into(),
-            args: vec!["-c".into(), "true".into()],
-            env: HashMap::new(),
-            cwd: None,
-        };
+        let config = simple_script_config("true");
         let proc = CliAgentProcess::spawn(config).await.unwrap();
 
-        // Wait for first exit
         let status1 = timeout(Duration::from_secs(5), proc.wait_for_exit())
             .await
             .expect("Timed out");
         assert!(status1.is_some());
 
-        // Calling again should return immediately
         let status2 = timeout(Duration::from_millis(100), proc.wait_for_exit())
             .await
             .expect("Should return immediately");
@@ -626,5 +715,56 @@ mod tests {
 
         assert_eq!(e1, e2);
         assert_eq!(e1["type"], "broadcast");
+    }
+
+    // ── SDK mode tests ───────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn spawn_for_sdk_take_stdio() {
+        let config = simple_script_config("read line && echo \"$line\"");
+        let proc = CliAgentProcess::spawn_for_sdk(config).await.unwrap();
+
+        let stdio = proc.take_stdio().await;
+        assert!(stdio.is_some(), "First take_stdio should succeed");
+
+        let stdio_again = proc.take_stdio().await;
+        assert!(
+            stdio_again.is_none(),
+            "Second take_stdio should return None"
+        );
+
+        proc.kill(Duration::from_millis(100)).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn stderr_captured_in_buffer() {
+        let config = simple_script_config("echo 'error line 1' >&2 && echo 'error line 2' >&2");
+        let proc = CliAgentProcess::spawn(config).await.unwrap();
+
+        timeout(Duration::from_secs(5), proc.wait_for_exit())
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let stderr = proc.take_stderr().await;
+        assert!(stderr.contains("error line 1"), "stderr: {stderr}");
+        assert!(stderr.contains("error line 2"), "stderr: {stderr}");
+    }
+
+    #[tokio::test]
+    async fn take_stderr_is_consuming() {
+        let config = simple_script_config("echo 'hello' >&2");
+        let proc = CliAgentProcess::spawn(config).await.unwrap();
+
+        timeout(Duration::from_secs(5), proc.wait_for_exit())
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let first = proc.take_stderr().await;
+        assert!(!first.is_empty());
+
+        let second = proc.take_stderr().await;
+        assert!(second.is_empty(), "Second take should be empty");
     }
 }

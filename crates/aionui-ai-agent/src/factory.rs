@@ -58,24 +58,58 @@ async fn build_agent(
             let mut config: AcpBuildExtra = serde_json::from_value(options.extra)
                 .map_err(|e| AppError::BadRequest(format!("Invalid ACP build options: {e}")))?;
 
-            if let Some(ref agent_id) = config.agent_id {
-                let detected = deps
-                    .agent_registry
-                    .get_by_id(agent_id)
-                    .await
-                    .ok_or_else(|| {
-                        AppError::BadRequest(format!("Agent '{agent_id}' not found in registry"))
-                    })?;
-                if config.backend.is_none() {
-                    config.backend = Some(detected.backend);
-                }
-                if config.cli_path.is_none() {
-                    config.cli_path = detected.command;
-                }
+            // Resolve agent from registry — try agent_id first, then backend
+            let detected = if let Some(ref agent_id) = config.agent_id {
+                deps.agent_registry.get_by_id(agent_id).await
+            } else if let Some(backend) = config.backend {
+                deps.agent_registry.get_by_id(&backend.id()).await
+            } else {
+                None
+            };
+
+            // Fill in missing fields from detected agent
+            if let Some(ref detected) = detected
+                && config.backend.is_none()
+            {
+                config.backend = Some(detected.backend);
             }
 
-            let agent = AcpAgentManager::new(conversation_id, workspace, config).await?;
-            Ok(Arc::new(agent))
+            let (spawn_command, spawn_args) = match detected {
+                Some(ref d) if d.command.is_some() => (d.command.clone().unwrap(), d.args.clone()),
+                _ => {
+                    // Last resort fallback: direct CLI with default ACP args
+                    let backend = config
+                        .backend
+                        .ok_or_else(|| AppError::BadRequest("ACP backend is required".into()))?;
+                    let binary = backend.cli_binary_name().ok_or_else(|| {
+                        AppError::BadRequest(format!("Backend {backend:?} has no CLI binary"))
+                    })?;
+                    let path = which::which(binary)
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .map_err(|_| {
+                            AppError::BadRequest(format!("CLI '{binary}' not found in PATH"))
+                        })?;
+                    let args = backend
+                        .args()
+                        .unwrap_or(&["--experimental-acp"])
+                        .iter()
+                        .map(|s| (*s).to_owned())
+                        .collect();
+                    (path, args)
+                }
+            };
+
+            let agent = AcpAgentManager::new(
+                conversation_id,
+                workspace,
+                spawn_command,
+                spawn_args,
+                config,
+            )
+            .await?;
+            let arc = Arc::new(agent);
+            arc.start_permission_handler();
+            Ok(arc as AgentManagerHandle)
         }
         AgentType::Gemini => {
             let config: GeminiBuildExtra = serde_json::from_value(options.extra)
@@ -92,7 +126,7 @@ async fn build_agent(
                 Some(deps.skill_manager.clone()),
             )
             .await?;
-            Ok(Arc::new(agent))
+            Ok(Arc::new(agent) as AgentManagerHandle)
         }
         AgentType::OpenclawGateway => {
             let config: OpenClawBuildExtra =
@@ -100,14 +134,14 @@ async fn build_agent(
                     AppError::BadRequest(format!("Invalid OpenClaw build options: {e}"))
                 })?;
             let agent = OpenClawAgentManager::new(conversation_id, workspace, config).await?;
-            Ok(Arc::new(agent))
+            Ok(Arc::new(agent) as AgentManagerHandle)
         }
         AgentType::Nanobot => {
             let cli_path = which::which("nanobot")
                 .map(|p| p.to_string_lossy().into_owned())
                 .map_err(|_| AppError::BadRequest("Nanobot CLI not found in PATH".into()))?;
             let agent = NanobotAgentManager::new(conversation_id, workspace, cli_path).await?;
-            Ok(Arc::new(agent))
+            Ok(Arc::new(agent) as AgentManagerHandle)
         }
         AgentType::Remote => {
             let extra: RemoteBuildExtra = serde_json::from_value(options.extra)
@@ -144,13 +178,13 @@ async fn build_agent(
                 allow_insecure: row.allow_insecure,
             };
             let agent = RemoteAgentManager::new(conversation_id, workspace, config).await?;
-            Ok(Arc::new(agent))
+            Ok(Arc::new(agent) as AgentManagerHandle)
         }
         AgentType::Aionrs => {
             let config: AionrsBuildExtra = serde_json::from_value(options.extra)
                 .map_err(|e| AppError::BadRequest(format!("Invalid Aionrs build options: {e}")))?;
             let agent = AionrsAgentManager::new(conversation_id, workspace, config);
-            Ok(Arc::new(agent))
+            Ok(Arc::new(agent) as AgentManagerHandle)
         }
     }
 }

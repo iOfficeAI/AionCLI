@@ -320,6 +320,16 @@ pub fn build_system_state(services: &AppServices) -> SystemRouterState {
 /// 2. CSRF protection (Double Submit Cookie)
 /// 3. Route handlers (auth routes + system routes + conversation routes + file routes + health check)
 pub async fn create_router(services: &AppServices) -> Router {
+    // Bridge event bus → WebSocket manager: forward all broadcast events
+    // to connected WebSocket clients.
+    let mut event_rx = services.event_bus.subscribe();
+    let ws_manager = services.ws_manager.clone();
+    tokio::spawn(async move {
+        while let Ok(event) = event_rx.recv().await {
+            ws_manager.broadcast_all(event);
+        }
+    });
+
     let states = build_module_states(services).await;
     create_router_with_states(services, states)
 }
@@ -616,6 +626,17 @@ pub async fn build_extension_states(
 /// Tests can call this and override individual fields before passing
 /// to [`create_router_with_ws_state`].
 pub fn build_ws_state(services: &AppServices) -> WsHandlerState {
+    if services.local {
+        // Local mode: skip authentication for WebSocket connections.
+        // Consistent with HTTP routes which also bypass auth in local mode.
+        return WsHandlerState {
+            manager: services.ws_manager.clone(),
+            router: Arc::new(NoopMessageRouter),
+            token_validator: Arc::new(|_| true),
+            token_extractor: Arc::new(|_| Some("local".into())),
+        };
+    }
+
     let jwt_service = services.jwt_service.clone();
     let token_validator = Arc::new(move |token: &str| jwt_service.verify(token).is_ok());
 

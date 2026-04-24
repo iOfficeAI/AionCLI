@@ -1,5 +1,7 @@
 //! AI agent lifecycle, LLM API clients, worker task dispatch, and skill management.
 pub mod acp_agent;
+pub mod acp_error;
+pub mod acp_protocol;
 pub mod acp_routes;
 pub mod acp_service;
 pub mod agent_manager;
