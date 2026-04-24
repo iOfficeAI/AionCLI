@@ -11,7 +11,11 @@ use serde_json::{Value, json};
 use tokio::sync::{Mutex, RwLock, broadcast, mpsc};
 use tracing::{debug, error, info, warn};
 
-use crate::acp_protocol::{AcpProtocol, PermissionDecision, PermissionRequest};
+use crate::acp_protocol::{
+    AcpProtocol, CancelNotification, ContentBlock, LoadSessionRequest, NewSessionRequest,
+    PermissionDecision, PermissionRequest, PromptRequest, SessionId, SetSessionConfigOptionRequest,
+    SetSessionModeRequest, SetSessionModelRequest,
+};
 use crate::cli_process::{CliAgentProcess, CliSpawnConfig};
 use crate::stream_event::AgentStreamEvent;
 use crate::types::{AcpBuildExtra, AcpModelInfo, SendMessageData};
@@ -304,7 +308,7 @@ impl AcpAgentManager {
 
         let session_id = self
             .protocol
-            .new_session(&self.workspace)
+            .new_session(NewSessionRequest::new(&self.workspace))
             .await
             .map_err(AppError::from)?;
 
@@ -316,7 +320,10 @@ impl AcpAgentManager {
 
         // Send the prompt
         self.protocol
-            .prompt(&sid, &data.content)
+            .prompt(PromptRequest::new(
+                SessionId::new(sid.clone()),
+                vec![ContentBlock::from(data.content.clone())],
+            ))
             .await
             .map_err(AppError::from)?;
 
@@ -342,7 +349,10 @@ impl AcpAgentManager {
             && let Some(sid) = session_id
         {
             self.protocol
-                .load_session(sid, &self.workspace)
+                .load_session(LoadSessionRequest::new(
+                    SessionId::new(sid),
+                    &self.workspace,
+                ))
                 .await
                 .map_err(AppError::from)?;
         }
@@ -367,7 +377,10 @@ impl AcpAgentManager {
         ));
 
         self.protocol
-            .prompt(sid, &data.content)
+            .prompt(PromptRequest::new(
+                SessionId::new(sid),
+                vec![ContentBlock::from(data.content.clone())],
+            ))
             .await
             .map_err(AppError::from)?;
 
@@ -394,7 +407,11 @@ impl AcpAgentManager {
             None => return false,
         };
 
-        match self.protocol.set_mode(sid, mode).await {
+        match self
+            .protocol
+            .set_mode(SetSessionModeRequest::new(SessionId::new(sid), mode))
+            .await
+        {
             Ok(()) => {
                 debug!(
                     conversation_id = %self.conversation_id,
@@ -426,13 +443,19 @@ impl AcpAgentManager {
 
     /// Set the session mode.
     pub async fn set_mode(&self, mode: &str) -> Result<(), AppError> {
-        let session_id = self.state.read().await.session_id.clone();
-        let sid = session_id
-            .as_deref()
+        let sid = self
+            .state
+            .read()
+            .await
+            .session_id
+            .clone()
             .ok_or_else(|| AppError::BadRequest("No active session".into()))?;
 
         self.protocol
-            .set_mode(sid, mode)
+            .set_mode(SetSessionModeRequest::new(
+                SessionId::new(sid),
+                mode.to_owned(),
+            ))
             .await
             .map_err(AppError::from)
     }
@@ -445,13 +468,19 @@ impl AcpAgentManager {
 
     /// Set the model for the current session.
     pub async fn set_model(&self, model_id: &str) -> Result<(), AppError> {
-        let session_id = self.state.read().await.session_id.clone();
-        let sid = session_id
-            .as_deref()
+        let sid = self
+            .state
+            .read()
+            .await
+            .session_id
+            .clone()
             .ok_or_else(|| AppError::BadRequest("No active session".into()))?;
 
         self.protocol
-            .set_model(sid, model_id)
+            .set_model(SetSessionModelRequest::new(
+                SessionId::new(sid),
+                model_id.to_owned(),
+            ))
             .await
             .map_err(AppError::from)
     }
@@ -464,13 +493,20 @@ impl AcpAgentManager {
 
     /// Set a session configuration option.
     pub async fn set_config_option(&self, config_id: &str, value: &str) -> Result<(), AppError> {
-        let session_id = self.state.read().await.session_id.clone();
-        let sid = session_id
-            .as_deref()
+        let sid = self
+            .state
+            .read()
+            .await
+            .session_id
+            .clone()
             .ok_or_else(|| AppError::BadRequest("No active session".into()))?;
 
         self.protocol
-            .set_config_option(sid, config_id, value)
+            .set_config_option(SetSessionConfigOptionRequest::new(
+                SessionId::new(sid),
+                config_id.to_owned(),
+                value.to_owned(),
+            ))
             .await
             .map_err(AppError::from)
     }
@@ -530,8 +566,9 @@ impl crate::agent_manager::IAgentManager for AcpAgentManager {
 
     async fn stop(&self) -> Result<(), AppError> {
         let session_id = self.state.read().await.session_id.clone();
-        if let Some(ref sid) = session_id {
-            self.protocol.cancel(sid);
+        if let Some(sid) = session_id {
+            self.protocol
+                .cancel(CancelNotification::new(SessionId::new(sid)));
         }
 
         // Clear pending confirmations on stop
@@ -609,7 +646,8 @@ impl crate::agent_manager::IAgentManager for AcpAgentManager {
         if let Ok(state) = self.state.try_read()
             && let Some(ref sid) = state.session_id
         {
-            self.protocol.cancel(sid);
+            self.protocol
+                .cancel(CancelNotification::new(SessionId::new(sid.as_str())));
         }
 
         let process = Arc::clone(&self.process);
