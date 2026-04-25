@@ -1,7 +1,13 @@
+use std::path::PathBuf;
+
 use anyhow::Result;
 use clap::Parser;
 use tokio::net::TcpListener;
 use tracing::info;
+use tracing_subscriber::Layer;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::EnvFilter;
 
 use aionui_app::{AppConfig, AppServices, create_router};
 
@@ -23,24 +29,72 @@ struct Cli {
     /// Run in local embedded mode (skip authentication, use system_default_user).
     #[arg(long)]
     local: bool,
+
+    /// Directory for log files. When set, logs are written to rolling daily
+    /// files under this directory. Without this, logs go to stderr only.
+    #[arg(long)]
+    log_dir: Option<PathBuf>,
+
+    /// Log level filter (e.g. "warn", "info", "debug", "info,aionui_ai_agent=debug").
+    /// Defaults to "warn" when no log directory is set, "info" when one is.
+    #[arg(long)]
+    log_level: Option<String>,
 }
 
-fn init_tracing() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                "info,aionui_ai_agent=debug,aionui_conversation=debug,aionui_realtime=debug".into()
-            }),
-        )
-        .with_target(true)
-        .init();
+fn init_tracing(log_dir: Option<PathBuf>, log_level: Option<String>) -> Option<tracing_appender::non_blocking::WorkerGuard> {
+    let default_level = if log_dir.is_some() { "info" } else { "warn" };
+    let filter_str = log_level.unwrap_or_else(|| default_level.to_owned());
+
+    let make_filter = |s: &str| EnvFilter::try_new(s).unwrap_or_else(|_| EnvFilter::new(default_level));
+
+    match log_dir {
+        Some(dir) => {
+            let file_appender = tracing_appender::rolling::RollingFileAppender::builder()
+                .rotation(tracing_appender::rolling::Rotation::DAILY)
+                .filename_prefix("backend")
+                .filename_suffix("log")
+                .build(&dir)
+                .expect("failed to create log file appender");
+            let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+
+            tracing_subscriber::registry()
+                .with(
+                    tracing_subscriber::fmt::layer()
+                        .with_writer(non_blocking)
+                        .with_ansi(false)
+                        .with_target(true)
+                        .with_filter(make_filter(&filter_str)),
+                )
+                .with(
+                    tracing_subscriber::fmt::layer()
+                        .with_writer(std::io::stderr)
+                        .with_target(true)
+                        .with_filter(EnvFilter::new("warn")),
+                )
+                .init();
+
+            Some(guard)
+        }
+        None => {
+            tracing_subscriber::registry()
+                .with(
+                    tracing_subscriber::fmt::layer()
+                        .with_writer(std::io::stderr)
+                        .with_target(true)
+                        .with_filter(make_filter(&filter_str)),
+                )
+                .init();
+
+            None
+        }
+    }
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    init_tracing();
+    let _log_guard = init_tracing(cli.log_dir, cli.log_level);
 
     let config = AppConfig {
         host: cli.host,
