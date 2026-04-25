@@ -91,28 +91,6 @@ impl AcpBackend {
         AcpBackend::Snow,
     ];
 
-    pub fn cli_binary_name(&self) -> Option<&'static str> {
-        match self {
-            AcpBackend::Claude => Some("claude"),
-            AcpBackend::Qwen => Some("qwen"),
-            AcpBackend::Codex => Some("codex"),
-            AcpBackend::Codebuddy => Some("codebuddy"),
-            AcpBackend::Kiro => Some("kiro"),
-            AcpBackend::Opencode => Some("opencode"),
-            AcpBackend::Copilot => Some("copilot"),
-            AcpBackend::Goose => Some("goose"),
-            AcpBackend::Cursor => Some("cursor"),
-            AcpBackend::Droid => Some("droid"),
-            AcpBackend::Auggie => Some("auggie"),
-            AcpBackend::Kimi => Some("kimi"),
-            AcpBackend::Qoder => Some("qoder"),
-            AcpBackend::Vibe => Some("vibe"),
-            AcpBackend::Hermes => Some("hermes"),
-            AcpBackend::Snow => Some("snow"),
-            AcpBackend::IFlow | AcpBackend::Gemini => None,
-        }
-    }
-
     pub fn id(&self) -> String {
         let hash = fnv1a_hex8(self.display_name().as_bytes());
         // SAFETY: fnv1a_hex8 only produces ASCII hex digits
@@ -142,25 +120,26 @@ impl AcpBackend {
         }
     }
 
-    /// ACP bridge package for backends that require an NPX/bun bridge.
-    ///
-    /// Returns `None` for backends whose native CLI speaks ACP directly.
-    pub fn bridge_package(&self) -> Option<&'static str> {
+    /// Returns the name of the CLI binary for this backend, if it has one.
+    pub fn binary_name(&self) -> Option<&'static str> {
         match self {
-            AcpBackend::Claude => Some("@agentclientprotocol/claude-agent-acp@0.29.2"),
-            AcpBackend::Codex => Some("@zed-industries/codex-acp@0.9.5"),
-            AcpBackend::Codebuddy => Some("@tencent-ai/codebuddy-code@2.73.0"),
-            _ => None,
-        }
-    }
-
-    /// Extra arguments appended when spawning via bridge package.
-    ///
-    /// Only relevant when [`bridge_package`](Self::bridge_package) returns `Some`.
-    pub fn bridge_extra_args(&self) -> &'static [&'static str] {
-        match self {
-            AcpBackend::Codebuddy => &["--acp"],
-            _ => &[],
+            AcpBackend::Claude => Some("claude"),
+            AcpBackend::Qwen => Some("qwen"),
+            AcpBackend::Codex => Some("codex"),
+            AcpBackend::Codebuddy => Some("codebuddy"),
+            AcpBackend::Kiro => Some("kiro"),
+            AcpBackend::Opencode => Some("opencode"),
+            AcpBackend::Copilot => Some("copilot"),
+            AcpBackend::Goose => Some("goose"),
+            AcpBackend::Cursor => Some("cursor"),
+            AcpBackend::Droid => Some("droid"),
+            AcpBackend::Auggie => Some("auggie"),
+            AcpBackend::Kimi => Some("kimi"),
+            AcpBackend::Qoder => Some("qoder"),
+            AcpBackend::Vibe => Some("vibe"),
+            AcpBackend::Hermes => Some("hermes"),
+            AcpBackend::Snow => Some("snow"),
+            AcpBackend::IFlow | AcpBackend::Gemini => None,
         }
     }
 
@@ -189,6 +168,28 @@ impl AcpBackend {
             AcpBackend::Qwen => Some(&["--acp"]),
             // Non-CLI backends
             AcpBackend::IFlow | AcpBackend::Gemini => None,
+        }
+    }
+
+    /// ACP bridge package for backends that require an NPX/bun bridge.
+    ///
+    /// Returns `None` for backends whose native CLI speaks ACP directly.
+    pub fn bridge_package(&self) -> Option<&'static str> {
+        match self {
+            AcpBackend::Claude => Some("@agentclientprotocol/claude-agent-acp@0.29.2"),
+            AcpBackend::Codex => Some("@zed-industries/codex-acp@0.9.5"),
+            AcpBackend::Codebuddy => Some("@tencent-ai/codebuddy-code@2.73.0"),
+            _ => None,
+        }
+    }
+
+    /// Extra arguments appended when spawning via bridge package.
+    ///
+    /// Only relevant when [`bridge_package`](Self::bridge_package) returns `Some`.
+    pub fn bridge_extra_args(&self) -> &'static [&'static str] {
+        match self {
+            AcpBackend::Codebuddy => &["--acp"],
+            _ => &[],
         }
     }
 }
@@ -542,19 +543,19 @@ mod tests {
 
     #[test]
     fn test_acp_backend_cli_binary_name_known() {
-        assert_eq!(AcpBackend::Claude.cli_binary_name(), Some("claude"));
-        assert_eq!(AcpBackend::Qwen.cli_binary_name(), Some("qwen"));
-        assert_eq!(AcpBackend::Codex.cli_binary_name(), Some("codex"));
-        assert_eq!(AcpBackend::Kiro.cli_binary_name(), Some("kiro"));
-        assert_eq!(AcpBackend::Goose.cli_binary_name(), Some("goose"));
-        assert_eq!(AcpBackend::Cursor.cli_binary_name(), Some("cursor"));
-        assert_eq!(AcpBackend::Snow.cli_binary_name(), Some("snow"));
+        assert_eq!(AcpBackend::Claude.binary_name(), Some("claude"));
+        assert_eq!(AcpBackend::Qwen.binary_name(), Some("qwen"));
+        assert_eq!(AcpBackend::Codex.binary_name(), Some("codex"));
+        assert_eq!(AcpBackend::Kiro.binary_name(), Some("kiro"));
+        assert_eq!(AcpBackend::Goose.binary_name(), Some("goose"));
+        assert_eq!(AcpBackend::Cursor.binary_name(), Some("cursor"));
+        assert_eq!(AcpBackend::Snow.binary_name(), Some("snow"));
     }
 
     #[test]
     fn test_acp_backend_cli_binary_name_none() {
-        assert_eq!(AcpBackend::IFlow.cli_binary_name(), None);
-        assert_eq!(AcpBackend::Gemini.cli_binary_name(), None);
+        assert_eq!(AcpBackend::IFlow.binary_name(), None);
+        assert_eq!(AcpBackend::Gemini.binary_name(), None);
     }
 
     #[test]
@@ -569,7 +570,7 @@ mod tests {
     fn test_acp_backend_cli_backends_only_contains_some() {
         for backend in AcpBackend::CLI_BACKENDS {
             assert!(
-                backend.cli_binary_name().is_some(),
+                backend.binary_name().is_some(),
                 "{backend:?} is in CLI_BACKENDS but cli_binary_name() returns None"
             );
         }

@@ -4,8 +4,8 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
 
 use aionui_common::{
-    AcpBackend, AgentKillReason, AgentType, AppError, Confirmation, ConversationStatus,
-    TimestampMs, now_ms,
+    AcpBackend, AgentKillReason, AgentType, AppError, CommandSpec, Confirmation,
+    ConversationStatus, TimestampMs, now_ms,
 };
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, RwLock, broadcast, mpsc};
@@ -16,7 +16,7 @@ use crate::acp_protocol::{
     PermissionDecision, PermissionRequest, PromptRequest, SessionId, SetSessionConfigOptionRequest,
     SetSessionModeRequest, SetSessionModelRequest,
 };
-use crate::cli_process::{CliAgentProcess, CliSpawnConfig};
+use crate::cli_process::CliAgentProcess;
 use crate::stream_event::AgentStreamEvent;
 use crate::types::{AcpBuildExtra, AcpModelInfo, SendMessageData};
 
@@ -114,21 +114,13 @@ impl AcpAgentManager {
     pub async fn new(
         conversation_id: String,
         workspace: String,
-        spawn_command: String,
-        spawn_args: Vec<String>,
+        command_spec: CommandSpec,
         config: AcpBuildExtra,
     ) -> Result<Self, AppError> {
         let backend = config
             .backend
             .ok_or_else(|| AppError::BadRequest("ACP backend is required".into()))?;
-
-        let process = CliAgentProcess::spawn_for_sdk(CliSpawnConfig {
-            command: spawn_command,
-            args: spawn_args,
-            env: std::collections::HashMap::new(),
-            cwd: Some(workspace.clone()),
-        })
-        .await?;
+        let process = CliAgentProcess::spawn_for_sdk(command_spec).await?;
 
         // Take raw stdio for the SDK transport
         let (stdin, stdout) = process

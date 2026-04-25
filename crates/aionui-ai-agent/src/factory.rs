@@ -1,8 +1,7 @@
+use aionui_common::{AcpBackend, AgentType, AppError, CommandSpec, now_ms};
+use aionui_db::IRemoteAgentRepository;
 use std::path::PathBuf;
 use std::sync::Arc;
-
-use aionui_common::{AcpBackend, AgentType, AppError, now_ms};
-use aionui_db::IRemoteAgentRepository;
 use tracing::warn;
 
 use crate::agent_manager::AgentManagerHandle;
@@ -99,14 +98,17 @@ async fn build_agent(
                 config.backend = detected.backend;
             }
 
-            let (spawn_command, spawn_args) = match detected {
-                Some(ref d) if d.command.is_some() => (d.command.clone().unwrap(), d.args.clone()),
+            let (spawn_command, spawn_args, spawn_env) = match detected {
+                Some(ref d) if d.command.is_some() => {
+                    (d.command.clone().unwrap(), d.args.clone(), d.env.clone())
+                }
                 _ => {
                     // Last resort fallback: direct CLI with default ACP args
                     let backend = config
                         .backend
                         .ok_or_else(|| AppError::BadRequest("ACP backend is required".into()))?;
-                    let binary = backend.cli_binary_name().ok_or_else(|| {
+
+                    let binary = backend.binary_name().ok_or_else(|| {
                         AppError::BadRequest(format!("Backend {backend:?} has no CLI binary"))
                     })?;
                     let path = which::which(binary)
@@ -120,15 +122,19 @@ async fn build_agent(
                         .iter()
                         .map(|s| (*s).to_owned())
                         .collect();
-                    (path, args)
+                    (path, args, vec![])
                 }
             };
 
             let agent = AcpAgentManager::new(
                 conversation_id,
-                workspace,
-                spawn_command,
-                spawn_args,
+                workspace.clone(),
+                CommandSpec {
+                    command: PathBuf::from(spawn_command),
+                    args: spawn_args,
+                    env: spawn_env,
+                    cwd: Some(workspace),
+                },
                 config,
             )
             .await?;

@@ -11,7 +11,9 @@ use tokio::sync::{Mutex, RwLock, broadcast};
 use tracing::{debug, error, info, warn};
 
 use crate::agent_manager::IAgentManager;
-use crate::cli_process::{CliAgentProcess, CliSpawnConfig};
+use aionui_common::CommandSpec;
+
+use crate::cli_process::CliAgentProcess;
 use crate::skill_manager::{AcpSkillManager, detect_skill_load_request};
 use crate::stream_event::AgentStreamEvent;
 use crate::types::{GeminiBuildExtra, SendMessageData};
@@ -124,11 +126,11 @@ impl GeminiAgentManager {
         })
     }
 
-    fn build_spawn_config(cli_path: &str, workspace: &str) -> CliSpawnConfig {
-        CliSpawnConfig {
-            command: cli_path.to_owned(),
+    fn build_spawn_config(cli_path: &str, workspace: &str) -> CommandSpec {
+        CommandSpec {
+            command: cli_path.into(),
             args: vec![],
-            env: HashMap::new(),
+            env: vec![],
             cwd: Some(workspace.to_owned()),
         }
     }
@@ -490,7 +492,7 @@ mod tests {
     #[test]
     fn build_spawn_config_sets_cwd() {
         let config = GeminiAgentManager::build_spawn_config("/usr/bin/gemini", "/project");
-        assert_eq!(config.command, "/usr/bin/gemini");
+        assert_eq!(config.command.to_str().unwrap(), "/usr/bin/gemini");
         assert_eq!(config.cwd, Some("/project".into()));
         assert!(config.args.is_empty());
     }

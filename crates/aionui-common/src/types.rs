@@ -1,6 +1,34 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+
+// ---------------------------------------------------------------------------
+// EnvVar / CommandSpec
+// ---------------------------------------------------------------------------
+
+/// A name=value environment variable pair.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnvVar {
+    pub name: String,
+    pub value: String,
+}
+
+/// A command with its arguments and environment variables.
+///
+/// This is the common building block shared by CLI agent spawning,
+/// MCP server transports, and agent discovery types.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CommandSpec {
+    pub command: PathBuf,
+    pub args: Vec<String>,
+    pub env: Vec<EnvVar>,
+    pub cwd: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// UpdateType
+// ---------------------------------------------------------------------------
 
 /// Type of available update based on semver comparison.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

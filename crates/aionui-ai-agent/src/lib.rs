@@ -41,7 +41,7 @@ pub use api_client::{
 };
 pub use auxiliary_routes::{AuxiliaryRouterState, auxiliary_routes};
 pub use backend_output_sink::BackendOutputSink;
-pub use cli_process::{CliAgentProcess, CliSpawnConfig};
+pub use cli_process::CliAgentProcess;
 pub use connection_test_routes::{ConnectionTestRouterState, connection_test_routes};
 pub use connection_test_service::ConnectionTestService;
 pub use factory::{AgentFactoryDeps, build_agent_factory};

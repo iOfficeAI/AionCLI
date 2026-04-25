@@ -15,7 +15,8 @@ use aionui_ai_agent::{
     RemoteAgentRouterState, RemoteAgentService, WorkerTaskManagerImpl, acp_routes, agent_routes,
     auxiliary_routes, build_agent_factory, connection_test_routes, remote_agent_routes,
 };
-use aionui_api_types::{AgentSource, DetectedAgent, EnvVar};
+use aionui_api_types::{AgentSource, DetectedAgent};
+use aionui_common::EnvVar;
 use aionui_assistant::{
     AssistantRouterState, AssistantService, BuiltinAssistantRegistry, assistant_routes,
 };

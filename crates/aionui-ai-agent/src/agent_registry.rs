@@ -115,7 +115,7 @@ impl AgentRegistry {
                     let bun = bun_path.as_ref()?;
                     let bun_cmd = bun.to_string_lossy().into_owned();
 
-                    if let Some(binary) = backend.cli_binary_name() {
+                    if let Some(binary) = backend.binary_name() {
                         which::which(binary).ok()?;
                     }
 
@@ -142,7 +142,7 @@ impl AgentRegistry {
                         env: vec![],
                     })
                 } else {
-                    let binary = backend.cli_binary_name()?;
+                    let binary = backend.binary_name()?;
                     let path = which::which(binary).ok()?;
                     let command = path.to_string_lossy().into_owned();
                     let args = backend.args().unwrap_or(&["--experimental-acp"]);

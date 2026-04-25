@@ -1,3 +1,4 @@
+pub use aionui_common::EnvVar;
 use aionui_common::{AcpBackend, AgentType};
 use serde::{Deserialize, Serialize};
 
@@ -9,13 +10,6 @@ pub enum AgentSource {
     Builtin,
     Extension,
     Custom,
-}
-
-/// A name=value environment variable pair.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct EnvVar {
-    pub name: String,
-    pub value: String,
 }
 
 /// A discovered agent from any source.

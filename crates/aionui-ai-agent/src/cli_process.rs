@@ -1,9 +1,8 @@
-use std::collections::HashMap;
 use std::process::ExitStatus;
 use std::sync::Arc;
 use std::time::Duration;
 
-use aionui_common::AppError;
+use aionui_common::{AppError, CommandSpec};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::{Mutex, broadcast, watch};
@@ -12,19 +11,6 @@ use tracing::{debug, error, trace, warn};
 /// Wrapper to hold a pre-subscribed receiver from before background tasks start.
 /// Ensures no events are lost between process spawn and consumer subscription.
 type InitialReceiver = std::sync::Mutex<Option<broadcast::Receiver<serde_json::Value>>>;
-
-/// Configuration for spawning a CLI agent subprocess.
-#[derive(Debug, Clone)]
-pub struct CliSpawnConfig {
-    /// Path to the executable.
-    pub command: String,
-    /// Command-line arguments.
-    pub args: Vec<String>,
-    /// Additional environment variables (merged with inherited env).
-    pub env: HashMap<String, String>,
-    /// Working directory for the subprocess. `None` inherits from parent.
-    pub cwd: Option<String>,
-}
 
 /// Default broadcast channel capacity for stdout events.
 const EVENT_CHANNEL_CAPACITY: usize = 256;
@@ -78,10 +64,10 @@ impl CliAgentProcess {
     /// - Monitor process exit
     ///
     /// This is used by Gemini, OpenClaw, Nanobot agents.
-    pub async fn spawn(config: CliSpawnConfig) -> Result<Self, AppError> {
+    pub async fn spawn(config: CommandSpec) -> Result<Self, AppError> {
         let mut cmd = Command::new(&config.command);
         cmd.args(&config.args)
-            .envs(&config.env)
+            .envs(config.env.iter().map(|e| (&e.name, &e.value)))
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -92,17 +78,17 @@ impl CliAgentProcess {
         }
 
         let mut child: Child = cmd.spawn().map_err(|e| {
-            error!(command = %config.command, error = %e, "Failed to spawn CLI process");
+            error!(command = %config.command.display(), error = %e, "Failed to spawn CLI process");
             AppError::Internal(format!(
                 "Failed to spawn CLI process '{}': {}",
-                config.command, e
+                config.command.display(), e
             ))
         })?;
 
         let pid = child.id().ok_or_else(|| {
             AppError::Internal("Failed to obtain PID from spawned process".into())
         })?;
-        debug!(pid, command = %config.command, "CLI process spawned");
+        debug!(pid, command = %config.command.display(), "CLI process spawned");
 
         let stdout = child.stdout.take().ok_or_else(|| {
             AppError::Internal("Failed to capture stdout from child process".into())
@@ -207,10 +193,10 @@ impl CliAgentProcess {
     /// Background tasks are still spawned for:
     /// - stderr buffering
     /// - Process exit monitoring
-    pub async fn spawn_for_sdk(config: CliSpawnConfig) -> Result<Self, AppError> {
+    pub async fn spawn_for_sdk(config: CommandSpec) -> Result<Self, AppError> {
         let mut cmd = Command::new(&config.command);
         cmd.args(&config.args)
-            .envs(&config.env)
+            .envs(config.env.iter().map(|e| (&e.name, &e.value)))
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -221,17 +207,17 @@ impl CliAgentProcess {
         }
 
         let mut child: Child = cmd.spawn().map_err(|e| {
-            error!(command = %config.command, error = %e, "Failed to spawn CLI process");
+            error!(command = %config.command.display(), error = %e, "Failed to spawn CLI process");
             AppError::Internal(format!(
                 "Failed to spawn CLI process '{}': {}",
-                config.command, e
+                config.command.display(), e
             ))
         })?;
 
         let pid = child.id().ok_or_else(|| {
             AppError::Internal("Failed to obtain PID from spawned process".into())
         })?;
-        debug!(pid, command = %config.command, "CLI process spawned (SDK mode)");
+        debug!(pid, command = %config.command.display(), "CLI process spawned (SDK mode)");
 
         let stdout = child.stdout.take().ok_or_else(|| {
             AppError::Internal("Failed to capture stdout from child process".into())
@@ -470,24 +456,26 @@ fn force_kill(pid: u32) -> Result<(), AppError> {
 
 #[cfg(test)]
 mod tests {
+    use aionui_common::EnvVar;
+
     use super::*;
     use serde_json::json;
     use tokio::time::timeout;
 
-    fn echo_json_config(json_str: &str) -> CliSpawnConfig {
-        CliSpawnConfig {
+    fn echo_json_config(json_str: &str) -> CommandSpec {
+        CommandSpec {
             command: "sh".into(),
             args: vec!["-c".into(), format!("echo '{json_str}'")],
-            env: HashMap::new(),
+            env: vec![],
             cwd: None,
         }
     }
 
-    fn simple_script_config(script: &str) -> CliSpawnConfig {
-        CliSpawnConfig {
+    fn simple_script_config(script: &str) -> CommandSpec {
+        CommandSpec {
             command: "sh".into(),
             args: vec!["-c".into(), script.into()],
-            env: HashMap::new(),
+            env: vec![],
             cwd: None,
         }
     }
@@ -641,13 +629,13 @@ mod tests {
 
     #[tokio::test]
     async fn spawn_with_env_and_cwd() {
-        let config = CliSpawnConfig {
+        let config = CommandSpec {
             command: "sh".into(),
             args: vec![
                 "-c".into(),
                 "echo \"{\\\"val\\\":\\\"$MY_TEST_VAR\\\"}\"".into(),
             ],
-            env: HashMap::from([("MY_TEST_VAR".into(), "hello_env".into())]),
+            env: vec![EnvVar { name: "MY_TEST_VAR".into(), value: "hello_env".into() }],
             cwd: Some("/tmp".into()),
         };
         let proc = CliAgentProcess::spawn(config).await.unwrap();
@@ -662,10 +650,10 @@ mod tests {
 
     #[tokio::test]
     async fn spawn_invalid_command_returns_error() {
-        let config = CliSpawnConfig {
+        let config = CommandSpec {
             command: "/nonexistent/binary/that/does/not/exist".into(),
             args: vec![],
-            env: HashMap::new(),
+            env: vec![],
             cwd: None,
         };
         let result = CliAgentProcess::spawn(config).await;

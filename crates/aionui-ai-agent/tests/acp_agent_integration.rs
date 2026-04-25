@@ -68,14 +68,15 @@ async fn make_mock_agent(
         cron_job_id: None,
     };
 
-    let spawn_command = script_path.to_string_lossy().into_owned();
-    let spawn_args: Vec<String> = vec![];
-
     let manager = AcpAgentManager::new(
         "test-conv-1".into(),
         "/tmp".into(),
-        spawn_command,
-        spawn_args,
+        aionui_common::CommandSpec {
+            command: script_path.into(),
+            args: vec![],
+            env: vec![],
+            cwd: None,
+        },
         config,
     )
     .await

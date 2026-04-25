@@ -40,7 +40,7 @@ mod tests {
             source: crate::AgentSource::Builtin,
             command: Some("/usr/bin/claude".into()),
             args: vec!["--experimental-acp".into()],
-            env: vec![],
+            env: vec![crate::EnvVar { name: "FOO".into(), value: "bar".into() }],
         };
         let info = AgentInfo::from(detected);
         assert_eq!(info.id, "abc123");

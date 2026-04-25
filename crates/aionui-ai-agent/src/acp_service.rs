@@ -9,7 +9,7 @@ use tracing::debug;
 
 /// Detect the CLI path for a given ACP backend using PATH lookup.
 pub fn detect_cli(backend: AcpBackend) -> DetectCliResponse {
-    let binary = match backend.cli_binary_name() {
+    let binary = match backend.binary_name() {
         Some(name) => name,
         None => return DetectCliResponse { path: None },
     };
@@ -28,7 +28,7 @@ pub fn detect_cli(backend: AcpBackend) -> DetectCliResponse {
 pub fn health_check(backend: AcpBackend) -> AcpHealthCheckResponse {
     let start = Instant::now();
 
-    let binary = match backend.cli_binary_name() {
+    let binary = match backend.binary_name() {
         Some(name) => name,
         None => {
             return AcpHealthCheckResponse {
