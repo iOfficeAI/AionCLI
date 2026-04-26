@@ -176,6 +176,18 @@ impl IAgentManager for AionrsAgentManager {
     }
 
     async fn stop(&self) -> Result<(), AppError> {
+        let _ = self.event_tx.send(AgentStreamEvent::Error(
+            crate::stream_event::ErrorEventData {
+                message: "Stopped by user".into(),
+                code: None,
+            },
+        ));
+        let _ = self.event_tx.send(AgentStreamEvent::Finish(
+            crate::stream_event::FinishEventData { session_id: None },
+        ));
+        if let Ok(mut s) = self.status.write() {
+            *s = Some(ConversationStatus::Finished);
+        }
         Ok(())
     }
 
@@ -280,6 +292,28 @@ mod tests {
     fn aionrs_agent_check_approval_returns_false_by_default() {
         let agent = AionrsAgentManager::new("conv-1".into(), "/project".into(), make_test_config());
         assert!(!agent.check_approval("any_action", None));
+    }
+
+    #[tokio::test]
+    async fn stop_emits_finish_event_and_sets_status() {
+        let agent =
+            AionrsAgentManager::new("conv-stop".into(), "/project".into(), make_test_config());
+        let mut rx = agent.subscribe();
+
+        agent.stop().await.unwrap();
+
+        assert_eq!(agent.status(), Some(ConversationStatus::Finished));
+
+        match rx.try_recv().unwrap() {
+            AgentStreamEvent::Error(data) => {
+                assert!(data.message.contains("Stopped"));
+            }
+            other => panic!("Expected Error, got {:?}", other),
+        }
+        match rx.try_recv().unwrap() {
+            AgentStreamEvent::Finish(_) => {}
+            other => panic!("Expected Finish, got {:?}", other),
+        }
     }
 
     #[test]
