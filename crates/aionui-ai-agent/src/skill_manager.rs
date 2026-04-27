@@ -152,38 +152,65 @@ impl AcpSkillManager {
     /// Load a skill's full content by name.
     ///
     /// Returns `None` if the skill is unknown. On first access the body is
-    /// read from disk and cached for subsequent calls.
+    /// read via the appropriate channel based on `source`:
+    /// - `Builtin` → `aionui_extension::read_builtin_skill(&paths, relative)`
+    /// - `Custom` / `Extension` → direct `tokio::fs::read_to_string(location/SKILL.md)`
     pub async fn get_skill(&self, name: &str) -> Option<SkillDefinition> {
         // Fast path: check if body is already cached
         {
             let cache = self.cache.read().await;
-            if let Some(def) = cache.get(name) {
-                if def.body.is_some() {
-                    return Some(def.clone());
-                }
-            } else {
-                return None;
+            match cache.get(name) {
+                Some(def) if def.body.is_some() => return Some(def.clone()),
+                None => return None,
+                _ => {} // known, body absent — fall through
             }
         }
 
-        // Slow path: read from disk and cache
+        // Slow path: read body per source and cache it
         let mut cache = self.cache.write().await;
         let def = cache.get_mut(name)?;
         if def.body.is_some() {
             return Some(def.clone());
         }
 
-        match tokio::fs::read_to_string(&def.location).await {
-            Ok(content) => {
-                let body = extract_body(&content);
-                def.body = Some(body);
-                Some(def.clone())
+        let content = match def.source {
+            aionui_extension::SkillSource::Builtin => {
+                if let Some(rel) = def.relative_location.as_deref() {
+                    match aionui_extension::read_builtin_skill(&self.paths, rel).await {
+                        Ok(s) => s,
+                        Err(e) => {
+                            warn!(skill = name, error = %e, "Failed to read builtin skill");
+                            String::new()
+                        }
+                    }
+                } else {
+                    warn!(skill = name, "Builtin skill missing relative_location");
+                    String::new()
+                }
             }
-            Err(e) => {
-                warn!(skill = name, error = %e, "Failed to read skill file");
-                None
+            aionui_extension::SkillSource::Custom | aionui_extension::SkillSource::Extension => {
+                // `location` for scanned user skills is the directory; append SKILL.md.
+                let skill_file = if def.location.is_dir() {
+                    def.location.join("SKILL.md")
+                } else {
+                    def.location.clone()
+                };
+                match tokio::fs::read_to_string(&skill_file).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        warn!(skill = name, path = %skill_file.display(), error = %e, "Failed to read skill file");
+                        String::new()
+                    }
+                }
             }
+        };
+
+        if content.is_empty() {
+            return None;
         }
+
+        def.body = Some(extract_body(&content));
+        Some(def.clone())
     }
 
     /// Check whether discovery has been performed.

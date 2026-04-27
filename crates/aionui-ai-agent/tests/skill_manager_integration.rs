@@ -108,6 +108,75 @@ async fn discover_skills_uses_extension_service_layout() {
 }
 
 #[tokio::test]
+async fn get_skill_loads_builtin_body_via_read_builtin_skill() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let tmp = TempDir::new().unwrap();
+    let builtin = tmp.path().join("builtin");
+    let auto = builtin.join("auto-inject").join("bodyskill");
+    fs::create_dir_all(&auto).unwrap();
+    fs::write(
+        auto.join("SKILL.md"),
+        "---\nname: bodyskill\ndescription: B\n---\nBuiltin body content",
+    )
+    .unwrap();
+
+    let data_dir = tmp.path().join("data");
+    fs::create_dir_all(&data_dir).unwrap();
+
+    unsafe {
+        std::env::set_var(BUILTIN_SKILLS_ENV_VAR, &builtin);
+    }
+
+    let paths = Arc::new(resolve_skill_paths(tmp.path(), &data_dir));
+    let mgr = AcpSkillManager::new(paths);
+    mgr.discover_skills(None, None).await;
+
+    let skill = mgr.get_skill("bodyskill").await.unwrap();
+    assert_eq!(
+        skill.body.as_deref(),
+        Some("Builtin body content"),
+        "builtin body should be loaded via read_builtin_skill + extract_body"
+    );
+
+    unsafe {
+        std::env::remove_var(BUILTIN_SKILLS_ENV_VAR);
+    }
+}
+
+#[tokio::test]
+async fn get_skill_loads_custom_body_via_fs_read() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("data");
+    let user_skill = data_dir.join("skills").join("mine");
+    fs::create_dir_all(&user_skill).unwrap();
+    fs::write(
+        user_skill.join("SKILL.md"),
+        "---\nname: mine\ndescription: Mine\n---\nCustom body here",
+    )
+    .unwrap();
+
+    // Ensure no stale BUILTIN_SKILLS_ENV_VAR interferes
+    unsafe {
+        std::env::remove_var(BUILTIN_SKILLS_ENV_VAR);
+    }
+
+    let paths = Arc::new(resolve_skill_paths(tmp.path(), &data_dir));
+    let mgr = AcpSkillManager::new(paths);
+    let enabled = vec!["mine".to_string()];
+    let idx = mgr.discover_skills(Some(&enabled), None).await;
+
+    let names: Vec<&str> = idx.iter().map(|s| s.name.as_str()).collect();
+    assert!(
+        names.contains(&"mine"),
+        "custom 'mine' should be in index; got {names:?}"
+    );
+
+    let skill = mgr.get_skill("mine").await.unwrap();
+    assert_eq!(skill.body.as_deref(), Some("Custom body here"));
+}
+
+#[tokio::test]
 async fn discover_skills_respects_exclude_builtin() {
     let _guard = ENV_MUTEX.lock().unwrap();
     let tmp = TempDir::new().unwrap();
