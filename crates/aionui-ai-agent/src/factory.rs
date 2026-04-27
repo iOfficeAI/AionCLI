@@ -1,8 +1,9 @@
+use aion_agent::session::SessionManager;
 use aionui_common::{AcpBackend, AgentType, AppError, CommandSpec, now_ms};
 use aionui_db::{IProviderRepository, IRemoteAgentRepository};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::warn;
+use tracing::{debug, info, warn};
 
 use crate::agent_manager::AgentManagerHandle;
 use crate::agent_registry::AgentRegistry;
@@ -243,6 +244,31 @@ async fn build_agent(
             let (base_url, compat_overrides) =
                 resolve_aionrs_url_and_compat(&row.platform, &row.base_url, &provider);
 
+            let session_directory = deps.data_dir.join("aionrs-sessions");
+
+            let resume_session = {
+                let session_mgr = SessionManager::new(session_directory.clone(), 100);
+                match session_mgr.load(&conversation_id) {
+                    Ok(session) => {
+                        info!(
+                            conversation_id = %conversation_id,
+                            session_id = %session.id,
+                            message_count = session.messages.len(),
+                            "Loaded existing aionrs session for resume"
+                        );
+                        Some(session)
+                    }
+                    Err(e) => {
+                        debug!(
+                            conversation_id = %conversation_id,
+                            error = %e,
+                            "No existing aionrs session found, starting fresh"
+                        );
+                        None
+                    }
+                }
+            };
+
             let config = AionrsResolvedConfig {
                 provider,
                 api_key,
@@ -252,9 +278,11 @@ async fn build_agent(
                 max_tokens: overrides.max_tokens,
                 max_turns: overrides.max_turns,
                 compat_overrides,
+                session_directory,
             };
 
-            let agent = AionrsAgentManager::new(conversation_id, workspace, config).await?;
+            let agent =
+                AionrsAgentManager::new(conversation_id, workspace, config, resume_session).await?;
             Ok(Arc::new(agent) as AgentManagerHandle)
         }
     }

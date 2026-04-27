@@ -117,32 +117,36 @@ fn make_aionrs_config() -> AionrsResolvedConfig {
         max_tokens: 4096,
         max_turns: None,
         compat_overrides: Default::default(),
+        session_directory: std::env::temp_dir().join("aionrs-test-sessions"),
     }
 }
 
 #[tokio::test]
 async fn aionrs_agent_kill_succeeds() {
-    let agent = AionrsAgentManager::new("conv-1".into(), "/proj".into(), make_aionrs_config())
-        .await
-        .unwrap();
+    let agent =
+        AionrsAgentManager::new("conv-1".into(), "/proj".into(), make_aionrs_config(), None)
+            .await
+            .unwrap();
     assert!(agent.kill(None).is_ok());
     assert!(agent.kill(Some(AgentKillReason::IdleTimeout)).is_ok());
 }
 
 #[tokio::test]
 async fn aionrs_agent_confirm_succeeds() {
-    let agent = AionrsAgentManager::new("conv-1".into(), "/proj".into(), make_aionrs_config())
-        .await
-        .unwrap();
+    let agent =
+        AionrsAgentManager::new("conv-1".into(), "/proj".into(), make_aionrs_config(), None)
+            .await
+            .unwrap();
     let result = agent.confirm("msg", "call", json!({}), false);
     assert!(result.is_ok());
 }
 
 #[tokio::test]
 async fn aionrs_agent_metadata() {
-    let agent = AionrsAgentManager::new("conv-abc".into(), "/work".into(), make_aionrs_config())
-        .await
-        .unwrap();
+    let agent =
+        AionrsAgentManager::new("conv-abc".into(), "/work".into(), make_aionrs_config(), None)
+            .await
+            .unwrap();
     assert_eq!(agent.agent_type(), AgentType::Aionrs);
     assert_eq!(agent.workspace(), "/work");
     assert_eq!(agent.conversation_id(), "conv-abc");
