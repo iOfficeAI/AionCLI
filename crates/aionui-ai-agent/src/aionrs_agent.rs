@@ -8,8 +8,8 @@ use aion_agent::session::Session;
 use aion_config::compat::ProviderCompat;
 use aion_config::config::{Config, ProviderType, SessionConfig};
 use aion_mcp::manager::McpManager;
-use aion_protocol::{ToolApprovalManager, ToolApprovalResult};
 use aion_protocol::commands::SessionMode;
+use aion_protocol::{ToolApprovalManager, ToolApprovalResult};
 use aionui_api_types::AgentModeResponse;
 use aionui_common::{
     AgentKillReason, AgentType, AppError, Confirmation, ConversationStatus, TimestampMs, now_ms,
