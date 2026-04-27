@@ -37,12 +37,20 @@ pub fn office_routes(state: OfficeRouterState) -> Router {
 
 pub fn office_proxy_routes(state: OfficeRouterState) -> Router {
     Router::new()
+        .route("/api/ppt-proxy/{port}", get(ppt_proxy))
         .route("/api/ppt-proxy/{port}/{*path}", get(ppt_proxy))
+        .route("/api/office-watch-proxy/{port}", get(office_watch_proxy))
         .route(
             "/api/office-watch-proxy/{port}/{*path}",
             get(office_watch_proxy),
         )
         .with_state(state)
+}
+
+#[derive(serde::Deserialize)]
+struct ProxyPortPath {
+    port: u16,
+    path: Option<String>,
 }
 
 // -- Preview start/stop handlers ------------------------------------------
@@ -204,16 +212,27 @@ async fn convert_document(
 
 async fn ppt_proxy(
     State(state): State<OfficeRouterState>,
-    Path((port, path)): Path<(u16, String)>,
+    Path(params): Path<ProxyPortPath>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
-    proxy_forward(state, port, &path, DocType::Ppt, &headers).await
+    let path = params.path.as_deref().unwrap_or("/");
+    proxy_forward(state, params.port, path, DocType::Ppt, &headers).await
 }
 
 async fn office_watch_proxy(
     State(state): State<OfficeRouterState>,
-    Path((port, path)): Path<(u16, String)>,
+    Path(params): Path<ProxyPortPath>,
     headers: HeaderMap,
+) -> Result<Response, AppError> {
+    let path = params.path.as_deref().unwrap_or("/");
+    watch_proxy_forward(state, params.port, path, &headers).await
+}
+
+async fn watch_proxy_forward(
+    state: OfficeRouterState,
+    port: u16,
+    path: &str,
+    headers: &HeaderMap,
 ) -> Result<Response, AppError> {
     let request_headers: Vec<(String, String)> = headers
         .iter()
@@ -226,7 +245,7 @@ async fn office_watch_proxy(
 
     let proxy_resp = state
         .proxy_service
-        .forward_watch(port, &path, &request_headers)
+        .forward_watch(port, path, &request_headers)
         .await?;
 
     let status =
