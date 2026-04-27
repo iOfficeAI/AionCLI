@@ -10,8 +10,8 @@ use crate::remote_agent::RemoteAgentConfig;
 use crate::skill_manager::AcpSkillManager;
 use crate::task_manager::AgentFactory;
 use crate::types::{
-    AcpBuildExtra, AionrsBuildExtra, AionrsCompatOverrides, AionrsResolvedConfig,
-    BuildTaskOptions, GeminiBuildExtra, OpenClawBuildExtra, RemoteBuildExtra,
+    AcpBuildExtra, AionrsBuildExtra, AionrsCompatOverrides, AionrsResolvedConfig, BuildTaskOptions,
+    GeminiBuildExtra, OpenClawBuildExtra, RemoteBuildExtra,
 };
 use crate::{
     AcpAgentManager, AionrsAgentManager, GeminiAgentManager, NanobotAgentManager,
@@ -237,11 +237,8 @@ async fn build_agent(
                 .unwrap_or(&options.model.model)
                 .to_owned();
 
-            let provider = map_aionrs_provider(
-                &row.platform,
-                &model_id,
-                row.model_protocols.as_deref(),
-            );
+            let provider =
+                map_aionrs_provider(&row.platform, &model_id, row.model_protocols.as_deref());
 
             let (base_url, compat_overrides) =
                 resolve_aionrs_url_and_compat(&row.platform, &row.base_url, &provider);
@@ -268,11 +265,7 @@ async fn build_agent(
 /// Mirrors the frontend `src/process/agent/aionrs/envBuilder.ts` mapping.
 /// For `new-api` platform, per-model protocol overrides from `model_protocols`
 /// JSON take precedence.
-fn map_aionrs_provider(
-    platform: &str,
-    model_id: &str,
-    model_protocols: Option<&str>,
-) -> String {
+fn map_aionrs_provider(platform: &str, model_id: &str, model_protocols: Option<&str>) -> String {
     if platform == "new-api"
         && let Some(protocols_json) = model_protocols
         && let Ok(map) =
@@ -385,7 +378,10 @@ mod tests {
     #[test]
     fn map_aionrs_provider_custom_and_others_default_to_openai() {
         assert_eq!(map_aionrs_provider("custom", "gpt-4o", None), "openai");
-        assert_eq!(map_aionrs_provider("gemini", "gemini-2.5-pro", None), "openai");
+        assert_eq!(
+            map_aionrs_provider("gemini", "gemini-2.5-pro", None),
+            "openai"
+        );
         assert_eq!(map_aionrs_provider("new-api", "m", None), "openai");
         assert_eq!(map_aionrs_provider("unknown", "m", None), "openai");
     }
@@ -437,23 +433,20 @@ mod tests {
 
     #[test]
     fn resolve_openai_official_sets_max_completion_tokens() {
-        let (base_url, compat) = resolve_aionrs_url_and_compat(
-            "custom",
-            "https://api.openai.com/v1",
-            "openai",
-        );
+        let (base_url, compat) =
+            resolve_aionrs_url_and_compat("custom", "https://api.openai.com/v1", "openai");
         assert_eq!(base_url.as_deref(), Some("https://api.openai.com"));
-        assert_eq!(compat.max_tokens_field.as_deref(), Some("max_completion_tokens"));
+        assert_eq!(
+            compat.max_tokens_field.as_deref(),
+            Some("max_completion_tokens")
+        );
         assert!(compat.api_path.is_none());
     }
 
     #[test]
     fn resolve_non_openai_keeps_default_max_tokens() {
-        let (base_url, compat) = resolve_aionrs_url_and_compat(
-            "custom",
-            "https://api.deepseek.com/v1",
-            "openai",
-        );
+        let (base_url, compat) =
+            resolve_aionrs_url_and_compat("custom", "https://api.deepseek.com/v1", "openai");
         assert_eq!(base_url.as_deref(), Some("https://api.deepseek.com"));
         assert!(compat.max_tokens_field.is_none());
     }
@@ -475,11 +468,8 @@ mod tests {
 
     #[test]
     fn resolve_anthropic_no_compat_overrides() {
-        let (base_url, compat) = resolve_aionrs_url_and_compat(
-            "anthropic",
-            "https://api.anthropic.com",
-            "anthropic",
-        );
+        let (base_url, compat) =
+            resolve_aionrs_url_and_compat("anthropic", "https://api.anthropic.com", "anthropic");
         assert_eq!(base_url.as_deref(), Some("https://api.anthropic.com"));
         assert!(compat.max_tokens_field.is_none());
         assert!(compat.api_path.is_none());

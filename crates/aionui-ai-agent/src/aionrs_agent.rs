@@ -340,9 +340,10 @@ mod tests {
 
     #[tokio::test]
     async fn stop_emits_finish_event_and_sets_status() {
-        let agent = AionrsAgentManager::new("conv-stop".into(), "/project".into(), make_test_config())
-            .await
-            .unwrap();
+        let agent =
+            AionrsAgentManager::new("conv-stop".into(), "/project".into(), make_test_config())
+                .await
+                .unwrap();
         let mut rx = agent.subscribe();
 
         agent.stop().await.unwrap();
@@ -363,9 +364,10 @@ mod tests {
 
     #[tokio::test]
     async fn event_tx_can_send_error_and_finish() {
-        let agent = AionrsAgentManager::new("conv-err".into(), "/project".into(), make_test_config())
-            .await
-            .unwrap();
+        let agent =
+            AionrsAgentManager::new("conv-err".into(), "/project".into(), make_test_config())
+                .await
+                .unwrap();
         let mut rx = agent.subscribe();
 
         let _ = agent.event_tx.send(AgentStreamEvent::Error(
