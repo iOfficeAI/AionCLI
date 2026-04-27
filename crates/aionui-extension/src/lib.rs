@@ -17,6 +17,7 @@ pub mod resolvers;
 pub mod routes;
 pub mod skill_routes;
 pub mod skill_service;
+pub mod startup_materialize;
 pub mod state;
 pub mod template;
 pub mod types;
@@ -36,6 +37,7 @@ pub use registry::{ExtensionRegistry, ExtensionSummary};
 pub use resolvers::{
     resolve_all_contributions, resolve_extension_contributions, resolve_i18n_for_all,
 };
+pub use startup_materialize::materialize_if_needed;
 pub use state::{ExtensionStateStore, load_states_from_file, save_states_to_file};
 pub use template::{resolve_env_map, resolve_env_templates, resolve_file_reference};
 pub use types::*;
