@@ -528,11 +528,7 @@ async fn sk2_read_builtin_skill_happy_path_returns_file_content() {
     let (token, csrf) = setup_and_login(&mut app, &services, "user1", "pass1").await;
 
     std::fs::write(
-        paths
-            .builtin_skills_dir
-            .as_ref()
-            .expect("disk override set in build_app_with_skill_paths")
-            .join("cowork-skills.md"),
+        paths.builtin_skills_dir.join("cowork-skills.md"),
         "## Cowork skills\n\n- git\n- bash\n",
     )
     .unwrap();
@@ -691,11 +687,7 @@ async fn sl1_list_skills_tags_builtin_and_custom_with_source_field() {
     let (mut app, services, paths) = build_app_with_skill_paths(tmp.path()).await;
     let (token, _csrf) = setup_and_login(&mut app, &services, "user1", "pass1").await;
 
-    let builtin_dir = paths
-        .builtin_skills_dir
-        .as_ref()
-        .expect("disk override set by helper")
-        .clone();
+    let builtin_dir = paths.builtin_skills_dir.clone();
     write_skill(&builtin_dir, "review", "Built-in review skill");
     write_skill(&paths.user_skills_dir, "my-skill", "A user-imported skill");
 
@@ -734,11 +726,7 @@ async fn sl2_list_skills_user_custom_overrides_builtin() {
     let (mut app, services, paths) = build_app_with_skill_paths(tmp.path()).await;
     let (token, _csrf) = setup_and_login(&mut app, &services, "user1", "pass1").await;
 
-    let builtin_dir = paths
-        .builtin_skills_dir
-        .as_ref()
-        .expect("disk override set by helper")
-        .clone();
+    let builtin_dir = paths.builtin_skills_dir.clone();
     write_skill(&builtin_dir, "review", "Built-in review");
     write_skill(&paths.user_skills_dir, "review", "Custom review override");
 
@@ -782,11 +770,7 @@ async fn ba1_auto_skills_lists_underscore_builtin_entries() {
     let (mut app, services, paths) = build_app_with_skill_paths(tmp.path()).await;
     let (token, _csrf) = setup_and_login(&mut app, &services, "user1", "pass1").await;
 
-    let builtin_dir = paths
-        .builtin_skills_dir
-        .as_ref()
-        .expect("disk override set by helper")
-        .clone();
+    let builtin_dir = paths.builtin_skills_dir.clone();
     let auto_dir = builtin_dir.join("auto-inject");
     write_skill(&auto_dir, "cron", "Schedule recurring tasks");
     write_skill(&auto_dir, "skill-creator", "Scaffold a new skill");

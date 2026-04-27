@@ -45,7 +45,10 @@ async fn materialize_overwrites_existing_target() {
         .await
         .unwrap();
 
-    assert!(!target.join("junk.txt").exists(), "stale file should be gone");
+    assert!(
+        !target.join("junk.txt").exists(),
+        "stale file should be gone"
+    );
     assert!(
         !target.join("stale-dir").exists(),
         "stale dir should be gone"

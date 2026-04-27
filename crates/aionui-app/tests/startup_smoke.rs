@@ -48,11 +48,9 @@ async fn version_bump_triggers_rewrite() {
     )
     .await
     .unwrap();
-    assert!(
-        second,
-        "version change should trigger a fresh materialize"
-    );
+    assert!(second, "version change should trigger a fresh materialize");
 
-    let version = std::fs::read_to_string(data_dir.join("builtin-skills").join(".version")).unwrap();
+    let version =
+        std::fs::read_to_string(data_dir.join("builtin-skills").join(".version")).unwrap();
     assert_eq!(version, "test-2.0.0");
 }
