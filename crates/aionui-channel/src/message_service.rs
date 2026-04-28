@@ -427,6 +427,9 @@ mod tests {
             name: "read_file".into(),
             args: serde_json::Value::Null,
             status: ToolCallStatus::Running,
+            description: None,
+            input: None,
+            output: None,
         });
         let action = ChannelMessageService::process_stream_event(&event);
         match action {

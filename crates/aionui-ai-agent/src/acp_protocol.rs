@@ -31,13 +31,12 @@ use tracing::{debug, warn};
 use crate::acp_error::AcpError;
 use crate::stream_event::{self, AgentStreamEvent};
 
-// Re-export SDK types used in public method signatures.
-pub use agent_client_protocol::schema::{
-    AgentCapabilities, AuthenticateRequest, CancelNotification, CloseSessionRequest, ContentBlock,
+use agent_client_protocol::schema::{
+    AgentCapabilities, AuthenticateRequest, CancelNotification, CloseSessionRequest,
     ExtNotification, ExtRequest, ForkSessionRequest, InitializeResponse, ListSessionsRequest,
-    ListSessionsResponse, LoadSessionRequest, McpServer, Meta, NewSessionRequest,
-    NewSessionResponse, PromptRequest, ResumeSessionRequest, SessionId,
-    SetSessionConfigOptionRequest, SetSessionModeRequest, SetSessionModelRequest,
+    ListSessionsResponse, LoadSessionRequest, NewSessionRequest, NewSessionResponse, PromptRequest,
+    ResumeSessionRequest, SetSessionConfigOptionRequest, SetSessionModeRequest,
+    SetSessionModelRequest,
 };
 
 /// Type alias to shorten `agent_client_protocol::Responder<RequestPermissionResponse>`.

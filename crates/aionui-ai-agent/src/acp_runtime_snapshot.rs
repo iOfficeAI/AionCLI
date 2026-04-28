@@ -1,15 +1,17 @@
 use crate::stream_event::AgentStreamEvent;
-pub use agent_client_protocol::schema::{
-    AgentCapabilities, SessionConfigOption, SessionModeState, SessionModelState, UsageUpdate,
+use agent_client_protocol::schema::{
+    AgentCapabilities, AvailableCommand, SessionConfigOption, SessionModeState, SessionModelState,
+    UsageUpdate,
 };
 
 #[derive(Debug, Clone, Default)]
 pub struct AcpRuntimeSnapshot {
-    agent_capabilities: Option<AgentCapabilities>,
     modes: Option<SessionModeState>,
     model_info: Option<SessionModelState>,
     config_options: Option<Vec<SessionConfigOption>>,
     context_usage: Option<UsageUpdate>,
+    agent_capabilities: Option<AgentCapabilities>,
+    available_commands: Option<Vec<AvailableCommand>>,
 }
 
 impl AcpRuntimeSnapshot {
@@ -28,6 +30,9 @@ impl AcpRuntimeSnapshot {
     pub fn agent_capabilities(&self) -> Option<&AgentCapabilities> {
         self.agent_capabilities.as_ref()
     }
+    pub fn available_commands(&self) -> Option<&[AvailableCommand]> {
+        self.available_commands.as_deref()
+    }
 
     pub fn set_modes(&mut self, modes: SessionModeState) {
         self.modes = Some(modes);
@@ -43,6 +48,9 @@ impl AcpRuntimeSnapshot {
     }
     pub fn set_agent_capabilities(&mut self, agent_capabilities: AgentCapabilities) {
         self.agent_capabilities = Some(agent_capabilities);
+    }
+    pub fn set_available_commands(&mut self, available_commands: Vec<AvailableCommand>) {
+        self.available_commands = Some(available_commands);
     }
 
     pub fn apply_event(&mut self, event: &AgentStreamEvent) {
@@ -69,6 +77,9 @@ impl AcpRuntimeSnapshot {
                     self.context_usage = Some(update);
                 }
             }
+            AgentStreamEvent::AvailableCommands(data) => {
+                self.available_commands = Some(data.commands.clone());
+            }
             _ => {}
         }
     }
@@ -83,8 +94,8 @@ impl AcpRuntimeSnapshot {
 #[cfg(test)]
 mod tests {
     use agent_client_protocol::schema::{
-        ModelInfo, SessionConfigOption, SessionConfigSelectOption, SessionMode, SessionModeState,
-        SessionModelState, UsageUpdate,
+        AvailableCommand, ModelInfo, SessionConfigOption, SessionConfigSelectOption, SessionMode,
+        SessionModeState, SessionModelState, UsageUpdate,
     };
     use serde_json::json;
 
@@ -164,5 +175,29 @@ mod tests {
                 .used,
             1024
         );
+    }
+
+    #[test]
+    fn applies_available_commands_update() {
+        let mut snapshot = AcpRuntimeSnapshot::default();
+        assert!(snapshot.available_commands().is_none());
+
+        let cmds = vec![
+            AvailableCommand::new("review", "Review current changes"),
+            AvailableCommand::new("compact", "Summarize conversation"),
+        ];
+
+        snapshot.apply_event(&AgentStreamEvent::AvailableCommands(
+            crate::stream_event::AvailableCommandsEventData {
+                commands: cmds.clone(),
+            },
+        ));
+
+        let stored = snapshot
+            .available_commands()
+            .expect("available commands should be cached");
+        assert_eq!(stored.len(), 2);
+        assert_eq!(stored[0].name, "review");
+        assert_eq!(stored[1].name, "compact");
     }
 }
