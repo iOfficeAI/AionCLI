@@ -115,6 +115,25 @@ async fn main() -> Result<()> {
         )
         .await
         .map_err(|e| anyhow::anyhow!("Failed to materialize builtin skills: {e}"))?;
+
+        // Best-effort cleanup of directories left behind by pre-symlink
+        // refactors. Failures are non-fatal — stale empty dirs are
+        // harmless. Runs ONLY after `materialize_if_needed` succeeded so
+        // we never touch data_dir until the builtin skills tree is in
+        // place. Do NOT generalize this list — it is an explicit
+        // allowlist of known-dead directories.
+        for stale in ["builtin-skills-view", "tmp", "agent-skills"] {
+            let path = Path::new(&config.data_dir).join(stale);
+            if path.exists()
+                && let Err(e) = std::fs::remove_dir_all(&path)
+            {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "failed to clean up stale data dir entry",
+                );
+            }
+        }
     }
 
     let services =
