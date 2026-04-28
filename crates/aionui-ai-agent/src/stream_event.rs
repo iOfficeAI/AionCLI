@@ -1,5 +1,5 @@
 use agent_client_protocol::schema::{
-    ContentBlock, Meta as SdkMeta, PermissionOption,
+    AvailableCommand, ContentBlock, Meta as SdkMeta, PermissionOption,
     PermissionOptionKind as SdkPermissionOptionKind, RequestPermissionRequest, SessionNotification,
     SessionUpdate, ToolCallContent as SdkToolCallContent, ToolCallLocation as SdkToolCallLocation,
     ToolCallStatus as SdkToolCallStatus, ToolCallUpdate as SdkToolCallUpdate,
@@ -365,7 +365,7 @@ pub struct PlanEventData {
 /// Data for the `AvailableCommands` event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AvailableCommandsEventData {
-    pub commands: Vec<serde_json::Value>,
+    pub commands: Vec<AvailableCommand>,
 }
 
 /// Data for the `SkillSuggest` event.
@@ -496,14 +496,10 @@ pub fn session_notification_to_events(notif: &SessionNotification) -> Vec<AgentS
         }
 
         SessionUpdate::AvailableCommandsUpdate(update) => {
-            let commands: Vec<serde_json::Value> = update
-                .available_commands
-                .iter()
-                .map(|c| serde_json::to_value(c).unwrap_or_default())
-                .collect();
-
             events.push(AgentStreamEvent::AvailableCommands(
-                AvailableCommandsEventData { commands },
+                AvailableCommandsEventData {
+                    commands: update.available_commands.clone(),
+                },
             ));
         }
 

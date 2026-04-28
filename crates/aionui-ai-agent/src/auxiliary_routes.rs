@@ -6,7 +6,7 @@ use axum::extract::{Extension, Json, Path, Query, State};
 use axum::routing::{get, post};
 
 use crate::acp_agent::AcpAgentManager;
-use crate::acp_runtime_snapshot::{AgentCapabilities, SessionConfigOption, UsageUpdate};
+use agent_client_protocol::schema::{AgentCapabilities, SessionConfigOption, UsageUpdate};
 use crate::agent_manager::AgentManagerHandle;
 use crate::openclaw::OpenClawAgentManager;
 use crate::task_manager::IWorkerTaskManager;
@@ -250,12 +250,8 @@ async fn get_slash_commands(
     }
 
     let acp = downcast_acp(&handle)?;
-    acp.load_slash_commands().await?;
-
-    // Slash commands arrive asynchronously via the event stream.
-    // The client should subscribe to WebSocket events to receive them.
-    // Return empty for the synchronous HTTP response.
-    Ok(Json(ApiResponse::ok(Vec::new())))
+    let commands = acp.load_slash_commands().await?;
+    Ok(Json(ApiResponse::ok(commands)))
 }
 
 async fn get_mode(

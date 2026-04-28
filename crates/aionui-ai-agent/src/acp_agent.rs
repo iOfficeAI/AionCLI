@@ -8,14 +8,15 @@ use crate::acp_protocol::{AcpProtocol, PermissionDecision, PermissionRequest};
 
 use crate::acp_runtime_snapshot::AcpRuntimeSnapshot;
 use agent_client_protocol::schema::{
-    AgentCapabilities, CancelNotification, ContentBlock, LoadSessionRequest, NewSessionRequest,
-    PromptRequest, SessionConfigOption, SessionId, SessionModeState, SessionModelState,
-    SetSessionConfigOptionRequest, SetSessionModeRequest, SetSessionModelRequest, UsageUpdate,
+    AgentCapabilities, AvailableCommand, CancelNotification, ContentBlock, LoadSessionRequest,
+    NewSessionRequest, PromptRequest, SessionConfigOption, SessionId, SessionModeState,
+    SessionModelState, SetSessionConfigOptionRequest, SetSessionModeRequest,
+    SetSessionModelRequest, UsageUpdate,
 };
 
 use crate::cli_process::CliAgentProcess;
 use crate::stream_event::{AgentStreamEvent, permission_request_to_event_data};
-use crate::types::{AcpBuildExtra, SendMessageData};
+use crate::types::{AcpBuildExtra, SendMessageData, SlashCommandItem};
 
 use aionui_common::{
     AcpBackend, AgentKillReason, AgentType, AppError, CommandSpec, Confirmation,
@@ -190,16 +191,22 @@ impl AcpAgentManager {
             .map(|_| ())
     }
 
+    /// Cached context usage info from the ACP backend.
+    pub async fn usage(&self) -> Option<UsageUpdate> {
+        let snapshot = self.runtime_snapshot.read().await;
+        snapshot.context_usage().cloned()
+    }
+
     /// Agent capabilities captured during the ACP initialize handshake.
     pub async fn agent_capabilities(&self) -> Option<AgentCapabilities> {
         let snapshot = self.runtime_snapshot.read().await;
         snapshot.agent_capabilities().cloned()
     }
 
-    /// Cached context usage info from the ACP backend.
-    pub async fn usage(&self) -> Option<UsageUpdate> {
+    /// Cached available commands from the ACP backend.
+    pub async fn available_commands(&self) -> Option<Vec<AvailableCommand>> {
         let snapshot = self.runtime_snapshot.read().await;
-        snapshot.context_usage().cloned()
+        snapshot.available_commands().map(|c| c.to_vec())
     }
 }
 
@@ -546,13 +553,30 @@ impl AcpAgentManager {
         {
             let _ = self.event_tx.send(AgentStreamEvent::AcpConfigOption(v));
         }
+        if let Some(cmds) = snapshot.available_commands() {
+            let _ = self.event_tx.send(AgentStreamEvent::AvailableCommands(
+                crate::stream_event::AvailableCommandsEventData {
+                    commands: cmds.to_vec(),
+                },
+            ));
+        }
     }
 
-    /// Request the ACP backend to load available slash commands.
-    ///
-    /// Results arrive asynchronously via `AvailableCommandsUpdate` events.
-    pub async fn load_slash_commands(&self) -> Result<(), AppError> {
-        Ok(())
+    /// Return available slash commands from the cached runtime snapshot.
+    pub async fn load_slash_commands(&self) -> Result<Vec<SlashCommandItem>, AppError> {
+        let snapshot = self.runtime_snapshot.read().await;
+        let items = snapshot
+            .available_commands()
+            .map(|cmds| {
+                cmds.iter()
+                    .map(|c| SlashCommandItem {
+                        command: c.name.clone(),
+                        description: c.description.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(items)
     }
 
     /// Current ACP session ID, if a session has been established.
