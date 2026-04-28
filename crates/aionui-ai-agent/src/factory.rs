@@ -1,5 +1,5 @@
 use aion_agent::session::SessionManager;
-use aionui_common::{AcpBackend, AgentType, AppError, CommandSpec, now_ms};
+use aionui_common::{AgentType, AppError, CommandSpec};
 use aionui_db::{IProviderRepository, IRemoteAgentRepository};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -55,23 +55,13 @@ async fn build_agent(
 ) -> Result<AgentManagerHandle, AppError> {
     let conversation_id = options.conversation_id.clone();
     let workspace = if options.workspace.is_empty() {
-        let label = match options.agent_type {
-            AgentType::Acp => {
-                let backend = options
-                    .extra
-                    .get("backend")
-                    .and_then(|v| serde_json::from_value::<AcpBackend>(v.clone()).ok());
-                match backend {
-                    Some(b) => b.display_name().to_lowercase(),
-                    None => "acp".to_string(),
-                }
-            }
-            other => match other {
-                AgentType::OpenclawGateway => "openclaw".to_string(),
-                t => format!("{t:?}").to_lowercase(),
-            },
-        };
-        let dir = deps.data_dir.join(format!("{label}-temp-{}", now_ms()));
+        // Fallback workspace path: kept in sync with
+        // `ConversationService::create`, which now places auto-
+        // provisioned workspaces under `{data_dir}/conversations/{id}/`.
+        // Reaching this branch means the caller did not supply an
+        // `extra.workspace` — the conversation id is the only stable
+        // unique identifier we have here.
+        let dir = deps.data_dir.join("conversations").join(&conversation_id);
         std::fs::create_dir_all(&dir)
             .map_err(|e| AppError::Internal(format!("Failed to create temp workspace: {e}")))?;
         dir.to_string_lossy().into_owned()

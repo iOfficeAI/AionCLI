@@ -268,7 +268,15 @@ impl AcpAgentManager {
                 preset_context: self.config.preset_context.as_deref(),
                 skills: &self.config.skills,
                 native_skill_support: self.backend.native_skills_dirs().is_some(),
-                custom_workspace: !self.workspace.contains("-temp-"),
+                // Workspace is "custom" (user-chosen) when it does NOT
+                // look like an auto-provisioned temp path. Historically
+                // those looked like `{label}-temp-{ms}/` under data_dir;
+                // post-migration they live under `/conversations/`.
+                // Both patterns are treated as non-custom here so the
+                // first-message injector keeps the same behavior across
+                // the migration window.
+                custom_workspace: !self.workspace.contains("/conversations/")
+                    && !self.workspace.contains("-temp-"),
             },
         )
         .await;
