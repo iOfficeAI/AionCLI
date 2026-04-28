@@ -32,7 +32,7 @@ use crate::acp_error::AcpError;
 use crate::stream_event::{self, AgentStreamEvent};
 
 use agent_client_protocol::schema::{
-    AgentCapabilities, AuthenticateRequest, CancelNotification, CloseSessionRequest,
+    AgentCapabilities, AuthMethod, AuthenticateRequest, CancelNotification, CloseSessionRequest,
     ExtNotification, ExtRequest, ForkSessionRequest, InitializeResponse, ListSessionsRequest,
     ListSessionsResponse, LoadSessionRequest, NewSessionRequest, NewSessionResponse, PromptRequest,
     ResumeSessionRequest, SetSessionConfigOptionRequest, SetSessionModeRequest,
@@ -219,16 +219,18 @@ impl AcpProtocol {
             .map(|response| response.agent_capabilities)
     }
 
+    pub fn auth_methods(&self) -> Option<Vec<AuthMethod>> {
+        self.initialize_response()
+            .map(|response| response.auth_methods)
+    }
+
     /// Create a new ACP session.
     pub async fn new_session(
         &self,
         req: NewSessionRequest,
     ) -> Result<NewSessionResponse, AcpError> {
-        self.send_cmd(|reply| AcpClientCommand::NewSession {
-            req,
-            reply_tx: reply,
-        })
-        .await
+        self.send_cmd(|reply_tx| AcpClientCommand::NewSession { req, reply_tx })
+            .await
     }
 
     /// Load (resume) an existing ACP session.
@@ -236,11 +238,8 @@ impl AcpProtocol {
         &self,
         req: LoadSessionRequest,
     ) -> Result<LoadSessionResponse, AcpError> {
-        self.send_cmd(|reply| AcpClientCommand::LoadSession {
-            req,
-            reply_tx: reply,
-        })
-        .await
+        self.send_cmd(|reply_tx| AcpClientCommand::LoadSession { req, reply_tx })
+            .await
     }
 
     /// Fork an existing ACP session into a new session.
@@ -248,11 +247,8 @@ impl AcpProtocol {
         &self,
         req: ForkSessionRequest,
     ) -> Result<ForkSessionResponse, AcpError> {
-        self.send_cmd(|reply| AcpClientCommand::ForkSession {
-            req,
-            reply_tx: reply,
-        })
-        .await
+        self.send_cmd(|reply_tx| AcpClientCommand::ForkSession { req, reply_tx })
+            .await
     }
 
     /// Resume an existing ACP session.
@@ -260,11 +256,8 @@ impl AcpProtocol {
         &self,
         req: ResumeSessionRequest,
     ) -> Result<ResumeSessionResponse, AcpError> {
-        self.send_cmd(|reply| AcpClientCommand::ResumeSession {
-            req,
-            reply_tx: reply,
-        })
-        .await
+        self.send_cmd(|reply_tx| AcpClientCommand::ResumeSession { req, reply_tx })
+            .await
     }
 
     /// Close an ACP session.
@@ -272,11 +265,8 @@ impl AcpProtocol {
         &self,
         req: CloseSessionRequest,
     ) -> Result<CloseSessionResponse, AcpError> {
-        self.send_cmd(|reply| AcpClientCommand::CloseSession {
-            req,
-            reply_tx: reply,
-        })
-        .await
+        self.send_cmd(|reply_tx| AcpClientCommand::CloseSession { req, reply_tx })
+            .await
     }
 
     /// Send a prompt to the agent in an active session.
@@ -284,11 +274,8 @@ impl AcpProtocol {
     /// Blocks until the agent returns a `PromptResponse` (turn completed).
     /// Streaming events arrive via the `event_tx` broadcast channel.
     pub async fn prompt(&self, req: PromptRequest) -> Result<PromptResponse, AcpError> {
-        self.send_cmd(|reply| AcpClientCommand::Prompt {
-            req,
-            reply_tx: reply,
-        })
-        .await
+        self.send_cmd(|reply_tx| AcpClientCommand::Prompt { req, reply_tx })
+            .await
     }
 
     /// Cancel the current prompt in a session (fire-and-forget notification).
@@ -306,11 +293,8 @@ impl AcpProtocol {
         &self,
         req: SetSessionModeRequest,
     ) -> Result<SetSessionModeResponse, AcpError> {
-        self.send_cmd(|reply| AcpClientCommand::SetMode {
-            req,
-            reply_tx: reply,
-        })
-        .await
+        self.send_cmd(|reply_tx| AcpClientCommand::SetMode { req, reply_tx })
+            .await
     }
 
     /// Set the session model.
@@ -318,11 +302,8 @@ impl AcpProtocol {
         &self,
         req: SetSessionModelRequest,
     ) -> Result<SetSessionModelResponse, AcpError> {
-        self.send_cmd(|reply| AcpClientCommand::SetModel {
-            req,
-            reply_tx: reply,
-        })
-        .await
+        self.send_cmd(|reply_tx| AcpClientCommand::SetModel { req, reply_tx })
+            .await
     }
 
     /// Set a session config option.
@@ -330,11 +311,8 @@ impl AcpProtocol {
         &self,
         req: SetSessionConfigOptionRequest,
     ) -> Result<SetSessionConfigOptionResponse, AcpError> {
-        self.send_cmd(|reply| AcpClientCommand::SetConfigOption {
-            req,
-            reply_tx: reply,
-        })
-        .await
+        self.send_cmd(|reply_tx| AcpClientCommand::SetConfigOption { req, reply_tx })
+            .await
     }
 
     /// List sessions, optionally filtered by working directory.
@@ -342,11 +320,8 @@ impl AcpProtocol {
         &self,
         req: ListSessionsRequest,
     ) -> Result<ListSessionsResponse, AcpError> {
-        self.send_cmd(|reply| AcpClientCommand::ListSessions {
-            req,
-            reply_tx: reply,
-        })
-        .await
+        self.send_cmd(|reply_tx| AcpClientCommand::ListSessions { req, reply_tx })
+            .await
     }
 
     /// Authenticate with the agent using a previously advertised auth method.
@@ -354,22 +329,16 @@ impl AcpProtocol {
         &self,
         req: AuthenticateRequest,
     ) -> Result<AuthenticateResponse, AcpError> {
-        self.send_cmd(|reply| AcpClientCommand::Authenticate {
-            req,
-            reply_tx: reply,
-        })
-        .await
+        self.send_cmd(|reply_tx| AcpClientCommand::Authenticate { req, reply_tx })
+            .await
     }
 
     /// Send an extension request (method name must start with `_`).
     ///
     /// Returns the raw JSON response value from the agent.
     pub async fn ext_request(&self, req: ExtRequest) -> Result<ExtResponse, AcpError> {
-        self.send_cmd(|reply| AcpClientCommand::ExtMethod {
-            req,
-            reply_tx: reply,
-        })
-        .await
+        self.send_cmd(|reply_tx| AcpClientCommand::ExtMethod { req, reply_tx })
+            .await
     }
 
     /// Send an extension notification (fire-and-forget, method name must start with `_`).

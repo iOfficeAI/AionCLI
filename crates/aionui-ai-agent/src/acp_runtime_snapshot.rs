@@ -1,7 +1,7 @@
 use crate::stream_event::AgentStreamEvent;
 use agent_client_protocol::schema::{
-    AgentCapabilities, AvailableCommand, SessionConfigOption, SessionModeState, SessionModelState,
-    UsageUpdate,
+    AgentCapabilities, AuthMethod, AvailableCommand, SessionConfigOption, SessionModeState,
+    SessionModelState, UsageUpdate,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -11,6 +11,7 @@ pub struct AcpRuntimeSnapshot {
     config_options: Option<Vec<SessionConfigOption>>,
     context_usage: Option<UsageUpdate>,
     agent_capabilities: Option<AgentCapabilities>,
+    auth_methods: Option<Vec<AuthMethod>>,
     available_commands: Option<Vec<AvailableCommand>>,
 }
 
@@ -30,6 +31,9 @@ impl AcpRuntimeSnapshot {
     pub fn agent_capabilities(&self) -> Option<&AgentCapabilities> {
         self.agent_capabilities.as_ref()
     }
+    pub fn auth_methods(&self) -> Option<&[AuthMethod]> {
+        self.auth_methods.as_deref()
+    }
     pub fn available_commands(&self) -> Option<&[AvailableCommand]> {
         self.available_commands.as_deref()
     }
@@ -48,6 +52,9 @@ impl AcpRuntimeSnapshot {
     }
     pub fn set_agent_capabilities(&mut self, agent_capabilities: AgentCapabilities) {
         self.agent_capabilities = Some(agent_capabilities);
+    }
+    pub fn set_auth_methods(&mut self, auth_methods: Vec<AuthMethod>) {
+        self.auth_methods = Some(auth_methods);
     }
     pub fn set_available_commands(&mut self, available_commands: Vec<AvailableCommand>) {
         self.available_commands = Some(available_commands);

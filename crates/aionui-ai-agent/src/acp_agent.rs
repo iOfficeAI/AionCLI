@@ -255,6 +255,9 @@ impl AcpAgentManager {
         if let Some(agent_capabilities) = protocol.agent_capabilities() {
             runtime_snapshot.set_agent_capabilities(agent_capabilities);
         }
+        if let Some(auth_methods) = protocol.auth_methods() {
+            runtime_snapshot.set_auth_methods(auth_methods);
+        }
 
         let manager = Self {
             conversation_id,
