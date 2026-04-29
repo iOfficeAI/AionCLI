@@ -17,6 +17,10 @@ pub struct TeamAgentInput {
     pub model: String,
     #[serde(default)]
     pub custom_agent_id: Option<String>,
+    /// Reuse an existing 1:1 conversation as this agent's conversation.
+    /// When `None`, a new conversation is created by the service.
+    #[serde(default)]
+    pub conversation_id: Option<String>,
 }
 
 /// Request body for `POST /api/teams`.
@@ -206,8 +210,38 @@ mod tests {
         assert_eq!(req.agents[0].backend, "acp");
         assert_eq!(req.agents[0].model, "claude");
         assert_eq!(req.agents[0].custom_agent_id.as_deref(), Some("agent-x"));
+        assert!(req.agents[0].conversation_id.is_none());
         assert_eq!(req.agents[1].name, "Worker");
         assert!(req.agents[1].custom_agent_id.is_none());
+        assert!(req.agents[1].conversation_id.is_none());
+    }
+
+    #[test]
+    fn deserialize_create_team_request_with_agent_conversation_id() {
+        let raw = json!({
+            "name": "Team Reuse",
+            "agents": [
+                {
+                    "name": "Lead",
+                    "role": "lead",
+                    "backend": "acp",
+                    "model": "claude",
+                    "conversation_id": "conv-existing"
+                },
+                {
+                    "name": "Worker",
+                    "role": "teammate",
+                    "backend": "acp",
+                    "model": "claude"
+                }
+            ]
+        });
+        let req: CreateTeamRequest = serde_json::from_value(raw).unwrap();
+        assert_eq!(
+            req.agents[0].conversation_id.as_deref(),
+            Some("conv-existing"),
+        );
+        assert!(req.agents[1].conversation_id.is_none());
     }
 
     #[test]
