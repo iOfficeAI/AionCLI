@@ -418,6 +418,35 @@ impl ConversationService {
         Ok(response)
     }
 
+    /// Merge a JSON patch into `conversation.extra` without touching model,
+    /// name, pinned flag, or task lifecycle. Intended for internal callers
+    /// (e.g. `TeamSessionService::ensure_session` writing
+    /// `team_mcp_stdio_config`) where a full `update()` would kill the agent
+    /// on a spurious model comparison.
+    pub async fn update_extra(
+        &self,
+        conversation_id: &str,
+        patch: serde_json::Value,
+    ) -> Result<(), AppError> {
+        let existing = self.repo.get(conversation_id).await?.ok_or_else(|| {
+            AppError::NotFound(format!("Conversation {conversation_id} not found"))
+        })?;
+
+        let mut merged: serde_json::Value =
+            serde_json::from_str(&existing.extra).unwrap_or_else(|_| serde_json::json!({}));
+        merge_json(&mut merged, &patch);
+
+        let updates = ConversationRowUpdate {
+            extra: Some(serde_json::to_string(&merged).map_err(|e| {
+                AppError::Internal(format!("Failed to serialize merged extra: {e}"))
+            })?),
+            updated_at: Some(now_ms()),
+            ..Default::default()
+        };
+        self.repo.update(conversation_id, &updates).await?;
+        Ok(())
+    }
+
     /// Delete a conversation (messages cascade via FK).
     ///
     /// Broadcasts `conversation.listChanged(deleted)`.

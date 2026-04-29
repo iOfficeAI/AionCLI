@@ -1,25 +1,37 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
+use aionui_ai_agent::IWorkerTaskManager;
 use aionui_api_types::{
     AddAgentRequest, CreateConversationRequest, CreateTeamRequest, TeamAgentResponse, TeamResponse,
 };
-use aionui_common::{AgentType, ProviderWithModel, generate_id, now_ms};
+use aionui_common::{AgentKillReason, AgentType, ProviderWithModel, generate_id, now_ms};
 use aionui_conversation::ConversationService;
 use aionui_db::models::TeamRow;
 use aionui_db::{ITeamRepository, UpdateTeamParams};
 use aionui_realtime::EventBroadcaster;
 use dashmap::DashMap;
-use tracing::info;
+use tokio::task::JoinHandle;
+use tracing::{info, warn};
 
 use crate::error::TeamError;
 use crate::session::TeamSession;
 use crate::types::{Team, TeamAgent, TeammateRole};
 
+struct SessionEntry {
+    session: TeamSession,
+    /// Background tasks that forward `Finish` / `Error` stream events to
+    /// `session.on_agent_finish`. Aborted in `stop_session`.
+    finish_subscribers: Vec<JoinHandle<()>>,
+}
+
 pub struct TeamSessionService {
     repo: Arc<dyn ITeamRepository>,
     conversation_service: ConversationService,
     broadcaster: Arc<dyn EventBroadcaster>,
-    sessions: DashMap<String, TeamSession>,
+    task_manager: Arc<dyn IWorkerTaskManager>,
+    backend_binary_path: Arc<PathBuf>,
+    sessions: Arc<DashMap<String, SessionEntry>>,
 }
 
 impl TeamSessionService {
@@ -27,12 +39,16 @@ impl TeamSessionService {
         repo: Arc<dyn ITeamRepository>,
         conversation_service: ConversationService,
         broadcaster: Arc<dyn EventBroadcaster>,
+        task_manager: Arc<dyn IWorkerTaskManager>,
+        backend_binary_path: Arc<PathBuf>,
     ) -> Self {
         Self {
             repo,
             conversation_service,
             broadcaster,
-            sessions: DashMap::new(),
+            task_manager,
+            backend_binary_path,
+            sessions: Arc::new(DashMap::new()),
         }
     }
 
@@ -251,8 +267,8 @@ impl TeamSessionService {
             )
             .await?;
 
-        if let Some(session) = self.sessions.get(team_id) {
-            session.add_agent(&agent).await;
+        if let Some(entry) = self.sessions.get(team_id) {
+            entry.session.add_agent(&agent).await;
         }
 
         let response = agent.to_response();
@@ -297,8 +313,8 @@ impl TeamSessionService {
             )
             .await?;
 
-        if let Some(session) = self.sessions.get(team_id) {
-            let _ = session.remove_agent(slot_id).await;
+        if let Some(entry) = self.sessions.get(team_id) {
+            let _ = entry.session.remove_agent(slot_id).await;
         }
 
         Ok(())
@@ -336,13 +352,27 @@ impl TeamSessionService {
             )
             .await?;
 
-        if let Some(session) = self.sessions.get(team_id) {
-            let _ = session.rename_agent(slot_id, name).await;
+        if let Some(entry) = self.sessions.get(team_id) {
+            let _ = entry.session.rename_agent(slot_id, name).await;
         }
 
         Ok(())
     }
 
+    /// Start the team's MCP server and rebuild every agent process so it
+    /// carries a fresh `team_mcp_stdio_config` pointing at the new server.
+    ///
+    /// Flow (mcp.md §4.3):
+    /// 1. Start `TeamSession` (opens the MCP TCP server).
+    /// 2. For each agent: persist `team_mcp_stdio_config` into
+    ///    `conversation.extra` → `task_manager.kill(conv_id, TeamMcpRebuild)`
+    ///    → `conversation_service.warmup(...)` rebuilds the ACP process with
+    ///    the new extra.
+    /// 3. Subscribe to each agent's stream and forward `Finish` / `Error`
+    ///    events to `session.on_agent_finish`.
+    /// 4. Only insert into `sessions` after every step above succeeds — on
+    ///    any failure, stop the session and leave the map untouched so a
+    ///    retry can start cleanly.
     pub async fn ensure_session(&self, team_id: &str) -> Result<(), TeamError> {
         if self.sessions.contains_key(team_id) {
             return Ok(());
@@ -353,26 +383,143 @@ impl TeamSessionService {
             .get_team(team_id)
             .await?
             .ok_or_else(|| TeamError::TeamNotFound(team_id.into()))?;
+        let user_id = row.user_id.clone();
         let team = Team::from_row(&row)?;
+        let agents_snapshot: Vec<TeamAgent> = team.agents.clone();
 
-        let session = TeamSession::start(team, self.repo.clone(), self.broadcaster.clone()).await?;
+        let session = TeamSession::start(
+            team,
+            self.repo.clone(),
+            self.broadcaster.clone(),
+            self.backend_binary_path.clone(),
+            self.task_manager.clone(),
+        )
+        .await?;
 
-        self.sessions.insert(team_id.to_owned(), session);
+        if let Err(e) = self
+            .rebuild_agent_processes(&session, &user_id, &agents_snapshot)
+            .await
+        {
+            session.stop();
+            return Err(e);
+        }
+
+        let finish_subscribers = self.spawn_finish_subscribers(team_id, &agents_snapshot);
+
+        let entry = SessionEntry {
+            session,
+            finish_subscribers,
+        };
+        self.sessions.insert(team_id.to_owned(), entry);
+
         Ok(())
     }
 
+    async fn rebuild_agent_processes(
+        &self,
+        session: &TeamSession,
+        user_id: &str,
+        agents: &[TeamAgent],
+    ) -> Result<(), TeamError> {
+        for agent in agents {
+            let cfg = session.mcp_stdio_config(&agent.slot_id);
+            let patch = serde_json::json!({ "team_mcp_stdio_config": cfg });
+
+            self.conversation_service
+                .update_extra(&agent.conversation_id, patch)
+                .await
+                .map_err(|e| {
+                    TeamError::InvalidRequest(format!(
+                        "failed to persist team_mcp_stdio_config for {}: {e}",
+                        agent.slot_id
+                    ))
+                })?;
+
+            self.task_manager
+                .kill(
+                    &agent.conversation_id,
+                    Some(AgentKillReason::TeamMcpRebuild),
+                )
+                .map_err(|e| {
+                    TeamError::InvalidRequest(format!(
+                        "failed to kill agent task {}: {e}",
+                        agent.conversation_id
+                    ))
+                })?;
+
+            self.conversation_service
+                .warmup(user_id, &agent.conversation_id, &self.task_manager)
+                .await
+                .map_err(|e| {
+                    TeamError::InvalidRequest(format!(
+                        "failed to rebuild agent task {}: {e}",
+                        agent.conversation_id
+                    ))
+                })?;
+        }
+        Ok(())
+    }
+
+    /// Spawn one background task per agent that drains the agent's stream
+    /// and forwards `Finish` / `Error` events to the session. The tasks
+    /// look up the live session via `team_id` each iteration, and exit
+    /// naturally when the entry is removed in `stop_session` (which also
+    /// aborts them as a belt-and-braces measure).
+    fn spawn_finish_subscribers(&self, team_id: &str, agents: &[TeamAgent]) -> Vec<JoinHandle<()>> {
+        use aionui_ai_agent::AgentStreamEvent;
+
+        let mut handles = Vec::with_capacity(agents.len());
+        for agent in agents {
+            let Some(task) = self.task_manager.get_task(&agent.conversation_id) else {
+                warn!(
+                    conversation_id = %agent.conversation_id,
+                    "no agent task found after warmup, skipping finish subscription"
+                );
+                continue;
+            };
+            let mut rx = task.subscribe();
+            let conv_id = agent.conversation_id.clone();
+            let team_id = team_id.to_owned();
+            let sessions = self.sessions.clone();
+            let handle = tokio::spawn(async move {
+                while let Ok(event) = rx.recv().await {
+                    let is_error = matches!(event, AgentStreamEvent::Error(_));
+                    if !is_error && !matches!(event, AgentStreamEvent::Finish(_)) {
+                        continue;
+                    }
+                    let Some(entry) = sessions.get(&team_id) else {
+                        break;
+                    };
+                    if let Err(e) = entry.session.on_agent_finish(&conv_id, is_error).await {
+                        warn!(conversation_id = %conv_id, error = %e, "on_agent_finish failed");
+                    }
+                }
+            });
+            handles.push(handle);
+        }
+        handles
+    }
+
     pub fn stop_session(&self, team_id: &str) {
-        if let Some((_, session)) = self.sessions.remove(team_id) {
-            session.stop();
+        if let Some((_, entry)) = self.sessions.remove(team_id) {
+            for handle in &entry.finish_subscribers {
+                handle.abort();
+            }
+            entry.session.stop();
         }
     }
 
-    pub async fn send_message(&self, team_id: &str, content: &str) -> Result<(), TeamError> {
-        let session = self
+    pub async fn send_message(
+        &self,
+        team_id: &str,
+        content: &str,
+        files: Option<Vec<String>>,
+    ) -> Result<(), TeamError> {
+        let entry = self
             .sessions
             .get(team_id)
             .ok_or_else(|| TeamError::SessionNotFound(team_id.into()))?;
-        session.send_message(content).await
+        entry.session.send_message(content, files).await
     }
 
     pub async fn send_message_to_agent(
@@ -380,12 +527,16 @@ impl TeamSessionService {
         team_id: &str,
         slot_id: &str,
         content: &str,
+        files: Option<Vec<String>>,
     ) -> Result<(), TeamError> {
-        let session = self
+        let entry = self
             .sessions
             .get(team_id)
             .ok_or_else(|| TeamError::SessionNotFound(team_id.into()))?;
-        session.send_message_to_agent(slot_id, content).await
+        entry
+            .session
+            .send_message_to_agent(slot_id, content, files)
+            .await
     }
 
     pub fn dispose_all(&self) {

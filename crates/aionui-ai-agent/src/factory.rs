@@ -27,6 +27,10 @@ pub struct AgentFactoryDeps {
     pub encryption_key: [u8; 32],
     pub agent_registry: Arc<AgentRegistry>,
     pub data_dir: PathBuf,
+    /// Absolute path to the backend binary, reused as the `command` of the
+    /// stdio MCP bridge injected into ACP `session/new` for team sessions.
+    /// Captured once at app startup (`std::env::current_exe()`).
+    pub backend_binary_path: Arc<PathBuf>,
 }
 
 /// Build a production agent factory that dispatches to concrete agent types.
@@ -145,6 +149,7 @@ async fn build_agent(
                 },
                 config,
                 deps.skill_manager.clone(),
+                deps.backend_binary_path.clone(),
             )
             .await?;
             let arc = Arc::new(agent);

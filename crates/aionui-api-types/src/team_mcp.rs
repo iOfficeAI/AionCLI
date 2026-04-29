@@ -6,9 +6,15 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Stdio connection triple for the team session MCP server.
+/// Stdio connection config for the team session MCP server.
+///
+/// `team_id` is persisted alongside the connection triple so every
+/// consumer (D3 spec builder, D10 ACP injector, D7 bridge subcommand)
+/// can derive the wire-level MCP server name `aionui-team-<team_id>`
+/// without threading a second parameter through unrelated call sites.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TeamMcpStdioConfig {
+    pub team_id: String,
     pub port: u16,
     pub token: String,
     pub slot_id: String,
@@ -30,6 +36,7 @@ mod tests {
     #[test]
     fn json_roundtrip_preserves_all_fields() {
         let cfg = TeamMcpStdioConfig {
+            team_id: "team-42".into(),
             port: 54321,
             token: "tok-abc".into(),
             slot_id: "slot-1".into(),
@@ -44,8 +51,9 @@ mod tests {
         // Forward-compat: extra fields in persisted `conversation.extra.team_mcp_stdio_config`
         // JSON (e.g. added by a later backend version) must still round-trip through
         // older binaries without error.
-        let json = r#"{"port":1,"token":"t","slot_id":"s","future_field":42}"#;
+        let json = r#"{"team_id":"t-1","port":1,"token":"t","slot_id":"s","future_field":42}"#;
         let parsed: TeamMcpStdioConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.team_id, "t-1");
         assert_eq!(parsed.port, 1);
         assert_eq!(parsed.token, "t");
         assert_eq!(parsed.slot_id, "s");

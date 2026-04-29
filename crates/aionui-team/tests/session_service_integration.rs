@@ -1,9 +1,11 @@
 mod common;
 
 use std::sync::Arc;
+use std::sync::Mutex;
 
+use aionui_ai_agent::{AgentFactory, BuildTaskOptions, IWorkerTaskManager, WorkerTaskManagerImpl};
 use aionui_api_types::{AddAgentRequest, CreateTeamRequest, TeamAgentInput, WebSocketMessage};
-use aionui_common::PaginatedResult;
+use aionui_common::{AgentKillReason, AppError, PaginatedResult};
 use aionui_db::models::{ConversationRow, MessageRow};
 use aionui_db::{
     ConversationFilters, ConversationRowUpdate, DbError, IConversationRepository, ITeamRepository,
@@ -41,7 +43,27 @@ impl IConversationRepository for MockConversationRepo {
         self.conversations.lock().unwrap().push(row.clone());
         Ok(())
     }
-    async fn update(&self, _id: &str, _updates: &ConversationRowUpdate) -> Result<(), DbError> {
+    async fn update(&self, id: &str, updates: &ConversationRowUpdate) -> Result<(), DbError> {
+        let mut convs = self.conversations.lock().unwrap();
+        let conv = convs
+            .iter_mut()
+            .find(|c| c.id == id)
+            .ok_or_else(|| DbError::NotFound(id.to_owned()))?;
+        if let Some(ref extra) = updates.extra {
+            conv.extra = extra.clone();
+        }
+        if let Some(ref name) = updates.name {
+            conv.name = name.clone();
+        }
+        if let Some(pinned) = updates.pinned {
+            conv.pinned = pinned;
+        }
+        if let Some(ref model) = updates.model {
+            conv.model = model.clone();
+        }
+        if let Some(updated_at) = updates.updated_at {
+            conv.updated_at = updated_at;
+        }
         Ok(())
     }
     async fn delete(&self, id: &str) -> Result<(), DbError> {
@@ -274,9 +296,175 @@ impl aionui_conversation::skill_resolver::SkillResolver for StubSkillResolver {
     async fn auto_inject_names(&self) -> Vec<String> {
         Vec::new()
     }
+    async fn resolve_skills(
+        &self,
+        _names: &[String],
+    ) -> Vec<aionui_conversation::skill_resolver::ResolvedAgentSkill> {
+        Vec::new()
+    }
+    async fn link_workspace_skills(
+        &self,
+        _workspace: &std::path::Path,
+        _rel_dirs: &[&str],
+        _skills: &[aionui_conversation::skill_resolver::ResolvedAgentSkill],
+    ) -> usize {
+        0
+    }
 }
 
-fn setup() -> TeamSessionService {
+// ---------------------------------------------------------------------------
+// Counting task manager — wraps WorkerTaskManagerImpl so tests can assert
+// kill / get_or_build_task call counts by conversation id.
+// ---------------------------------------------------------------------------
+
+#[derive(Default, Clone)]
+struct TaskManagerCalls {
+    kill: Vec<(String, Option<AgentKillReason>)>,
+    build: Vec<String>,
+}
+
+struct CountingTaskManager {
+    inner: WorkerTaskManagerImpl,
+    calls: Mutex<TaskManagerCalls>,
+}
+
+impl CountingTaskManager {
+    fn new(factory: AgentFactory) -> Self {
+        Self {
+            inner: WorkerTaskManagerImpl::new(factory),
+            calls: Mutex::new(TaskManagerCalls::default()),
+        }
+    }
+
+    fn snapshot(&self) -> TaskManagerCalls {
+        self.calls.lock().unwrap().clone()
+    }
+}
+
+impl IWorkerTaskManager for CountingTaskManager {
+    fn get_task(&self, conversation_id: &str) -> Option<aionui_ai_agent::AgentManagerHandle> {
+        self.inner.get_task(conversation_id)
+    }
+    fn get_or_build_task(
+        &self,
+        conversation_id: &str,
+        options: BuildTaskOptions,
+    ) -> Result<aionui_ai_agent::AgentManagerHandle, AppError> {
+        self.calls
+            .lock()
+            .unwrap()
+            .build
+            .push(conversation_id.to_owned());
+        self.inner.get_or_build_task(conversation_id, options)
+    }
+    fn kill(&self, conversation_id: &str, reason: Option<AgentKillReason>) -> Result<(), AppError> {
+        self.calls
+            .lock()
+            .unwrap()
+            .kill
+            .push((conversation_id.to_owned(), reason));
+        self.inner.kill(conversation_id, reason)
+    }
+    fn clear(&self) {
+        self.inner.clear()
+    }
+    fn active_count(&self) -> usize {
+        self.inner.active_count()
+    }
+    fn collect_idle(&self, idle_threshold_ms: aionui_common::TimestampMs) -> Vec<String> {
+        self.inner.collect_idle(idle_threshold_ms)
+    }
+}
+
+// Minimal stub agent returned by the test factory: ensure_session only
+// asks the task manager to kill + rebuild; the returned handle never has
+// `send_message` called on it.
+mod mock_agent {
+    use aionui_ai_agent::agent_manager::IAgentManager;
+    use aionui_ai_agent::stream_event::AgentStreamEvent;
+    use aionui_ai_agent::types::SendMessageData;
+    use aionui_common::{
+        AgentKillReason, AgentType, AppError, Confirmation, ConversationStatus, TimestampMs,
+    };
+    use tokio::sync::broadcast;
+
+    pub struct MockAgent {
+        pub conversation_id: String,
+        pub workspace: String,
+        pub event_tx: broadcast::Sender<AgentStreamEvent>,
+    }
+
+    impl MockAgent {
+        pub fn new(conversation_id: String, workspace: String) -> Self {
+            let (event_tx, _) = broadcast::channel(16);
+            Self {
+                conversation_id,
+                workspace,
+                event_tx,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl IAgentManager for MockAgent {
+        fn agent_type(&self) -> AgentType {
+            AgentType::Acp
+        }
+        fn status(&self) -> Option<ConversationStatus> {
+            None
+        }
+        fn workspace(&self) -> &str {
+            &self.workspace
+        }
+        fn conversation_id(&self) -> &str {
+            &self.conversation_id
+        }
+        fn last_activity_at(&self) -> TimestampMs {
+            0
+        }
+        fn subscribe(&self) -> broadcast::Receiver<AgentStreamEvent> {
+            self.event_tx.subscribe()
+        }
+        async fn send_message(&self, _data: SendMessageData) -> Result<(), AppError> {
+            Ok(())
+        }
+        async fn stop(&self) -> Result<(), AppError> {
+            Ok(())
+        }
+        fn confirm(
+            &self,
+            _msg_id: &str,
+            _call_id: &str,
+            _data: serde_json::Value,
+            _always_allow: bool,
+        ) -> Result<(), AppError> {
+            Ok(())
+        }
+        fn get_confirmations(&self) -> Vec<Confirmation> {
+            vec![]
+        }
+        fn check_approval(&self, _action: &str, _command_type: Option<&str>) -> bool {
+            false
+        }
+        fn kill(&self, _reason: Option<AgentKillReason>) -> Result<(), AppError> {
+            Ok(())
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+}
+
+fn success_factory() -> AgentFactory {
+    Arc::new(|opts: BuildTaskOptions| {
+        Ok(Arc::new(mock_agent::MockAgent::new(
+            opts.conversation_id,
+            opts.workspace,
+        )) as aionui_ai_agent::AgentManagerHandle)
+    })
+}
+
+fn setup_with_factory(factory: AgentFactory) -> (TeamSessionService, Arc<CountingTaskManager>) {
     let team_repo: Arc<dyn ITeamRepository> = Arc::new(FullMockTeamRepo::new());
     let conv_repo: Arc<dyn IConversationRepository> = Arc::new(MockConversationRepo::new());
     let broadcaster: Arc<dyn EventBroadcaster> = Arc::new(NullBroadcaster);
@@ -286,7 +474,21 @@ fn setup() -> TeamSessionService {
         std::env::temp_dir(),
         Arc::new(StubSkillResolver),
     );
-    TeamSessionService::new(team_repo, conv_service, broadcaster)
+    let backend_binary_path = Arc::new(std::path::PathBuf::from("/tmp/aionui-backend-test"));
+    let task_manager = Arc::new(CountingTaskManager::new(factory));
+    let task_manager_dyn: Arc<dyn IWorkerTaskManager> = task_manager.clone();
+    let svc = TeamSessionService::new(
+        team_repo,
+        conv_service,
+        broadcaster,
+        task_manager_dyn,
+        backend_binary_path,
+    );
+    (svc, task_manager)
+}
+
+fn setup() -> TeamSessionService {
+    setup_with_factory(success_factory()).0
 }
 
 fn two_agent_input() -> Vec<TeamAgentInput> {
@@ -787,7 +989,7 @@ async fn ss3_stop_session_without_active_is_noop() {
 #[tokio::test]
 async fn sm4_send_message_no_session_returns_error() {
     let svc = setup();
-    let result = svc.send_message("nonexistent", "Hello").await;
+    let result = svc.send_message("nonexistent", "Hello", None).await;
     assert!(result.is_err());
 }
 
@@ -806,7 +1008,9 @@ async fn sm1_send_message_with_active_session() {
         .unwrap();
 
     svc.ensure_session(&created.id).await.unwrap();
-    svc.send_message(&created.id, "Hello team").await.unwrap();
+    svc.send_message(&created.id, "Hello team", None)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -825,7 +1029,7 @@ async fn sa_send_message_to_agent_with_active_session() {
 
     svc.ensure_session(&created.id).await.unwrap();
     let worker_slot = created.agents[1].slot_id.clone();
-    svc.send_message_to_agent(&created.id, &worker_slot, "Do this")
+    svc.send_message_to_agent(&created.id, &worker_slot, "Do this", None)
         .await
         .unwrap();
 }
@@ -846,7 +1050,7 @@ async fn sa3_send_message_to_nonexistent_agent() {
 
     svc.ensure_session(&created.id).await.unwrap();
     let result = svc
-        .send_message_to_agent(&created.id, "nonexistent", "Hello")
+        .send_message_to_agent(&created.id, "nonexistent", "Hello", None)
         .await;
     assert!(result.is_err());
 }
@@ -884,7 +1088,7 @@ async fn dispose_all_cleans_up_sessions() {
 
     svc.dispose_all();
 
-    let result = svc.send_message(&t1.id, "Hello").await;
+    let result = svc.send_message(&t1.id, "Hello", None).await;
     assert!(result.is_err());
 }
 
@@ -909,6 +1113,143 @@ async fn td_delete_team_stops_session() {
     svc.ensure_session(&created.id).await.unwrap();
     svc.remove_team("user1", &created.id).await.unwrap();
 
-    let result = svc.send_message(&created.id, "Hello").await;
+    let result = svc.send_message(&created.id, "Hello", None).await;
     assert!(result.is_err());
+}
+
+// ===========================================================================
+// Test: D9 ensure_session kill + rebuild closed loop
+// ===========================================================================
+
+#[tokio::test]
+async fn d9_ensure_session_kills_and_rebuilds_every_agent() {
+    let (svc, tm) = setup_with_factory(success_factory());
+    let created = svc
+        .create_team(
+            "user1",
+            CreateTeamRequest {
+                name: "T".into(),
+                agents: two_agent_input(),
+            },
+        )
+        .await
+        .unwrap();
+
+    svc.ensure_session(&created.id).await.unwrap();
+
+    // Two agents → kill called 2x and get_or_build_task called 2x, each with
+    // the corresponding conversation_id. Order is agents-iteration order.
+    let calls = tm.snapshot();
+    assert_eq!(calls.kill.len(), 2, "expected 2 kill calls");
+    assert_eq!(calls.build.len(), 2, "expected 2 build calls");
+    for (i, agent) in created.agents.iter().enumerate() {
+        assert_eq!(calls.kill[i].0, agent.conversation_id);
+        assert_eq!(calls.kill[i].1, Some(AgentKillReason::TeamMcpRebuild));
+        assert_eq!(calls.build[i], agent.conversation_id);
+    }
+}
+
+#[tokio::test]
+async fn d9_ensure_session_persists_team_mcp_stdio_config() {
+    // Each agent's conversation.extra must carry a `team_mcp_stdio_config`
+    // object by the time the factory is called — that is what the rebuilt
+    // ACP process will read to reach the MCP server.
+    let (svc, _tm) = setup_with_factory(Arc::new(|opts: BuildTaskOptions| {
+        let extra_has_cfg = opts
+            .extra
+            .get("team_mcp_stdio_config")
+            .and_then(|v| v.as_object())
+            .is_some_and(|o| o.contains_key("port") && o.contains_key("slot_id"));
+        assert!(
+            extra_has_cfg,
+            "factory called without team_mcp_stdio_config in extra: {:?}",
+            opts.extra
+        );
+        Ok(Arc::new(mock_agent::MockAgent::new(
+            opts.conversation_id,
+            opts.workspace,
+        )) as aionui_ai_agent::AgentManagerHandle)
+    }));
+
+    let created = svc
+        .create_team(
+            "user1",
+            CreateTeamRequest {
+                name: "T".into(),
+                agents: two_agent_input(),
+            },
+        )
+        .await
+        .unwrap();
+
+    svc.ensure_session(&created.id).await.unwrap();
+}
+
+#[tokio::test]
+async fn d9_ensure_session_is_idempotent() {
+    let (svc, tm) = setup_with_factory(success_factory());
+    let created = svc
+        .create_team(
+            "user1",
+            CreateTeamRequest {
+                name: "T".into(),
+                agents: two_agent_input(),
+            },
+        )
+        .await
+        .unwrap();
+
+    svc.ensure_session(&created.id).await.unwrap();
+    svc.ensure_session(&created.id).await.unwrap();
+
+    // Second call short-circuits — no additional kill/build calls.
+    let calls = tm.snapshot();
+    assert_eq!(
+        calls.kill.len(),
+        2,
+        "second ensure_session must not re-kill"
+    );
+    assert_eq!(
+        calls.build.len(),
+        2,
+        "second ensure_session must not re-build"
+    );
+}
+
+#[tokio::test]
+async fn d9_ensure_session_rollbacks_when_build_fails() {
+    // Factory always fails → ensure_session must propagate error and not
+    // insert into sessions, so send_message afterwards still errors.
+    let failing_factory: AgentFactory = Arc::new(|_opts: BuildTaskOptions| {
+        Err(AppError::Internal("simulated build failure".into()))
+    });
+    let (svc, tm) = setup_with_factory(failing_factory);
+    let created = svc
+        .create_team(
+            "user1",
+            CreateTeamRequest {
+                name: "T".into(),
+                agents: two_agent_input(),
+            },
+        )
+        .await
+        .unwrap();
+
+    let result = svc.ensure_session(&created.id).await;
+    assert!(
+        result.is_err(),
+        "ensure_session should propagate build error"
+    );
+
+    // Kill ran for the first agent (before warmup failed), build ran once
+    // and errored. No session inserted, so send_message errors.
+    let calls = tm.snapshot();
+    assert_eq!(calls.kill.len(), 1);
+    assert_eq!(calls.build.len(), 1);
+
+    let send_result = svc.send_message(&created.id, "Hello", None).await;
+    assert!(
+        send_result.is_err(),
+        "session must not be registered after build failure"
+    );
 }

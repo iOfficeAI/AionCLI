@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use aionui_realtime::EventBroadcaster;
+use dashmap::DashSet;
 use tokio::sync::Mutex;
 use tracing::debug;
 
@@ -87,6 +88,22 @@ pub struct TeammateManager {
     mailbox: Arc<Mailbox>,
     task_board: Arc<TaskBoard>,
     events: TeamEventEmitter,
+    active_wakes: DashSet<String>,
+}
+
+/// Status set that counts as "settled" for the purpose of
+/// "all teammates settled → wake leader" transitions.
+///
+/// Expanded beyond `Idle` to match the AionUi reference implementation
+/// (TeammateManager.ts:440-452): `Completed` and `Error` teammates are
+/// terminal and should not block the leader from being woken up.
+/// `Pending` is not in the set because the backend currently serde-aliases
+/// `"pending"` to `Idle`; it will be reintroduced when the variant is split.
+fn is_settled(status: TeammateStatus) -> bool {
+    matches!(
+        status,
+        TeammateStatus::Idle | TeammateStatus::Completed | TeammateStatus::Error
+    )
 }
 
 impl TeammateManager {
@@ -114,6 +131,7 @@ impl TeammateManager {
             mailbox,
             task_board,
             events,
+            active_wakes: DashSet::new(),
         }
     }
 
@@ -178,8 +196,20 @@ impl TeammateManager {
     }
 
     /// Mark agent as idle after turn completion or timeout.
-    /// Then check if all teammates are idle → maybe wake leader.
-    pub async fn mark_idle(&self, slot_id: &str) -> Result<Option<String>, TeamError> {
+    ///
+    /// Side effects:
+    /// 1. Transition slot status to `Idle` (broadcasts `team.agent.status`).
+    /// 2. If `slot_id` is a teammate (not the lead) and a lead exists,
+    ///    write an `IdleNotification` to the lead's mailbox. `summary` is
+    ///    persisted both as the message content (falling back to `"idle"`)
+    ///    and as the structured summary column.
+    /// 3. Check whether all teammates are settled → returns the lead slot_id
+    ///    that the caller should wake, if any.
+    pub async fn mark_idle(
+        &self,
+        slot_id: &str,
+        summary: Option<&str>,
+    ) -> Result<Option<String>, TeamError> {
         self.set_status(slot_id, TeammateStatus::Idle).await?;
 
         let is_lead = {
@@ -192,6 +222,21 @@ impl TeammateManager {
 
         if is_lead {
             return Ok(None);
+        }
+
+        if let Some(lead_slot_id) = self.find_lead_slot_id().await
+            && lead_slot_id != slot_id
+        {
+            self.mailbox
+                .write(
+                    &self.team_id,
+                    &lead_slot_id,
+                    slot_id,
+                    MailboxMessageType::IdleNotification,
+                    summary.unwrap_or("idle"),
+                    summary,
+                )
+                .await?;
         }
 
         self.maybe_wake_leader_when_all_idle().await
@@ -277,28 +322,33 @@ impl TeammateManager {
     }
 
     /// Finalize a turn: execute a batch of actions, then mark agent idle.
-    /// Returns an optional leader slot_id to wake if all teammates are idle.
+    ///
+    /// If the batch contains an `IdleNotification`, its `summary` is threaded
+    /// through the mark-idle path so the lead mailbox notification carries
+    /// the agent-provided summary. The IdleNotification action itself is
+    /// skipped during execution to avoid double-writing the notification —
+    /// the single trailing `mark_idle` covers both status transition and
+    /// mailbox write.
+    ///
+    /// Returns an optional leader slot_id to wake if all teammates are
+    /// settled.
     pub async fn finalize_turn(
         &self,
         slot_id: &str,
         actions: &[SchedulerAction],
     ) -> Result<Option<String>, TeamError> {
-        let mut wake_signal = None;
+        let mut summary: Option<String> = None;
         for action in actions {
-            if let Some(leader_id) = self.execute_action(slot_id, action).await? {
-                wake_signal = Some(leader_id);
+            if let SchedulerAction::IdleNotification { summary: s } = action {
+                if summary.is_none() {
+                    summary.clone_from(s);
+                }
+                continue;
             }
+            self.execute_action(slot_id, action).await?;
         }
 
-        let has_idle_notification = actions
-            .iter()
-            .any(|a| matches!(a, SchedulerAction::IdleNotification { .. }));
-
-        if !has_idle_notification {
-            self.mark_idle(slot_id).await
-        } else {
-            Ok(wake_signal)
-        }
+        self.mark_idle(slot_id, summary.as_deref()).await
     }
 
     /// Add a new agent slot at runtime (for spawn_agent).
@@ -362,6 +412,26 @@ impl TeammateManager {
             .map(|s| s.agent.slot_id.clone())
     }
 
+    /// Try to reserve an exclusive wake-in-flight slot for `slot_id`.
+    ///
+    /// Returns `true` when the caller is responsible for driving the wake
+    /// and later calling [`Self::release_wake_lock`]. Returns `false` when
+    /// another wake is already running for this slot and the caller should
+    /// skip the duplicate wake.
+    ///
+    /// Backed by a `DashSet` so it is safe to call concurrently from any
+    /// task; contention resolves atomically via `DashSet::insert`.
+    pub fn acquire_wake_lock(&self, slot_id: &str) -> bool {
+        self.active_wakes.insert(slot_id.to_owned())
+    }
+
+    /// Release a wake lock previously acquired via [`Self::acquire_wake_lock`].
+    ///
+    /// Idempotent: no-op if the lock was never held.
+    pub fn release_wake_lock(&self, slot_id: &str) {
+        self.active_wakes.remove(slot_id);
+    }
+
     // -----------------------------------------------------------------------
     // Private helpers
     // -----------------------------------------------------------------------
@@ -413,25 +483,10 @@ impl TeammateManager {
         from_slot_id: &str,
         summary: Option<&str>,
     ) -> Result<Option<String>, TeamError> {
-        let lead_slot_id = self
-            .find_lead_slot_id()
-            .await
-            .ok_or_else(|| TeamError::AgentNotFound("no lead agent".into()))?;
-
-        if from_slot_id != lead_slot_id {
-            self.mailbox
-                .write(
-                    &self.team_id,
-                    &lead_slot_id,
-                    from_slot_id,
-                    MailboxMessageType::IdleNotification,
-                    summary.unwrap_or("idle"),
-                    summary,
-                )
-                .await?;
-        }
-
-        self.mark_idle(from_slot_id).await
+        // `mark_idle` writes the IdleNotification to the lead mailbox on our
+        // behalf when `from_slot_id` is a teammate, so we do not need to
+        // call `mailbox.write` here.
+        self.mark_idle(from_slot_id, summary).await
     }
 
     async fn handle_shutdown_agent(
@@ -483,7 +538,7 @@ impl TeammateManager {
         let slots = self.slots.lock().await;
 
         let mut lead_slot_id = None;
-        let mut all_teammates_idle = true;
+        let mut all_teammates_settled = true;
         let mut has_teammates = false;
 
         for slot in slots.values() {
@@ -492,8 +547,8 @@ impl TeammateManager {
                 continue;
             }
             has_teammates = true;
-            if slot.status != TeammateStatus::Idle {
-                all_teammates_idle = false;
+            if !is_settled(slot.status) {
+                all_teammates_settled = false;
                 break;
             }
         }
@@ -506,10 +561,12 @@ impl TeammateManager {
             return Ok(None);
         }
 
-        if !all_teammates_idle {
+        if !all_teammates_settled {
             return Ok(None);
         }
 
+        // The leader itself still needs to be Idle so we don't interrupt
+        // an in-flight leader turn with another wake.
         let lead_is_idle = slots
             .get(&lead_id)
             .map(|s| s.status == TeammateStatus::Idle)
@@ -524,7 +581,7 @@ impl TeammateManager {
         debug!(
             team_id = %self.team_id,
             lead_slot_id = %lead_id,
-            "all teammates idle — signaling to wake leader"
+            "all teammates settled — signaling to wake leader"
         );
 
         Ok(Some(lead_id))
@@ -705,7 +762,7 @@ mod tests {
         mgr.set_status("lead-1", TeammateStatus::Working)
             .await
             .unwrap();
-        let wake_target = mgr.mark_idle("lead-1").await.unwrap();
+        let wake_target = mgr.mark_idle("lead-1", None).await.unwrap();
         assert!(wake_target.is_none());
     }
 
@@ -723,10 +780,10 @@ mod tests {
             .await
             .unwrap();
 
-        let result = mgr.mark_idle("worker-1").await.unwrap();
+        let result = mgr.mark_idle("worker-1", None).await.unwrap();
         assert!(result.is_none(), "not all teammates idle yet");
 
-        let result = mgr.mark_idle("worker-2").await.unwrap();
+        let result = mgr.mark_idle("worker-2", None).await.unwrap();
         assert_eq!(result.as_deref(), Some("lead-1"));
     }
 
@@ -742,7 +799,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = mgr.mark_idle("worker-1").await.unwrap();
+        let result = mgr.mark_idle("worker-1", None).await.unwrap();
         assert!(result.is_none());
     }
 
@@ -758,7 +815,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = mgr.mark_idle("worker-1").await.unwrap();
+        let result = mgr.mark_idle("worker-1", None).await.unwrap();
         assert!(result.is_none());
     }
 
@@ -772,7 +829,7 @@ mod tests {
         mgr.set_status("lead-1", TeammateStatus::Working)
             .await
             .unwrap();
-        let result = mgr.mark_idle("lead-1").await.unwrap();
+        let result = mgr.mark_idle("lead-1", None).await.unwrap();
         assert!(result.is_none());
     }
 
@@ -1148,8 +1205,19 @@ mod tests {
         let tasks = task_board.list_tasks("t1").await.unwrap();
         assert_eq!(tasks.len(), 1);
 
+        // Two messages arrive at the lead:
+        // 1. the explicit SendMessage from the action list ("Done with sub-task")
+        // 2. the IdleNotification that mark_idle now writes automatically
         let lead_msgs = mailbox.read_unread("t1", "lead-1").await.unwrap();
-        assert_eq!(lead_msgs.len(), 1);
+        assert_eq!(lead_msgs.len(), 2);
+        assert!(lead_msgs.iter().any(
+            |m| m.msg_type == MailboxMessageType::Message && m.content == "Done with sub-task"
+        ));
+        assert!(
+            lead_msgs
+                .iter()
+                .any(|m| m.msg_type == MailboxMessageType::IdleNotification)
+        );
 
         assert!(wake_signal.is_none(), "worker-2 still working");
     }
@@ -1252,5 +1320,255 @@ mod tests {
         assert_eq!(payload.tasks.len(), 1);
         assert_eq!(payload.unread_messages.len(), 1);
         assert_eq!(payload.unread_messages[0].content, "Do task A");
+    }
+
+    // -- D8: mark_idle writes IdleNotification with summary -------------------
+
+    #[tokio::test]
+    async fn mark_idle_with_summary_writes_idle_notification_to_lead() {
+        let agents = make_team_agents();
+        let repo = Arc::new(MockTeamRepo::new());
+        let mailbox = Arc::new(Mailbox::new(repo.clone()));
+        let task_board = Arc::new(TaskBoard::new(repo));
+        let broadcaster: Arc<dyn EventBroadcaster> = Arc::new(RecordingBroadcaster::new());
+        let mgr = TeammateManager::new(
+            "t1".into(),
+            &agents,
+            mailbox.clone(),
+            task_board,
+            broadcaster,
+        );
+
+        mgr.set_status("worker-1", TeammateStatus::Working)
+            .await
+            .unwrap();
+        mgr.mark_idle("worker-1", Some("sub-task done"))
+            .await
+            .unwrap();
+
+        let lead_msgs = mailbox.read_unread("t1", "lead-1").await.unwrap();
+        assert_eq!(lead_msgs.len(), 1);
+        assert_eq!(lead_msgs[0].msg_type, MailboxMessageType::IdleNotification);
+        assert_eq!(lead_msgs[0].from_agent_id, "worker-1");
+        assert_eq!(lead_msgs[0].content, "sub-task done");
+        assert_eq!(lead_msgs[0].summary.as_deref(), Some("sub-task done"));
+    }
+
+    #[tokio::test]
+    async fn mark_idle_without_summary_still_writes_fallback_content() {
+        let agents = make_team_agents();
+        let repo = Arc::new(MockTeamRepo::new());
+        let mailbox = Arc::new(Mailbox::new(repo.clone()));
+        let task_board = Arc::new(TaskBoard::new(repo));
+        let broadcaster: Arc<dyn EventBroadcaster> = Arc::new(RecordingBroadcaster::new());
+        let mgr = TeammateManager::new(
+            "t1".into(),
+            &agents,
+            mailbox.clone(),
+            task_board,
+            broadcaster,
+        );
+
+        mgr.set_status("worker-1", TeammateStatus::Working)
+            .await
+            .unwrap();
+        mgr.mark_idle("worker-1", None).await.unwrap();
+
+        let lead_msgs = mailbox.read_unread("t1", "lead-1").await.unwrap();
+        assert_eq!(lead_msgs.len(), 1);
+        assert_eq!(lead_msgs[0].content, "idle");
+        assert!(lead_msgs[0].summary.is_none());
+    }
+
+    #[tokio::test]
+    async fn mark_idle_from_lead_does_not_write_notification() {
+        let agents = make_team_agents();
+        let repo = Arc::new(MockTeamRepo::new());
+        let mailbox = Arc::new(Mailbox::new(repo.clone()));
+        let task_board = Arc::new(TaskBoard::new(repo));
+        let broadcaster: Arc<dyn EventBroadcaster> = Arc::new(RecordingBroadcaster::new());
+        let mgr = TeammateManager::new(
+            "t1".into(),
+            &agents,
+            mailbox.clone(),
+            task_board,
+            broadcaster,
+        );
+
+        mgr.set_status("lead-1", TeammateStatus::Working)
+            .await
+            .unwrap();
+        mgr.mark_idle("lead-1", Some("done")).await.unwrap();
+
+        let lead_msgs = mailbox.read_unread("t1", "lead-1").await.unwrap();
+        assert!(lead_msgs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn mark_idle_broadcasts_status_event() {
+        let agents = make_team_agents();
+        let (mgr, bc) = make_manager(&agents);
+
+        mgr.set_status("worker-1", TeammateStatus::Working)
+            .await
+            .unwrap();
+        bc.events.lock().unwrap().clear();
+
+        mgr.mark_idle("worker-1", Some("ok")).await.unwrap();
+
+        let idle_events: Vec<_> = bc
+            .events()
+            .into_iter()
+            .filter(|e| e.name == "team.agent.status" && e.data["status"] == "idle")
+            .collect();
+        assert_eq!(idle_events.len(), 1);
+        assert_eq!(idle_events[0].data["slot_id"], "worker-1");
+    }
+
+    // -- D8: settled set expansion ({Idle, Completed, Error}) -----------------
+
+    #[tokio::test]
+    async fn all_teammates_settled_with_completed_wakes_leader() {
+        let agents = make_team_agents();
+        let (mgr, _) = make_manager(&agents);
+
+        mgr.set_status("worker-1", TeammateStatus::Completed)
+            .await
+            .unwrap();
+        mgr.set_status("worker-2", TeammateStatus::Working)
+            .await
+            .unwrap();
+
+        let result = mgr.mark_idle("worker-2", None).await.unwrap();
+        assert_eq!(result.as_deref(), Some("lead-1"));
+    }
+
+    #[tokio::test]
+    async fn all_teammates_settled_with_error_wakes_leader() {
+        let agents = make_team_agents();
+        let (mgr, _) = make_manager(&agents);
+
+        mgr.set_status("worker-1", TeammateStatus::Error)
+            .await
+            .unwrap();
+        mgr.set_status("worker-2", TeammateStatus::Working)
+            .await
+            .unwrap();
+
+        let result = mgr.mark_idle("worker-2", None).await.unwrap();
+        assert_eq!(
+            result.as_deref(),
+            Some("lead-1"),
+            "Error counts as settled — leader should be woken"
+        );
+    }
+
+    #[tokio::test]
+    async fn working_teammate_blocks_leader_wake() {
+        let agents = make_team_agents();
+        let (mgr, _) = make_manager(&agents);
+
+        mgr.set_status("worker-1", TeammateStatus::Working)
+            .await
+            .unwrap();
+        mgr.set_status("worker-2", TeammateStatus::Working)
+            .await
+            .unwrap();
+
+        let result = mgr.mark_idle("worker-1", None).await.unwrap();
+        assert!(result.is_none(), "worker-2 still Working blocks wake");
+    }
+
+    #[tokio::test]
+    async fn thinking_teammate_blocks_leader_wake() {
+        let agents = make_team_agents();
+        let (mgr, _) = make_manager(&agents);
+
+        mgr.set_status("worker-1", TeammateStatus::Thinking)
+            .await
+            .unwrap();
+        mgr.set_status("worker-2", TeammateStatus::Working)
+            .await
+            .unwrap();
+
+        let result = mgr.mark_idle("worker-2", None).await.unwrap();
+        assert!(result.is_none(), "Thinking is not settled");
+    }
+
+    #[tokio::test]
+    async fn tool_use_teammate_blocks_leader_wake() {
+        let agents = make_team_agents();
+        let (mgr, _) = make_manager(&agents);
+
+        mgr.set_status("worker-1", TeammateStatus::ToolUse)
+            .await
+            .unwrap();
+        mgr.set_status("worker-2", TeammateStatus::Working)
+            .await
+            .unwrap();
+
+        let result = mgr.mark_idle("worker-2", None).await.unwrap();
+        assert!(result.is_none(), "ToolUse is not settled");
+    }
+
+    // -- D8: acquire_wake_lock / release_wake_lock ----------------------------
+
+    #[tokio::test]
+    async fn wake_lock_first_caller_wins_and_release_is_idempotent() {
+        let agents = make_team_agents();
+        let (mgr, _) = make_manager(&agents);
+
+        assert!(mgr.acquire_wake_lock("worker-1"));
+        assert!(
+            !mgr.acquire_wake_lock("worker-1"),
+            "second acquire must fail while lock is held"
+        );
+
+        mgr.release_wake_lock("worker-1");
+        assert!(
+            mgr.acquire_wake_lock("worker-1"),
+            "lock is reusable after release"
+        );
+
+        mgr.release_wake_lock("worker-1");
+        mgr.release_wake_lock("worker-1"); // double release is a no-op
+    }
+
+    #[tokio::test]
+    async fn wake_lock_is_scoped_per_slot() {
+        let agents = make_team_agents();
+        let (mgr, _) = make_manager(&agents);
+
+        assert!(mgr.acquire_wake_lock("worker-1"));
+        assert!(
+            mgr.acquire_wake_lock("worker-2"),
+            "different slot must not be blocked"
+        );
+    }
+
+    #[tokio::test]
+    async fn wake_lock_concurrent_acquire_exactly_one_succeeds() {
+        let agents = make_team_agents();
+        let (mgr, _) = make_manager(&agents);
+        let mgr = Arc::new(mgr);
+
+        let mut handles = vec![];
+        for _ in 0..16 {
+            let mgr = mgr.clone();
+            handles.push(tokio::spawn(
+                async move { mgr.acquire_wake_lock("worker-1") },
+            ));
+        }
+
+        let mut winners = 0usize;
+        for h in handles {
+            if h.await.unwrap() {
+                winners += 1;
+            }
+        }
+        assert_eq!(
+            winners, 1,
+            "exactly one concurrent acquire should win the lock"
+        );
     }
 }

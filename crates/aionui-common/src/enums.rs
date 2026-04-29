@@ -391,6 +391,10 @@ pub enum RemoteAgentStatus {
 #[serde(rename_all = "snake_case")]
 pub enum AgentKillReason {
     IdleTimeout,
+    /// Team session is rebuilding the agent process to inject a fresh
+    /// `team_mcp_stdio_config`. The conversation is preserved; only the
+    /// in-memory ACP CLI is recycled.
+    TeamMcpRebuild,
 }
 
 /// Preview content type for document preview history.

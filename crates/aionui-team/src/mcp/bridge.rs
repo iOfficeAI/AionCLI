@@ -35,9 +35,12 @@ impl TeamMcpStdioServerSpec {
     ///
     /// `backend_binary_path` is the absolute path to the `aionui-backend`
     /// executable (phase1 single-binary constraint — no standalone bridge).
-    pub fn from_config(team_id: &str, backend_binary_path: &str, cfg: &TeamMcpStdioConfig) -> Self {
+    /// `team_id` is read from `cfg.team_id` rather than taken as a separate
+    /// parameter so the wire-level server name stays in sync with the
+    /// persisted config across every consumer.
+    pub fn from_config(backend_binary_path: &str, cfg: &TeamMcpStdioConfig) -> Self {
         Self {
-            name: format!("aionui-team-{team_id}"),
+            name: format!("aionui-team-{}", cfg.team_id),
             command: backend_binary_path.to_owned(),
             args: vec!["mcp-bridge".to_owned()],
             env: vec![
@@ -78,6 +81,7 @@ mod tests {
 
     fn sample_cfg() -> TeamMcpStdioConfig {
         TeamMcpStdioConfig {
+            team_id: "team-42".into(),
             port: 12345,
             token: "tok-abc".into(),
             slot_id: "slot-1".into(),
@@ -86,11 +90,7 @@ mod tests {
 
     #[test]
     fn from_config_fills_all_fields() {
-        let spec = TeamMcpStdioServerSpec::from_config(
-            "team-42",
-            "/usr/bin/aionui-backend",
-            &sample_cfg(),
-        );
+        let spec = TeamMcpStdioServerSpec::from_config("/usr/bin/aionui-backend", &sample_cfg());
 
         assert_eq!(spec.name, "aionui-team-team-42");
         assert_eq!(spec.command, "/usr/bin/aionui-backend");
@@ -100,7 +100,7 @@ mod tests {
 
     #[test]
     fn env_keys_match_api_type_constants() {
-        let spec = TeamMcpStdioServerSpec::from_config("t", "/p", &sample_cfg());
+        let spec = TeamMcpStdioServerSpec::from_config("/p", &sample_cfg());
         let kv: std::collections::HashMap<_, _> = spec.env.iter().cloned().collect();
 
         assert_eq!(
@@ -119,14 +119,14 @@ mod tests {
 
     #[test]
     fn into_sdk_serializes_as_stdio_variant() {
-        let spec = TeamMcpStdioServerSpec::from_config("tid", "/bin/aionui-backend", &sample_cfg());
+        let spec = TeamMcpStdioServerSpec::from_config("/bin/aionui-backend", &sample_cfg());
         let sdk = spec.into_sdk();
 
         let json = serde_json::to_value(&sdk).expect("serialize");
 
         // `Stdio` variant is `#[serde(untagged)]` inside `McpServer`, so the
         // JSON is the raw `McpServerStdio` shape — no `"type":"stdio"` tag.
-        assert_eq!(json["name"], "aionui-team-tid");
+        assert_eq!(json["name"], "aionui-team-team-42");
         assert_eq!(json["command"], "/bin/aionui-backend");
         assert_eq!(json["args"], serde_json::json!(["mcp-bridge"]));
 
