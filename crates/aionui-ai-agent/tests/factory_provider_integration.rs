@@ -65,6 +65,7 @@ fn make_factory(
         encryption_key: test_encryption_key(),
         agent_registry: Arc::new(AgentRegistry::new()),
         data_dir: PathBuf::from("/tmp/aionrs-test"),
+        backend_binary_path: Arc::new(PathBuf::from("/tmp/aionrs-test/aionui-backend")),
     })
 }
 

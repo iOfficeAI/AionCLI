@@ -248,6 +248,7 @@ mod tests {
         let with_cfg = r#"{
             "backend":"claude",
             "team_mcp_stdio_config":{
+                "team_id":"team-42",
                 "port":54321,
                 "token":"tok-abc",
                 "slot_id":"slot-lead"
@@ -255,6 +256,7 @@ mod tests {
         }"#;
         let parsed: AcpBuildExtra = serde_json::from_str(with_cfg).unwrap();
         let cfg = parsed.team_mcp_stdio_config.expect("config present");
+        assert_eq!(cfg.team_id, "team-42");
         assert_eq!(cfg.port, 54321);
         assert_eq!(cfg.token, "tok-abc");
         assert_eq!(cfg.slot_id, "slot-lead");

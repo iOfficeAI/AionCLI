@@ -81,6 +81,7 @@ impl TeamSession {
 
     pub fn mcp_stdio_config(&self, slot_id: &str) -> TeamMcpStdioConfig {
         TeamMcpStdioConfig {
+            team_id: self.team.id.clone(),
             port: self.mcp_server.port(),
             token: self.mcp_server.auth_token().to_owned(),
             slot_id: slot_id.to_owned(),
@@ -92,11 +93,7 @@ impl TeamSession {
     /// `session/new` consumes via `mcp_servers`.
     pub fn stdio_spec(&self, slot_id: &str) -> TeamMcpStdioServerSpec {
         let binary_path = self.backend_binary_path.to_string_lossy();
-        TeamMcpStdioServerSpec::from_config(
-            &self.team.id,
-            binary_path.as_ref(),
-            &self.mcp_stdio_config(slot_id),
-        )
+        TeamMcpStdioServerSpec::from_config(binary_path.as_ref(), &self.mcp_stdio_config(slot_id))
     }
 
     /// Assemble the payload that will drive the next wake of `slot_id`.
@@ -323,6 +320,7 @@ mod tests {
     async fn mcp_stdio_config_for_agent() {
         let session = start_session().await;
         let config = session.mcp_stdio_config("lead-1");
+        assert_eq!(config.team_id, "t1");
         assert_eq!(config.slot_id, "lead-1");
         assert_eq!(config.port, session.mcp_server.port());
         session.stop();

@@ -171,6 +171,13 @@ impl AppServices {
             std::path::Path::new(&data_dir),
         ));
 
+        // Absolute path to this process's binary. Reused as the `command` for
+        // the stdio MCP bridge spawned by ACP CLIs when a team session is
+        // attached to a conversation (phase1 mcp.md §4.6 single-binary model).
+        let backend_binary_path = Arc::new(
+            std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("aionui-backend")),
+        );
+
         let factory = build_agent_factory(AgentFactoryDeps {
             skill_manager: AcpSkillManager::new(skill_paths.clone()),
             remote_agent_repo,
@@ -178,6 +185,7 @@ impl AppServices {
             encryption_key,
             agent_registry: agent_registry.clone(),
             data_dir: std::path::PathBuf::from(&data_dir),
+            backend_binary_path: backend_binary_path.clone(),
         });
         let worker_task_manager: Arc<dyn IWorkerTaskManager> =
             Arc::new(WorkerTaskManagerImpl::new(factory));

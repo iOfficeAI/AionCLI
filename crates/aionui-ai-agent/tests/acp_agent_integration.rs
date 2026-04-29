@@ -89,6 +89,7 @@ async fn make_mock_agent(
         },
         config,
         skill_manager,
+        Arc::new(std::path::PathBuf::from("/tmp/aionui-backend")),
     )
     .await
     .expect("Failed to spawn mock ACP agent");
