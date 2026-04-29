@@ -53,6 +53,13 @@ pub trait IConversationRepository: Send + Sync {
         cron_job_id: &str,
     ) -> Result<Vec<ConversationRow>, DbError>;
 
+    /// Lists conversations whose `extra.teamId` matches, scoped to a user.
+    async fn list_by_team_id(
+        &self,
+        user_id: &str,
+        team_id: &str,
+    ) -> Result<Vec<ConversationRow>, DbError>;
+
     /// Lists conversations sharing the same `extra.workspace` value.
     /// The conversation identified by `conversation_id` is excluded.
     async fn list_associated(

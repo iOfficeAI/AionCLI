@@ -237,6 +237,25 @@ impl IConversationRepository for SqliteConversationRepository {
         Ok(rows)
     }
 
+    async fn list_by_team_id(
+        &self,
+        user_id: &str,
+        team_id: &str,
+    ) -> Result<Vec<ConversationRow>, DbError> {
+        let rows = sqlx::query_as::<_, ConversationRow>(
+            "SELECT * FROM conversations \
+             WHERE user_id = ? \
+             AND json_extract(extra, '$.teamId') = ? \
+             ORDER BY updated_at DESC",
+        )
+        .bind(user_id)
+        .bind(team_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows)
+    }
+
     async fn list_associated(
         &self,
         user_id: &str,
@@ -1167,6 +1186,79 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn list_by_team_id_filters_by_team_and_user() {
+        let (repo, db) = setup().await;
+
+        let mut c1 = sample_conversation(SYSTEM_USER_ID);
+        c1.extra = r#"{"teamId":"team_1","workspace":"/a"}"#.to_string();
+        repo.create(&c1).await.unwrap();
+
+        let mut c2 = sample_conversation(SYSTEM_USER_ID);
+        c2.extra = r#"{"teamId":"team_1","workspace":"/b"}"#.to_string();
+        repo.create(&c2).await.unwrap();
+
+        let mut c3 = sample_conversation(SYSTEM_USER_ID);
+        c3.extra = r#"{"workspace":"/c"}"#.to_string();
+        repo.create(&c3).await.unwrap();
+
+        // Insert a second user and a conversation belonging to that user in the
+        // same team — must not leak across users.
+        let now = aionui_common::now_ms();
+        sqlx::query(
+            "INSERT INTO users (id, username, password_hash, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind("other_user")
+        .bind("other")
+        .bind("h")
+        .bind(now)
+        .bind(now)
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+        let mut c4 = sample_conversation("other_user");
+        c4.extra = r#"{"teamId":"team_1","workspace":"/d"}"#.to_string();
+        repo.create(&c4).await.unwrap();
+
+        let result = repo
+            .list_by_team_id(SYSTEM_USER_ID, "team_1")
+            .await
+            .unwrap();
+        assert_eq!(result.len(), 2);
+        assert!(result.iter().all(|r| r.user_id == SYSTEM_USER_ID));
+    }
+
+    #[tokio::test]
+    async fn list_by_team_id_other_user_does_not_match() {
+        let (repo, db) = setup().await;
+
+        let now = aionui_common::now_ms();
+        sqlx::query(
+            "INSERT INTO users (id, username, password_hash, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind("other_user")
+        .bind("other")
+        .bind("h")
+        .bind(now)
+        .bind(now)
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+        let mut c = sample_conversation("other_user");
+        c.extra = r#"{"teamId":"team_1"}"#.to_string();
+        repo.create(&c).await.unwrap();
+
+        let result = repo
+            .list_by_team_id(SYSTEM_USER_ID, "team_1")
+            .await
+            .unwrap();
+        assert!(result.is_empty());
     }
 
     #[tokio::test]
