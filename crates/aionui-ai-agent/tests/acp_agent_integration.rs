@@ -178,6 +178,7 @@ fn event_type_name(event: &AgentStreamEvent) -> &'static str {
         AgentStreamEvent::System(_) => "System",
         AgentStreamEvent::RequestTrace(_) => "RequestTrace",
         AgentStreamEvent::SlashCommandsUpdated(_) => "SlashCommandsUpdated",
+        AgentStreamEvent::SessionAssigned(_) => "SessionAssigned",
     }
 }
 

@@ -403,7 +403,10 @@ mod tests {
         p2.id = "custom-b";
         p2.name = "dup";
         repo.upsert(&p1).await.unwrap();
-        let err = repo.upsert(&p2).await.err().expect("unique violation");
+        let err = repo
+            .upsert(&p2)
+            .await
+            .expect_err("unique violation");
         assert!(matches!(err, DbError::Query(_)));
     }
 }

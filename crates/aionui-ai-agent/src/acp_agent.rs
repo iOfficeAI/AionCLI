@@ -1245,32 +1245,53 @@ mod tests {
     fn normalize_requested_mode_passes_through_non_yolo_modes() {
         let meta = metadata_with_yolo_id(Some("full-access"));
         assert_eq!(normalize_requested_mode(&meta, "default"), "default");
-        assert_eq!(normalize_requested_mode(&meta, "autoEdit"), "autoEdit");
         assert_eq!(normalize_requested_mode(&meta, "read-only"), "read-only");
         assert_eq!(
             normalize_requested_mode(&meta, "bypassPermissions"),
             "bypassPermissions"
         );
+    }
+
+    /// Vendor-specific yolo rewrites are entirely data-driven by
+    /// `metadata.yolo_id`. Rebuild fixtures with the seed values
+    /// `006_agent_metadata.sql` would hydrate, then assert both yolo
+    /// aliases hit the native mode id for each vendor.
+    #[test]
+    fn normalize_requested_mode_rewrites_yolo_for_builtin_vendors() {
+        // Claude / Codebuddy → bypassPermissions.
+        let claude_like = metadata_with_yolo_id(Some("bypassPermissions"));
         assert_eq!(
-            normalize_requested_mode(AcpBackend::Claude, "yolo"),
+            normalize_requested_mode(&claude_like, "yolo"),
             "bypassPermissions"
         );
         assert_eq!(
-            normalize_requested_mode(AcpBackend::Claude, "yoloNoSandbox"),
+            normalize_requested_mode(&claude_like, "yoloNoSandbox"),
             "bypassPermissions"
         );
-        assert_eq!(
-            normalize_requested_mode(AcpBackend::Opencode, "yolo"),
-            "build"
-        );
-        assert_eq!(
-            normalize_requested_mode(AcpBackend::Cursor, "yolo"),
-            "agent"
-        );
-        assert_eq!(
-            normalize_requested_mode(AcpBackend::Gemini, "yolo"),
-            "yolo"
-        );
+        // Opencode → build.
+        let opencode_like = metadata_with_yolo_id(Some("build"));
+        assert_eq!(normalize_requested_mode(&opencode_like, "yolo"), "build");
+        // Cursor → agent.
+        let cursor_like = metadata_with_yolo_id(Some("agent"));
+        assert_eq!(normalize_requested_mode(&cursor_like, "yolo"), "agent");
+        // Gemini / Qwen / … have no yolo equivalent; alias flows through.
+        let gemini_like = metadata_with_yolo_id(None);
+        assert_eq!(normalize_requested_mode(&gemini_like, "yolo"), "yolo");
+    }
+
+    /// Codex's legacy `default` / `autoEdit` aliases should rewrite to
+    /// its native `auto` mode when the row's backend label is "codex".
+    /// Other backends must leave `default` / `autoEdit` untouched.
+    #[test]
+    fn normalize_requested_mode_rewrites_codex_default_and_auto_edit() {
+        let mut codex_meta = metadata_with_yolo_id(Some("full-access"));
+        codex_meta.backend = Some("codex".into());
+        assert_eq!(normalize_requested_mode(&codex_meta, "default"), "auto");
+        assert_eq!(normalize_requested_mode(&codex_meta, "autoEdit"), "auto");
+
+        let other = metadata_with_yolo_id(None);
+        assert_eq!(normalize_requested_mode(&other, "default"), "default");
+        assert_eq!(normalize_requested_mode(&other, "autoEdit"), "autoEdit");
     }
 
     fn build_extra_without_team() -> AcpBuildExtra {
