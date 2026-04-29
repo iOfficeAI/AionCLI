@@ -154,6 +154,12 @@ impl TeamSession {
         conversation_id: &str,
         is_error: bool,
     ) -> Result<Option<String>, TeamError> {
+        // Dedup: skip if another finish event already claimed this conversation
+        // within the 5-second window (W4-D19a).
+        if !self.scheduler.begin_finalize(conversation_id) {
+            return Ok(None);
+        }
+
         let slot_id = {
             let agents = self.scheduler.list_agents().await;
             agents
@@ -173,7 +179,16 @@ impl TeamSession {
                 .await?;
         }
 
-        self.scheduler.finalize_turn(&slot_id, &[]).await
+        let wake_target = self.scheduler.finalize_turn(&slot_id, &[]).await?;
+
+        // Clear the dedup window once finalize succeeded — the next legitimate
+        // finish event (after the re-woken agent completes) must be allowed
+        // through.
+        if wake_target.is_some() {
+            self.scheduler.clear_finalized_turn(conversation_id);
+        }
+
+        Ok(wake_target)
     }
 
     /// Write a user message to the lead's mailbox and trigger a wake.
