@@ -8,6 +8,9 @@ pub enum TeamError {
     #[error("Agent not found: {0}")]
     AgentNotFound(String),
 
+    #[error("Conversation not found: {0}")]
+    ConversationNotFound(String),
+
     #[error("Task not found: {0}")]
     TaskNotFound(String),
 
@@ -32,6 +35,7 @@ impl From<TeamError> for AppError {
         match err {
             TeamError::TeamNotFound(msg) => AppError::NotFound(msg),
             TeamError::AgentNotFound(msg) => AppError::NotFound(msg),
+            TeamError::ConversationNotFound(msg) => AppError::NotFound(msg),
             TeamError::TaskNotFound(msg) => AppError::NotFound(msg),
             TeamError::InvalidRequest(msg) => AppError::BadRequest(msg),
             TeamError::SessionNotFound(msg) => AppError::NotFound(msg),
@@ -62,6 +66,12 @@ mod tests {
     fn task_not_found_maps_to_app_not_found() {
         let err: AppError = TeamError::TaskNotFound("tk-1".into()).into();
         assert!(matches!(err, AppError::NotFound(_)));
+    }
+
+    #[test]
+    fn conversation_not_found_maps_to_app_not_found() {
+        let err: AppError = TeamError::ConversationNotFound("c1".into()).into();
+        assert!(matches!(err, AppError::NotFound(msg) if msg == "c1"));
     }
 
     #[test]

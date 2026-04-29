@@ -76,31 +76,39 @@ impl TeamSessionService {
             };
 
             let agent_type = parse_agent_type(&input.backend)?;
-            let conv_req = CreateConversationRequest {
-                r#type: agent_type,
-                name: Some(input.name.clone()),
-                model: Some(ProviderWithModel {
-                    provider_id: input.backend.clone(),
-                    model: input.model.clone(),
-                    use_model: None,
-                }),
-                source: None,
-                channel_chat_id: None,
-                extra: serde_json::json!({ "teamId": team_id }),
+            let conversation_id = match &input.conversation_id {
+                Some(existing_id) => {
+                    self.reuse_conversation_for_team(user_id, existing_id, &team_id)
+                        .await?
+                }
+                None => {
+                    let conv_req = CreateConversationRequest {
+                        r#type: agent_type,
+                        name: Some(input.name.clone()),
+                        model: Some(ProviderWithModel {
+                            provider_id: input.backend.clone(),
+                            model: input.model.clone(),
+                            use_model: None,
+                        }),
+                        source: None,
+                        channel_chat_id: None,
+                        extra: serde_json::json!({ "teamId": team_id }),
+                    };
+                    self.conversation_service
+                        .create(user_id, conv_req)
+                        .await
+                        .map_err(|e| {
+                            TeamError::InvalidRequest(format!("failed to create conversation: {e}"))
+                        })?
+                        .id
+                }
             };
-            let conv = self
-                .conversation_service
-                .create(user_id, conv_req)
-                .await
-                .map_err(|e| {
-                    TeamError::InvalidRequest(format!("failed to create conversation: {e}"))
-                })?;
 
             agents.push(TeamAgent {
                 slot_id,
                 name: input.name.clone(),
                 role,
-                conversation_id: conv.id,
+                conversation_id,
                 backend: input.backend.clone(),
                 model: input.model.clone(),
                 custom_agent_id: input.custom_agent_id.clone(),
@@ -138,6 +146,44 @@ impl TeamSessionService {
 
         info!(team_id = %team.id, "Team created");
         Ok(team.to_response())
+    }
+
+    /// Reuse an existing solo conversation as a team agent's conversation.
+    ///
+    /// Validates ownership (via `ConversationService::get`, which returns
+    /// `NotFound` when the conv belongs to another user), then rejects convs
+    /// already bound to a different team. On success merges `teamId` into
+    /// `conversation.extra` and returns the conversation id.
+    async fn reuse_conversation_for_team(
+        &self,
+        user_id: &str,
+        conversation_id: &str,
+        team_id: &str,
+    ) -> Result<String, TeamError> {
+        let existing = self
+            .conversation_service
+            .get(user_id, conversation_id)
+            .await
+            .map_err(|_| TeamError::ConversationNotFound(conversation_id.into()))?;
+
+        if let Some(bound) = existing.extra.get("teamId").and_then(|v| v.as_str())
+            && bound != team_id
+        {
+            return Err(TeamError::InvalidRequest(format!(
+                "conversation {conversation_id} already belongs to another team"
+            )));
+        }
+
+        self.conversation_service
+            .update_extra(conversation_id, serde_json::json!({ "teamId": team_id }))
+            .await
+            .map_err(|e| {
+                TeamError::InvalidRequest(format!(
+                    "failed to update conversation extra for {conversation_id}: {e}"
+                ))
+            })?;
+
+        Ok(conversation_id.to_owned())
     }
 
     pub async fn list_teams(&self, user_id: &str) -> Result<Vec<TeamResponse>, TeamError> {
