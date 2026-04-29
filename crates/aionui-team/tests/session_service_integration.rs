@@ -182,8 +182,15 @@ impl ITeamRepository for FullMockTeamRepo {
         self.teams.lock().unwrap().push(row.clone());
         Ok(())
     }
-    async fn list_teams(&self) -> Result<Vec<aionui_db::models::TeamRow>, DbError> {
-        Ok(self.teams.lock().unwrap().clone())
+    async fn list_teams(&self, user_id: &str) -> Result<Vec<aionui_db::models::TeamRow>, DbError> {
+        Ok(self
+            .teams
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|t| t.user_id == user_id)
+            .cloned()
+            .collect())
     }
     async fn get_team(&self, id: &str) -> Result<Option<aionui_db::models::TeamRow>, DbError> {
         Ok(self
@@ -636,7 +643,7 @@ async fn tc3_each_agent_has_conversation_id() {
 #[tokio::test]
 async fn tl1_empty_list() {
     let svc = setup();
-    let list = svc.list_teams().await.unwrap();
+    let list = svc.list_teams("user1").await.unwrap();
     assert!(list.is_empty());
 }
 
@@ -662,8 +669,39 @@ async fn tl2_list_multiple_teams() {
     .await
     .unwrap();
 
-    let list = svc.list_teams().await.unwrap();
+    let list = svc.list_teams("user1").await.unwrap();
     assert_eq!(list.len(), 2);
+}
+
+#[tokio::test]
+async fn tl3_list_is_user_scoped() {
+    let svc = setup();
+    svc.create_team(
+        "userA",
+        CreateTeamRequest {
+            name: "A-team".into(),
+            agents: two_agent_input(),
+        },
+    )
+    .await
+    .unwrap();
+    svc.create_team(
+        "userB",
+        CreateTeamRequest {
+            name: "B-team".into(),
+            agents: two_agent_input(),
+        },
+    )
+    .await
+    .unwrap();
+
+    let list_a = svc.list_teams("userA").await.unwrap();
+    assert_eq!(list_a.len(), 1);
+    assert_eq!(list_a[0].name, "A-team");
+
+    let list_b = svc.list_teams("userB").await.unwrap();
+    assert_eq!(list_b.len(), 1);
+    assert_eq!(list_b[0].name, "B-team");
 }
 
 // -- Get team -----------------------------------------------------------------
@@ -712,7 +750,7 @@ async fn td1_delete_existing_team() {
         .unwrap();
 
     svc.remove_team("user1", &created.id).await.unwrap();
-    let list = svc.list_teams().await.unwrap();
+    let list = svc.list_teams("user1").await.unwrap();
     assert!(list.is_empty());
 }
 

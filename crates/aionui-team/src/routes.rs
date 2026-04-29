@@ -59,8 +59,9 @@ async fn create_team(
 
 async fn list_teams(
     State(state): State<TeamRouterState>,
+    Extension(user): Extension<CurrentUser>,
 ) -> Result<Json<ApiResponse<TeamListResponse>>, AppError> {
-    let teams = state.service.list_teams().await?;
+    let teams = state.service.list_teams(&user.id).await?;
     Ok(Json(ApiResponse::ok(teams)))
 }
 

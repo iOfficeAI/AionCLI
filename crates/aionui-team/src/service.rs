@@ -140,8 +140,8 @@ impl TeamSessionService {
         Ok(team.to_response())
     }
 
-    pub async fn list_teams(&self) -> Result<Vec<TeamResponse>, TeamError> {
-        let rows = self.repo.list_teams().await?;
+    pub async fn list_teams(&self, user_id: &str) -> Result<Vec<TeamResponse>, TeamError> {
+        let rows = self.repo.list_teams(user_id).await?;
         let mut teams = Vec::with_capacity(rows.len());
         for row in &rows {
             let team = Team::from_row(row)?;

@@ -102,7 +102,7 @@ async fn get_nonexistent_team_returns_none() {
 #[tokio::test]
 async fn list_teams_empty() {
     let (repo, _db) = repo().await;
-    let teams = repo.list_teams().await.unwrap();
+    let teams = repo.list_teams("system_default_user").await.unwrap();
     assert!(teams.is_empty());
 }
 
@@ -112,10 +112,50 @@ async fn list_teams_multiple() {
     repo.create_team(&make_team("t1", "Alpha")).await.unwrap();
     repo.create_team(&make_team("t2", "Beta")).await.unwrap();
 
-    let teams = repo.list_teams().await.unwrap();
+    let teams = repo.list_teams("system_default_user").await.unwrap();
     assert_eq!(teams.len(), 2);
     assert_eq!(teams[0].id, "t1");
     assert_eq!(teams[1].id, "t2");
+}
+
+#[tokio::test]
+async fn list_teams_filters_by_user_id() {
+    let (repo, _db) = repo().await;
+    let now = now_ms();
+    let team_a = TeamRow {
+        id: "ta".into(),
+        user_id: "userA".into(),
+        name: "A-team".into(),
+        workspace: String::new(),
+        workspace_mode: "shared".into(),
+        agents: r#"[{"slotId":"a1","name":"Lead","role":"lead"}]"#.into(),
+        lead_agent_id: Some("a1".into()),
+        session_mode: None,
+        created_at: now,
+        updated_at: now,
+    };
+    let team_b = TeamRow {
+        id: "tb".into(),
+        user_id: "userB".into(),
+        name: "B-team".into(),
+        workspace: String::new(),
+        workspace_mode: "shared".into(),
+        agents: r#"[{"slotId":"a1","name":"Lead","role":"lead"}]"#.into(),
+        lead_agent_id: Some("a1".into()),
+        session_mode: None,
+        created_at: now,
+        updated_at: now,
+    };
+    repo.create_team(&team_a).await.unwrap();
+    repo.create_team(&team_b).await.unwrap();
+
+    let list_a = repo.list_teams("userA").await.unwrap();
+    assert_eq!(list_a.len(), 1);
+    assert_eq!(list_a[0].id, "ta");
+
+    let list_b = repo.list_teams("userB").await.unwrap();
+    assert_eq!(list_b.len(), 1);
+    assert_eq!(list_b[0].id, "tb");
 }
 
 #[tokio::test]

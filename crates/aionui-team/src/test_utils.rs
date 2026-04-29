@@ -28,7 +28,7 @@ impl ITeamRepository for MockTeamRepo {
     async fn create_team(&self, _row: &TeamRow) -> Result<(), DbError> {
         Ok(())
     }
-    async fn list_teams(&self) -> Result<Vec<TeamRow>, DbError> {
+    async fn list_teams(&self, _user_id: &str) -> Result<Vec<TeamRow>, DbError> {
         Ok(vec![])
     }
     async fn get_team(&self, _id: &str) -> Result<Option<TeamRow>, DbError> {
