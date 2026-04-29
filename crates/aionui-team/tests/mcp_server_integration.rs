@@ -723,37 +723,57 @@ async fn ss2_stop_server_closes_listener() {
 
 #[tokio::test]
 async fn sb1_bridge_config_generation() {
-    let env = setup().await;
-    let config = aionui_team::TeamMcpStdioConfig::new(
-        env.server.port(),
-        env.server.auth_token().to_string(),
-        "lead-1".into(),
-    );
+    use aionui_team::{TeamMcpStdioConfig, TeamMcpStdioServerSpec};
 
-    let env_map = config.to_env_map();
-    assert_eq!(env_map["TEAM_MCP_PORT"], env.server.port().to_string());
-    assert_eq!(env_map["TEAM_MCP_TOKEN"], "test-token-123");
-    assert_eq!(env_map["TEAM_AGENT_SLOT_ID"], "lead-1");
+    let env = setup().await;
+    let config = TeamMcpStdioConfig {
+        port: env.server.port(),
+        token: env.server.auth_token().to_string(),
+        slot_id: "lead-1".into(),
+    };
+
+    let spec = TeamMcpStdioServerSpec::from_config("team-test", "/bin/aionui-backend", &config);
+    let env_map: std::collections::HashMap<_, _> = spec.env.iter().cloned().collect();
+    assert_eq!(
+        env_map[TeamMcpStdioConfig::ENV_PORT],
+        env.server.port().to_string()
+    );
+    assert_eq!(env_map[TeamMcpStdioConfig::ENV_TOKEN], "test-token-123");
+    assert_eq!(env_map[TeamMcpStdioConfig::ENV_SLOT_ID], "lead-1");
 
     env.server.stop();
 }
 
 #[tokio::test]
 async fn sb3_different_agents_get_different_slot_ids() {
+    use aionui_team::{TeamMcpStdioConfig, TeamMcpStdioServerSpec};
+
     let env = setup().await;
     let port = env.server.port();
     let token = env.server.auth_token().to_string();
 
-    let cfg_lead = aionui_team::TeamMcpStdioConfig::new(port, token.clone(), "lead-1".into());
-    let cfg_worker = aionui_team::TeamMcpStdioConfig::new(port, token, "worker-1".into());
+    let cfg_lead = TeamMcpStdioConfig {
+        port,
+        token: token.clone(),
+        slot_id: "lead-1".into(),
+    };
+    let cfg_worker = TeamMcpStdioConfig {
+        port,
+        token,
+        slot_id: "worker-1".into(),
+    };
+    let spec_lead = TeamMcpStdioServerSpec::from_config("t", "/b", &cfg_lead);
+    let spec_worker = TeamMcpStdioServerSpec::from_config("t", "/b", &cfg_worker);
+    let kv_lead: std::collections::HashMap<_, _> = spec_lead.env.iter().cloned().collect();
+    let kv_worker: std::collections::HashMap<_, _> = spec_worker.env.iter().cloned().collect();
 
     assert_eq!(
-        cfg_lead.to_env_map()["TEAM_MCP_PORT"],
-        cfg_worker.to_env_map()["TEAM_MCP_PORT"]
+        kv_lead[TeamMcpStdioConfig::ENV_PORT],
+        kv_worker[TeamMcpStdioConfig::ENV_PORT]
     );
     assert_ne!(
-        cfg_lead.to_env_map()["TEAM_AGENT_SLOT_ID"],
-        cfg_worker.to_env_map()["TEAM_AGENT_SLOT_ID"]
+        kv_lead[TeamMcpStdioConfig::ENV_SLOT_ID],
+        kv_worker[TeamMcpStdioConfig::ENV_SLOT_ID]
     );
 
     env.server.stop();
