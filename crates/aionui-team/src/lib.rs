@@ -4,6 +4,7 @@ pub mod events;
 pub mod mailbox;
 pub mod mcp;
 pub mod prompts;
+pub mod repair;
 pub mod routes;
 pub mod scheduler;
 pub mod service;
@@ -18,6 +19,7 @@ pub use events::TeamEventEmitter;
 pub use mailbox::Mailbox;
 pub use mcp::{TeamMcpServer, TeamMcpStdioConfig, TeamMcpStdioServerSpec};
 pub use prompts::{build_lead_prompt, build_teammate_prompt, build_wake_payload};
+pub use repair::repair_team_agents_if_missing;
 pub use routes::{TeamRouterState, team_routes};
 pub use scheduler::{
     SchedulerAction, TeammateManager, WAKE_TIMEOUT_MS, WakePayload, normalize_name,
