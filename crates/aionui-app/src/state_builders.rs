@@ -420,6 +420,7 @@ pub fn build_team_state(
         services.event_bus.clone(),
         services.worker_task_manager.clone(),
         backend_binary_path,
+        services.worker_task_manager.clone(),
     ));
     TeamRouterState { service }
 }

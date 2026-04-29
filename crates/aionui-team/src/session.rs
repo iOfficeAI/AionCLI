@@ -1,9 +1,11 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use aionui_ai_agent::{IWorkerTaskManager, SendMessageData};
+use aionui_common::generate_id;
 use aionui_db::ITeamRepository;
 use aionui_realtime::EventBroadcaster;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::error::TeamError;
 use crate::mailbox::Mailbox;
@@ -32,6 +34,7 @@ pub struct TeamSession {
     task_board: Arc<TaskBoard>,
     mcp_server: TeamMcpServer,
     backend_binary_path: Arc<PathBuf>,
+    task_manager: Arc<dyn IWorkerTaskManager>,
 }
 
 impl TeamSession {
@@ -40,6 +43,7 @@ impl TeamSession {
         repo: Arc<dyn ITeamRepository>,
         broadcaster: Arc<dyn EventBroadcaster>,
         backend_binary_path: Arc<PathBuf>,
+        task_manager: Arc<dyn IWorkerTaskManager>,
     ) -> Result<Self, TeamError> {
         let mailbox = Arc::new(Mailbox::new(repo.clone()));
         let task_board = Arc::new(TaskBoard::new(repo));
@@ -68,6 +72,7 @@ impl TeamSession {
             task_board,
             mcp_server,
             backend_binary_path,
+            task_manager,
         })
     }
 
@@ -171,7 +176,17 @@ impl TeamSession {
         self.scheduler.finalize_turn(&slot_id, &[]).await
     }
 
-    pub async fn send_message(&self, content: &str) -> Result<(), TeamError> {
+    /// Write a user message to the lead's mailbox and trigger a wake.
+    ///
+    /// Wake failures are logged but **not** propagated (D7b log-not-throw
+    /// semantics — see backend-audit §3.5 #46): the mailbox row is already
+    /// persisted, so surfacing an error to the HTTP caller would invite a
+    /// retry that double-writes the message.
+    pub async fn send_message(
+        &self,
+        content: &str,
+        files: Option<Vec<String>>,
+    ) -> Result<(), TeamError> {
         let lead_slot_id = self
             .scheduler
             .find_lead_slot_id()
@@ -193,13 +208,19 @@ impl TeamSession {
             .set_status(&lead_slot_id, TeammateStatus::Working)
             .await?;
 
+        self.try_wake(&lead_slot_id, files).await;
         Ok(())
     }
 
+    /// Write a user message to the specified agent's mailbox and trigger a wake.
+    ///
+    /// Same log-not-throw behaviour as [`send_message`]; see that method for
+    /// rationale.
     pub async fn send_message_to_agent(
         &self,
         slot_id: &str,
         content: &str,
+        files: Option<Vec<String>>,
     ) -> Result<(), TeamError> {
         self.scheduler.get_agent(slot_id).await?;
 
@@ -218,7 +239,65 @@ impl TeamSession {
             .set_status(slot_id, TeammateStatus::Working)
             .await?;
 
+        self.try_wake(slot_id, files).await;
         Ok(())
+    }
+
+    /// Compute the wake payload and forward it to the task manager. All
+    /// error paths downgrade to `warn!` — the mailbox write has already
+    /// succeeded and is the source of truth.
+    async fn try_wake(&self, slot_id: &str, files: Option<Vec<String>>) {
+        let input = match self.compute_wake_input(slot_id).await {
+            Ok(Some(input)) => input,
+            Ok(None) => {
+                warn!(
+                    team_id = %self.team.id,
+                    slot_id,
+                    "compute_wake_input returned None; skipping wake"
+                );
+                return;
+            }
+            Err(err) => {
+                warn!(
+                    team_id = %self.team.id,
+                    slot_id,
+                    error = %err,
+                    "compute_wake_input failed; skipping wake (mailbox already written)"
+                );
+                return;
+            }
+        };
+
+        if !input.should_send {
+            return;
+        }
+
+        let Some(handle) = self.task_manager.get_task(&input.conversation_id) else {
+            warn!(
+                team_id = %self.team.id,
+                slot_id,
+                conversation_id = %input.conversation_id,
+                "no active agent task for conversation; skipping wake (ensure_session must run first)"
+            );
+            return;
+        };
+
+        let data = SendMessageData {
+            content: input.first_message,
+            msg_id: generate_id(),
+            files: files.unwrap_or_default(),
+            inject_skills: Vec::new(),
+        };
+
+        if let Err(err) = handle.send_message(data).await {
+            warn!(
+                team_id = %self.team.id,
+                slot_id,
+                conversation_id = %input.conversation_id,
+                error = %err,
+                "agent.send_message failed; mailbox retained, wake will be retried on next trigger"
+            );
+        }
     }
 
     pub async fn add_agent(&self, agent: &TeamAgent) {
@@ -252,8 +331,16 @@ mod tests {
     use super::*;
     use crate::test_utils::MockTeamRepo;
     use crate::types::{Team, TeamAgent, TeammateRole};
-    use aionui_api_types::WebSocketMessage;
-    use std::sync::Arc;
+    use aionui_ai_agent::agent_manager::{AgentManagerHandle, IAgentManager, approval_key};
+    use aionui_ai_agent::stream_event::AgentStreamEvent;
+    use aionui_ai_agent::types::BuildTaskOptions;
+    use aionui_api_types::{AgentModeResponse, WebSocketMessage};
+    use aionui_common::{
+        AgentKillReason, AgentType, AppError, Confirmation, ConversationStatus, TimestampMs, now_ms,
+    };
+    use std::any::Any;
+    use std::sync::{Arc, Mutex};
+    use tokio::sync::broadcast;
 
     struct NullBroadcaster;
     impl EventBroadcaster for NullBroadcaster {
@@ -262,6 +349,166 @@ mod tests {
 
     fn backend_path() -> Arc<PathBuf> {
         Arc::new(PathBuf::from("/tmp/aionui-backend-test"))
+    }
+
+    /// Mock agent whose `send_message` pushes the received payload into a
+    /// shared log, optionally failing with a configurable error.
+    struct RecordingAgent {
+        conversation_id: String,
+        sent: Arc<Mutex<Vec<SendMessageData>>>,
+        fail_with: Option<String>,
+        event_tx: broadcast::Sender<AgentStreamEvent>,
+    }
+
+    impl RecordingAgent {
+        fn new(
+            conversation_id: &str,
+            sent: Arc<Mutex<Vec<SendMessageData>>>,
+            fail_with: Option<String>,
+        ) -> Self {
+            let (event_tx, _) = broadcast::channel(4);
+            Self {
+                conversation_id: conversation_id.into(),
+                sent,
+                fail_with,
+                event_tx,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl IAgentManager for RecordingAgent {
+        fn agent_type(&self) -> AgentType {
+            AgentType::Acp
+        }
+        fn status(&self) -> Option<ConversationStatus> {
+            None
+        }
+        fn workspace(&self) -> &str {
+            "/tmp/ws"
+        }
+        fn conversation_id(&self) -> &str {
+            &self.conversation_id
+        }
+        fn last_activity_at(&self) -> TimestampMs {
+            now_ms()
+        }
+        fn subscribe(&self) -> broadcast::Receiver<AgentStreamEvent> {
+            self.event_tx.subscribe()
+        }
+        async fn send_message(&self, data: SendMessageData) -> Result<(), AppError> {
+            self.sent.lock().unwrap().push(data);
+            match &self.fail_with {
+                Some(msg) => Err(AppError::Internal(msg.clone())),
+                None => Ok(()),
+            }
+        }
+        async fn stop(&self) -> Result<(), AppError> {
+            Ok(())
+        }
+        fn confirm(
+            &self,
+            _msg_id: &str,
+            _call_id: &str,
+            _data: serde_json::Value,
+            _always_allow: bool,
+        ) -> Result<(), AppError> {
+            Ok(())
+        }
+        fn get_confirmations(&self) -> Vec<Confirmation> {
+            Vec::new()
+        }
+        fn check_approval(&self, action: &str, command_type: Option<&str>) -> bool {
+            let _ = approval_key(Some(action), command_type);
+            false
+        }
+        fn kill(&self, _reason: Option<AgentKillReason>) -> Result<(), AppError> {
+            Ok(())
+        }
+        async fn get_mode(&self) -> Result<AgentModeResponse, AppError> {
+            Ok(AgentModeResponse {
+                mode: "default".into(),
+                initialized: false,
+            })
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
+
+    /// In-memory stub for [`IWorkerTaskManager`]. Only `get_task` is
+    /// exercised by D7b; the other methods are unreachable in these tests
+    /// and panic to surface drift early.
+    struct StubTaskManager {
+        tasks: Mutex<std::collections::HashMap<String, AgentManagerHandle>>,
+    }
+
+    impl StubTaskManager {
+        fn new() -> Self {
+            Self {
+                tasks: Mutex::new(std::collections::HashMap::new()),
+            }
+        }
+
+        fn insert(&self, conv_id: &str, handle: AgentManagerHandle) {
+            self.tasks.lock().unwrap().insert(conv_id.into(), handle);
+        }
+    }
+
+    impl IWorkerTaskManager for StubTaskManager {
+        fn get_task(&self, conversation_id: &str) -> Option<AgentManagerHandle> {
+            self.tasks.lock().unwrap().get(conversation_id).cloned()
+        }
+        fn get_or_build_task(
+            &self,
+            _conversation_id: &str,
+            _options: BuildTaskOptions,
+        ) -> Result<AgentManagerHandle, AppError> {
+            panic!("get_or_build_task should not be called in D7b tests")
+        }
+        fn kill(
+            &self,
+            _conversation_id: &str,
+            _reason: Option<AgentKillReason>,
+        ) -> Result<(), AppError> {
+            Ok(())
+        }
+        fn clear(&self) {}
+        fn active_count(&self) -> usize {
+            self.tasks.lock().unwrap().len()
+        }
+        fn collect_idle(&self, _idle_threshold_ms: TimestampMs) -> Vec<String> {
+            Vec::new()
+        }
+    }
+
+    /// Build a task_manager pre-populated with a [`RecordingAgent`] per
+    /// conversation in `conv_ids`. `fail_with` — when set — makes
+    /// `send_message` fail for every agent so tests can exercise the
+    /// log-not-throw path.
+    fn task_manager_with_agents(
+        conv_ids: &[&str],
+        fail_with: Option<String>,
+    ) -> (
+        Arc<dyn IWorkerTaskManager>,
+        Arc<Mutex<Vec<SendMessageData>>>,
+    ) {
+        let sent: Arc<Mutex<Vec<SendMessageData>>> = Arc::new(Mutex::new(Vec::new()));
+        let stub = StubTaskManager::new();
+        for conv_id in conv_ids {
+            let agent: AgentManagerHandle = Arc::new(RecordingAgent::new(
+                conv_id,
+                sent.clone(),
+                fail_with.clone(),
+            ));
+            stub.insert(conv_id, agent);
+        }
+        (Arc::new(stub), sent)
+    }
+
+    /// Empty task_manager — `get_task` returns `None` for every conversation.
+    fn empty_task_manager() -> Arc<dyn IWorkerTaskManager> {
+        Arc::new(StubTaskManager::new())
     }
 
     fn make_team() -> Team {
@@ -303,9 +550,15 @@ mod tests {
     async fn start_session() -> TeamSession {
         let repo: Arc<dyn ITeamRepository> = Arc::new(MockTeamRepo::new());
         let broadcaster: Arc<dyn EventBroadcaster> = Arc::new(NullBroadcaster);
-        TeamSession::start(make_team(), repo, broadcaster, backend_path())
-            .await
-            .unwrap()
+        TeamSession::start(
+            make_team(),
+            repo,
+            broadcaster,
+            backend_path(),
+            empty_task_manager(),
+        )
+        .await
+        .unwrap()
     }
 
     #[tokio::test]
@@ -346,10 +599,16 @@ mod tests {
         let repo = Arc::new(MockTeamRepo::new());
         let repo_dyn: Arc<dyn ITeamRepository> = repo.clone();
         let broadcaster: Arc<dyn EventBroadcaster> = Arc::new(NullBroadcaster);
-        let session = TeamSession::start(make_team(), repo_dyn, broadcaster, backend_path())
-            .await
-            .unwrap();
-        session.send_message("Hello team").await.unwrap();
+        let session = TeamSession::start(
+            make_team(),
+            repo_dyn,
+            broadcaster,
+            backend_path(),
+            empty_task_manager(),
+        )
+        .await
+        .unwrap();
+        session.send_message("Hello team", None).await.unwrap();
 
         let state = repo.state.lock().unwrap();
         assert_eq!(state.messages.len(), 1);
@@ -364,11 +623,17 @@ mod tests {
         let repo = Arc::new(MockTeamRepo::new());
         let repo_dyn: Arc<dyn ITeamRepository> = repo.clone();
         let broadcaster: Arc<dyn EventBroadcaster> = Arc::new(NullBroadcaster);
-        let session = TeamSession::start(make_team(), repo_dyn, broadcaster, backend_path())
-            .await
-            .unwrap();
+        let session = TeamSession::start(
+            make_team(),
+            repo_dyn,
+            broadcaster,
+            backend_path(),
+            empty_task_manager(),
+        )
+        .await
+        .unwrap();
         session
-            .send_message_to_agent("worker-1", "Do this task")
+            .send_message_to_agent("worker-1", "Do this task", None)
             .await
             .unwrap();
 
@@ -382,7 +647,9 @@ mod tests {
     #[tokio::test]
     async fn send_message_to_unknown_agent_returns_error() {
         let session = start_session().await;
-        let result = session.send_message_to_agent("nonexistent", "Hello").await;
+        let result = session
+            .send_message_to_agent("nonexistent", "Hello", None)
+            .await;
         assert!(result.is_err());
         session.stop();
     }
@@ -599,6 +866,113 @@ mod tests {
         let session = start_session().await;
         let result = session.on_agent_finish("nope", false).await;
         assert!(result.is_err());
+        session.stop();
+    }
+
+    // -- D7b wake-path tests -------------------------------------------------
+
+    async fn start_session_with(
+        task_manager: Arc<dyn IWorkerTaskManager>,
+    ) -> (TeamSession, Arc<MockTeamRepo>) {
+        let repo = Arc::new(MockTeamRepo::new());
+        let repo_dyn: Arc<dyn ITeamRepository> = repo.clone();
+        let broadcaster: Arc<dyn EventBroadcaster> = Arc::new(NullBroadcaster);
+        let session = TeamSession::start(
+            make_team(),
+            repo_dyn,
+            broadcaster,
+            backend_path(),
+            task_manager,
+        )
+        .await
+        .unwrap();
+        (session, repo)
+    }
+
+    #[tokio::test]
+    async fn send_message_forwards_files_to_task_manager() {
+        let (task_manager, sent) = task_manager_with_agents(&["c1"], None);
+        let (session, _repo) = start_session_with(task_manager).await;
+
+        session
+            .send_message(
+                "Hello",
+                Some(vec!["/tmp/a.txt".into(), "/tmp/b.txt".into()]),
+            )
+            .await
+            .unwrap();
+
+        let log = sent.lock().unwrap();
+        assert_eq!(log.len(), 1, "expected exactly one send_message call");
+        assert_eq!(log[0].files, vec!["/tmp/a.txt", "/tmp/b.txt"]);
+        assert!(log[0].content.contains("Hello"));
+        assert!(!log[0].msg_id.is_empty());
+        session.stop();
+    }
+
+    #[tokio::test]
+    async fn send_message_without_active_task_does_not_error() {
+        // Empty task_manager → get_task returns None → log-not-throw: the
+        // mailbox write must still succeed and the call must return Ok.
+        let (session, repo) = start_session_with(empty_task_manager()).await;
+
+        session
+            .send_message("queued", None)
+            .await
+            .expect("send_message must return Ok even when no task is active");
+
+        let state = repo.state.lock().unwrap();
+        assert_eq!(state.messages.len(), 1);
+        assert_eq!(state.messages[0].content, "queued");
+        session.stop();
+    }
+
+    #[tokio::test]
+    async fn send_message_swallows_task_manager_send_failure() {
+        // Agent present but send_message fails — D7b must log and return Ok
+        // (P0#46). A propagated error would invite retries that double-write
+        // the mailbox.
+        let (task_manager, sent) = task_manager_with_agents(&["c1"], Some("boom".into()));
+        let (session, _repo) = start_session_with(task_manager).await;
+
+        session
+            .send_message("payload", None)
+            .await
+            .expect("wake failure must be swallowed");
+
+        // The attempt still reached the agent, so the sent log has one entry.
+        assert_eq!(sent.lock().unwrap().len(), 1);
+        session.stop();
+    }
+
+    #[tokio::test]
+    async fn send_message_to_agent_targets_specific_conversation() {
+        let (task_manager, sent) = task_manager_with_agents(&["c1", "c2"], None);
+        let (session, _repo) = start_session_with(task_manager).await;
+
+        session
+            .send_message_to_agent("worker-1", "do X", Some(vec!["/tmp/x.md".into()]))
+            .await
+            .unwrap();
+
+        let log = sent.lock().unwrap();
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0].files, vec!["/tmp/x.md"]);
+        assert!(log[0].content.contains("do X"));
+        session.stop();
+    }
+
+    #[tokio::test]
+    async fn send_message_with_empty_content_still_wakes() {
+        // compute_wake_input returns should_send=true whenever the mailbox has
+        // unread entries, regardless of content. Ensure the wake still fires
+        // when a caller passes an empty string.
+        let (task_manager, sent) = task_manager_with_agents(&["c1"], None);
+        let (session, _repo) = start_session_with(task_manager).await;
+
+        session.send_message("", None).await.unwrap();
+
+        assert_eq!(sent.lock().unwrap().len(), 1);
         session.stop();
     }
 }

@@ -989,7 +989,7 @@ async fn ss3_stop_session_without_active_is_noop() {
 #[tokio::test]
 async fn sm4_send_message_no_session_returns_error() {
     let svc = setup();
-    let result = svc.send_message("nonexistent", "Hello").await;
+    let result = svc.send_message("nonexistent", "Hello", None).await;
     assert!(result.is_err());
 }
 
@@ -1008,7 +1008,9 @@ async fn sm1_send_message_with_active_session() {
         .unwrap();
 
     svc.ensure_session(&created.id).await.unwrap();
-    svc.send_message(&created.id, "Hello team").await.unwrap();
+    svc.send_message(&created.id, "Hello team", None)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -1027,7 +1029,7 @@ async fn sa_send_message_to_agent_with_active_session() {
 
     svc.ensure_session(&created.id).await.unwrap();
     let worker_slot = created.agents[1].slot_id.clone();
-    svc.send_message_to_agent(&created.id, &worker_slot, "Do this")
+    svc.send_message_to_agent(&created.id, &worker_slot, "Do this", None)
         .await
         .unwrap();
 }
@@ -1048,7 +1050,7 @@ async fn sa3_send_message_to_nonexistent_agent() {
 
     svc.ensure_session(&created.id).await.unwrap();
     let result = svc
-        .send_message_to_agent(&created.id, "nonexistent", "Hello")
+        .send_message_to_agent(&created.id, "nonexistent", "Hello", None)
         .await;
     assert!(result.is_err());
 }
@@ -1086,7 +1088,7 @@ async fn dispose_all_cleans_up_sessions() {
 
     svc.dispose_all();
 
-    let result = svc.send_message(&t1.id, "Hello").await;
+    let result = svc.send_message(&t1.id, "Hello", None).await;
     assert!(result.is_err());
 }
 
@@ -1111,7 +1113,7 @@ async fn td_delete_team_stops_session() {
     svc.ensure_session(&created.id).await.unwrap();
     svc.remove_team("user1", &created.id).await.unwrap();
 
-    let result = svc.send_message(&created.id, "Hello").await;
+    let result = svc.send_message(&created.id, "Hello", None).await;
     assert!(result.is_err());
 }
 
@@ -1245,7 +1247,7 @@ async fn d9_ensure_session_rollbacks_when_build_fails() {
     assert_eq!(calls.kill.len(), 1);
     assert_eq!(calls.build.len(), 1);
 
-    let send_result = svc.send_message(&created.id, "Hello").await;
+    let send_result = svc.send_message(&created.id, "Hello", None).await;
     assert!(
         send_result.is_err(),
         "session must not be registered after build failure"

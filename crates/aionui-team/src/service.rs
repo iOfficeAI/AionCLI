@@ -392,6 +392,7 @@ impl TeamSessionService {
             self.repo.clone(),
             self.broadcaster.clone(),
             self.backend_binary_path.clone(),
+            self.task_manager.clone(),
         )
         .await?;
 
@@ -508,12 +509,17 @@ impl TeamSessionService {
         }
     }
 
-    pub async fn send_message(&self, team_id: &str, content: &str) -> Result<(), TeamError> {
+    pub async fn send_message(
+        &self,
+        team_id: &str,
+        content: &str,
+        files: Option<Vec<String>>,
+    ) -> Result<(), TeamError> {
         let entry = self
             .sessions
             .get(team_id)
             .ok_or_else(|| TeamError::SessionNotFound(team_id.into()))?;
-        entry.session.send_message(content).await
+        entry.session.send_message(content, files).await
     }
 
     pub async fn send_message_to_agent(
@@ -521,12 +527,16 @@ impl TeamSessionService {
         team_id: &str,
         slot_id: &str,
         content: &str,
+        files: Option<Vec<String>>,
     ) -> Result<(), TeamError> {
         let entry = self
             .sessions
             .get(team_id)
             .ok_or_else(|| TeamError::SessionNotFound(team_id.into()))?;
-        entry.session.send_message_to_agent(slot_id, content).await
+        entry
+            .session
+            .send_message_to_agent(slot_id, content, files)
+            .await
     }
 
     pub fn dispose_all(&self) {

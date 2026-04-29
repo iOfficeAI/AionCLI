@@ -66,18 +66,24 @@ pub struct RenameAgentRequest {
 /// Request body for `POST /api/teams/:id/messages`.
 ///
 /// Sends a user message to the team lead's mailbox, triggering a
-/// wake cycle.
+/// wake cycle. `files` is optional and — when present — forwarded
+/// to the underlying agent together with the wake payload.
 #[derive(Debug, Deserialize)]
 pub struct SendTeamMessageRequest {
     pub content: String,
+    #[serde(default)]
+    pub files: Option<Vec<String>>,
 }
 
 /// Request body for `POST /api/teams/:id/agents/:slotId/messages`.
 ///
 /// Sends a user message directly to a specific agent's mailbox.
+/// `files` semantics match [`SendTeamMessageRequest`].
 #[derive(Debug, Deserialize)]
 pub struct SendAgentMessageRequest {
     pub content: String,
+    #[serde(default)]
+    pub files: Option<Vec<String>>,
 }
 
 // ---------------------------------------------------------------------------

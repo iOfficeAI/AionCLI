@@ -139,7 +139,10 @@ async fn send_message(
     body: Result<Json<SendTeamMessageRequest>, JsonRejection>,
 ) -> Result<Json<ApiResponse<()>>, AppError> {
     let Json(req) = body.map_err(|e| AppError::BadRequest(e.to_string()))?;
-    state.service.send_message(&id, &req.content).await?;
+    state
+        .service
+        .send_message(&id, &req.content, req.files)
+        .await?;
     Ok(Json(ApiResponse::success()))
 }
 
@@ -151,7 +154,7 @@ async fn send_message_to_agent(
     let Json(req) = body.map_err(|e| AppError::BadRequest(e.to_string()))?;
     state
         .service
-        .send_message_to_agent(&params.id, &params.slot_id, &req.content)
+        .send_message_to_agent(&params.id, &params.slot_id, &req.content, req.files)
         .await?;
     Ok(Json(ApiResponse::success()))
 }
