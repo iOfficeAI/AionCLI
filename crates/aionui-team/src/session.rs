@@ -319,8 +319,17 @@ impl TeamSession {
         self.scheduler.rename_agent(slot_id, new_name).await
     }
 
-    pub async fn spawn_agent(&self, _caller_slot_id: &str, _req: SpawnAgentRequest) -> Result<TeamAgent, TeamError> {
-        todo!("W5-D29a-2..D29d will fill in the implementation")
+    pub async fn spawn_agent(&self, caller_slot_id: &str, req: SpawnAgentRequest) -> Result<TeamAgent, TeamError> {
+        // Step 1: caller must be a Lead. The MCP dispatch layer also gates
+        // this, but spawn_agent is exposed on TeamSession so any call site
+        // (including future direct service callers) must re-check.
+        let caller = self.scheduler.get_agent(caller_slot_id).await?;
+        if caller.role != TeammateRole::Lead {
+            return Err(TeamError::LeaderOnly("spawn_agent".into()));
+        }
+
+        let _ = req;
+        todo!("W5-D29a-3..D29d will fill in the remaining spawn steps")
     }
 
     pub fn stop(&self) {
@@ -669,6 +678,49 @@ mod tests {
         let result = session.rename_agent("nonexistent", "X").await;
         assert!(result.is_err());
         session.stop();
+    }
+
+    // -- W5-D29a-2: spawn_agent caller guard --------------------------------
+
+    fn sample_spawn_req() -> SpawnAgentRequest {
+        SpawnAgentRequest {
+            name: "Helper".into(),
+            agent_type: None,
+            custom_agent_id: None,
+            model: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_rejects_non_lead_caller() {
+        let session = start_session().await;
+        let result = session.spawn_agent("worker-1", sample_spawn_req()).await;
+        assert!(
+            matches!(&result, Err(TeamError::LeaderOnly(msg)) if msg == "spawn_agent"),
+            "non-lead caller must be rejected with LeaderOnly, got {result:?}"
+        );
+        session.stop();
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_rejects_unknown_caller() {
+        let session = start_session().await;
+        let result = session.spawn_agent("nonexistent", sample_spawn_req()).await;
+        assert!(
+            matches!(&result, Err(TeamError::AgentNotFound(_))),
+            "unknown caller must surface AgentNotFound, got {result:?}"
+        );
+        session.stop();
+    }
+
+    // Lead caller is expected to pass the guard and hit the todo!() for
+    // subsequent slices (W5-D29a-3..D29d). This pins that the guard does not
+    // over-reject a legitimate Lead caller.
+    #[tokio::test]
+    #[should_panic(expected = "W5-D29a-3..D29d")]
+    async fn spawn_agent_lead_caller_passes_guard() {
+        let session = start_session().await;
+        let _ = session.spawn_agent("lead-1", sample_spawn_req()).await;
     }
 
     // -- D7a new method tests ------------------------------------------------

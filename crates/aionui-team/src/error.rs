@@ -14,6 +14,9 @@ pub enum TeamError {
     #[error("Invalid request: {0}")]
     InvalidRequest(String),
 
+    #[error("Leader-only action: {0}")]
+    LeaderOnly(String),
+
     #[error("Session not found: {0}")]
     SessionNotFound(String),
 
@@ -34,6 +37,7 @@ impl From<TeamError> for AppError {
             TeamError::AgentNotFound(msg) => AppError::NotFound(msg),
             TeamError::TaskNotFound(msg) => AppError::NotFound(msg),
             TeamError::InvalidRequest(msg) => AppError::BadRequest(msg),
+            TeamError::LeaderOnly(msg) => AppError::Forbidden(msg),
             TeamError::SessionNotFound(msg) => AppError::NotFound(msg),
             TeamError::BlockedTaskNotFound(msg) => AppError::BadRequest(msg),
             TeamError::Database(db_err) => AppError::from(db_err),
@@ -68,6 +72,12 @@ mod tests {
     fn invalid_request_maps_to_bad_request() {
         let err: AppError = TeamError::InvalidRequest("empty agents".into()).into();
         assert!(matches!(err, AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn leader_only_maps_to_forbidden() {
+        let err: AppError = TeamError::LeaderOnly("spawn_agent".into()).into();
+        assert!(matches!(err, AppError::Forbidden(msg) if msg == "spawn_agent"));
     }
 
     #[test]
