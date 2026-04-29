@@ -189,22 +189,50 @@ impl AgentRegistry {
             .cloned()
     }
 
-    /// Every row whose `agent_type` matches, sorted by id.
+    /// Every enabled, installed row whose `agent_type` matches,
+    /// sorted by id. See [`Self::list_all`] for the filter semantics.
     pub async fn list_by_agent_type(&self, agent_type: AgentType) -> Vec<AgentMetadata> {
         let guard = self.by_id.read().await;
         let mut rows: Vec<AgentMetadata> = guard
             .values()
-            .filter(|m| m.agent_type == agent_type)
+            .filter(|m| m.agent_type == agent_type && is_visible(m))
             .cloned()
             .collect();
         rows.sort_by(|a, b| a.id.cmp(&b.id));
         rows
     }
 
-    /// Snapshot of every row (enabled or not).
+    /// Snapshot of every row the caller is expected to see — rows
+    /// that are user-disabled (`enabled = 0`) or whose spawn command
+    /// could not be located on `$PATH` (`available = false`) are
+    /// filtered out. `/api/agents` feeds the frontend pill bar, which
+    /// would otherwise render unusable vendor chips that fail the
+    /// moment the user tries to spawn them.
     pub async fn list_all(&self) -> Vec<AgentMetadata> {
+        self.by_id
+            .read()
+            .await
+            .values()
+            .filter(|m| is_visible(m))
+            .cloned()
+            .collect()
+    }
+
+    /// Unfiltered snapshot — used by internal paths that legitimately
+    /// need to see user-disabled or missing rows (e.g. the UI's
+    /// "manage agents" surface). Keep external API handlers on
+    /// [`Self::list_all`].
+    pub async fn list_all_including_hidden(&self) -> Vec<AgentMetadata> {
         self.by_id.read().await.values().cloned().collect()
     }
+}
+
+/// A catalog row is visible to callers when the user has it enabled
+/// and the spawn command was resolved at hydrate/refresh time. The
+/// second check is what keeps uninstalled CLIs (e.g. `cursor` when
+/// only `claude` is on PATH) off the pill bar.
+fn is_visible(meta: &AgentMetadata) -> bool {
+    meta.enabled && meta.available
 }
 
 /// Turn a DB row into the public `AgentMetadata`, probing the command
@@ -378,8 +406,11 @@ mod tests {
 
     #[tokio::test]
     async fn hydrate_loads_seed_rows() {
+        // `list_all_including_hidden` bypasses the available/enabled
+        // filter so this assertion keeps counting the seed rows even
+        // when none of the CLIs are installed on the test host.
         let reg = registry().await;
-        let all = reg.list_all().await;
+        let all = reg.list_all_including_hidden().await;
         assert_eq!(all.len(), 20);
     }
 
@@ -418,18 +449,52 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn claude_has_no_yolo_id() {
+    async fn claude_yolo_id_maps_to_bypass_permissions() {
         let reg = registry().await;
         let claude = reg.find_builtin_by_backend("claude").await.unwrap();
-        assert!(claude.behavior_policy.yolo_id.is_none());
+        assert_eq!(
+            claude.behavior_policy.yolo_id.as_deref(),
+            Some("bypassPermissions")
+        );
+    }
+
+    /// On a host that has *none* of the seeded CLIs installed, the
+    /// public listing collapses to the rows that don't need one
+    /// (Aion CLI is `agent_source = internal` with no `command`).
+    /// This guards the pill-bar contract: never show an unusable
+    /// vendor.
+    #[tokio::test]
+    async fn list_all_filters_out_unavailable_rows() {
+        let reg = registry().await;
+        let visible = reg.list_all().await;
+        assert!(
+            visible.iter().all(|m| m.enabled && m.available),
+            "list_all must only return enabled + available rows, got: {:?}",
+            visible
+                .iter()
+                .map(|m| (&m.id, m.enabled, m.available))
+                .collect::<Vec<_>>()
+        );
+        // Aion CLI (internal, no spawn command) is always available.
+        assert!(
+            visible
+                .iter()
+                .any(|m| m.agent_type == AgentType::Aionrs),
+            "internal aionrs row should survive the filter"
+        );
     }
 
     #[tokio::test]
     async fn list_by_agent_type_counts_seed_rows() {
+        // Seed counts — exercised against the unfiltered view because
+        // on CI hosts the CLIs aren't installed, so `list_by_agent_type`
+        // (which applies the visibility filter) would report zero.
         let reg = registry().await;
-        assert_eq!(reg.list_by_agent_type(AgentType::Acp).await.len(), 17);
-        assert_eq!(reg.list_by_agent_type(AgentType::Nanobot).await.len(), 1);
-        assert_eq!(reg.list_by_agent_type(AgentType::Aionrs).await.len(), 1);
+        let all = reg.list_all_including_hidden().await;
+        let count = |t: AgentType| all.iter().filter(|m| m.agent_type == t).count();
+        assert_eq!(count(AgentType::Acp), 17);
+        assert_eq!(count(AgentType::Nanobot), 1);
+        assert_eq!(count(AgentType::Aionrs), 1);
     }
 
     #[tokio::test]
