@@ -5,6 +5,32 @@ use crate::scheduler::SchedulerAction;
 use crate::types::TeammateRole;
 
 // ---------------------------------------------------------------------------
+// Tool description constants (原样复用 AionUi `toolDescriptions.ts`)
+// ---------------------------------------------------------------------------
+
+/// `team_spawn_agent` 工具描述 — 原样复制自 AionUi `toolDescriptions.ts`
+/// 对应 team-prompts.md §5.2 `team_spawn_agent` Description 原文。
+/// 禁止翻译、改写；aionui-audit §8 #5 硬约束。
+pub const TEAM_SPAWN_AGENT_DESCRIPTION: &str = r#"Create a new teammate agent to join the team.
+
+Use this only when one of the following is true:
+- The user explicitly approved the proposed teammate lineup in a previous message
+- The user explicitly instructed you to create a specific teammate immediately
+
+Before calling this tool in the normal planning flow:
+- Start with one short sentence explaining why additional teammates would help
+- Tell the user which teammate(s) you recommend
+- Present the proposal as a table with: name, responsibility, recommended agent type/backend, and recommended model
+- Include each teammate's responsibility, recommended agent type/backend, and model
+- Ask whether to create them as proposed or change any names, responsibilities, or agent types
+- In that approval question, remind the user that they can later ask you to replace or adjust any teammate if the lineup is not working well
+- Do NOT call this tool in that same turn; wait for explicit approval in a later user message
+
+When calling this tool, provide the model parameter if a specific model was recommended and approved.
+
+The new agent will be created and added to the team. You can then assign tasks and send messages to it."#;
+
+// ---------------------------------------------------------------------------
 // Tool descriptors (returned by tools/list)
 // ---------------------------------------------------------------------------
 
@@ -31,7 +57,7 @@ pub fn all_tool_descriptors() -> Vec<ToolDescriptor> {
         },
         ToolDescriptor {
             name: "team_spawn_agent".into(),
-            description: "Dynamically create a new teammate agent (Lead only).".into(),
+            description: TEAM_SPAWN_AGENT_DESCRIPTION.into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -264,6 +290,24 @@ mod tests {
             assert!(!d.description.is_empty());
             assert_eq!(d.input_schema["type"], "object");
         }
+    }
+
+    #[test]
+    fn team_spawn_agent_description_is_aionui_original() {
+        let desc = all_tool_descriptors()
+            .into_iter()
+            .find(|d| d.name == "team_spawn_agent")
+            .expect("team_spawn_agent descriptor must exist")
+            .description;
+        assert_eq!(desc, TEAM_SPAWN_AGENT_DESCRIPTION);
+        assert!(
+            desc.contains("Before calling this tool"),
+            "description must be the full AionUi original, not the legacy one-liner"
+        );
+        assert!(
+            desc.contains("explicitly approved"),
+            "description must retain the explicit-approval precondition clause"
+        );
     }
 
     #[test]
