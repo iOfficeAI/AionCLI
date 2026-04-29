@@ -132,6 +132,18 @@ pub async fn build_module_states(
         },
     };
 
+    // W3-D16c: wire the team session service as the ConversationService's
+    // team router so solo-chat `send_message` on a team-owned conversation is
+    // forwarded into the team runtime (§17.3). Must happen after both states
+    // are built; the set is a no-op until here because build_conversation_state
+    // initializes the router slot to None.
+    states
+        .conversation
+        .conversation_service
+        .set_team_router(Some(
+            states.team.service.clone() as Arc<dyn aionui_conversation::ITeamMessageRouter>
+        ));
+
     (states, channel_components)
 }
 

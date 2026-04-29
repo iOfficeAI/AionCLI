@@ -13,7 +13,7 @@ use aionui_db::{
 };
 use aionui_realtime::EventBroadcaster;
 
-use aionui_conversation::ConversationService;
+use aionui_conversation::{ConversationService, ITeamMessageRouter};
 use aionui_team::TeamSessionService;
 use common::MockTeamRepo;
 
@@ -114,6 +114,13 @@ impl IConversationRepository for MockConversationRepo {
         &self,
         _user_id: &str,
         _conversation_id: &str,
+    ) -> Result<Vec<ConversationRow>, DbError> {
+        Ok(vec![])
+    }
+    async fn list_by_team_id(
+        &self,
+        _user_id: &str,
+        _team_id: &str,
     ) -> Result<Vec<ConversationRow>, DbError> {
         Ok(vec![])
     }
@@ -1428,5 +1435,29 @@ async fn d115_remove_team_kills_every_agent_process() {
         tm.active_count(),
         0,
         "every agent worker must be torn down after remove_team"
+    );
+}
+
+// ===========================================================================
+// W3-D16c: ITeamMessageRouter impl
+// ===========================================================================
+
+/// When a conversation does not belong to any live team session, the router
+/// must surface `AppError::NotFound` rather than silently succeeding or
+/// panicking — ConversationService relies on this signal to distinguish
+/// "truly unknown" from "known but team runtime unavailable".
+#[tokio::test]
+async fn route_agent_message_unknown_conversation_returns_not_found() {
+    let svc = setup();
+    let router: &dyn ITeamMessageRouter = &svc;
+
+    let err = router
+        .route_agent_message("conv-does-not-exist", "hello", false)
+        .await
+        .expect_err("routing an unknown conversation must fail");
+
+    assert!(
+        matches!(err, AppError::NotFound(ref msg) if msg.contains("conv-does-not-exist")),
+        "expected NotFound carrying the conversation id, got: {err:?}"
     );
 }

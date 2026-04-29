@@ -5,11 +5,12 @@ use aionui_ai_agent::IWorkerTaskManager;
 use aionui_api_types::{
     AddAgentRequest, CreateConversationRequest, CreateTeamRequest, TeamAgentResponse, TeamResponse,
 };
-use aionui_common::{AgentKillReason, AgentType, ProviderWithModel, generate_id, now_ms};
-use aionui_conversation::ConversationService;
+use aionui_common::{AgentKillReason, AgentType, AppError, ProviderWithModel, generate_id, now_ms};
+use aionui_conversation::{ConversationService, ITeamMessageRouter};
 use aionui_db::models::TeamRow;
 use aionui_db::{IConversationRepository, ITeamRepository, UpdateTeamParams};
 use aionui_realtime::EventBroadcaster;
+use async_trait::async_trait;
 use dashmap::DashMap;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
@@ -597,6 +598,59 @@ impl TeamSessionService {
             self.stop_session(&key);
         }
         info!("All team sessions disposed");
+    }
+
+    /// Locate the (team_id, slot_id) pair that owns a given conversation.
+    ///
+    /// Phase1 walks every live session's agent roster — cheap at the current
+    /// scale (≤ dozens of sessions × ≤ dozens of agents) and keeps the data
+    /// flow one-directional (no reverse index to invalidate when agents are
+    /// added, removed, or renamed).
+    async fn locate_agent_by_conversation(
+        &self,
+        conversation_id: &str,
+    ) -> Option<(String, String)> {
+        for entry in self.sessions.iter() {
+            let team_id = entry.key().clone();
+            let agents = entry.session.scheduler().list_agents().await;
+            if let Some(agent) = agents
+                .into_iter()
+                .find(|a| a.conversation_id == conversation_id)
+            {
+                return Some((team_id, agent.slot_id));
+            }
+        }
+        None
+    }
+}
+
+#[async_trait]
+impl ITeamMessageRouter for TeamSessionService {
+    /// Route a solo-chat `send_message` into the team runtime by locating the
+    /// conversation's owning session and slot, then deferring to
+    /// [`Self::send_message_to_agent`].
+    ///
+    /// `silent` is accepted for forward compatibility with the team prompt
+    /// pipeline but is unused in phase1 — the mailbox contract currently has
+    /// no "silent" variant, so every routed message is a normal user message.
+    async fn route_agent_message(
+        &self,
+        conversation_id: &str,
+        content: &str,
+        _silent: bool,
+    ) -> Result<(), AppError> {
+        let (team_id, slot_id) = self
+            .locate_agent_by_conversation(conversation_id)
+            .await
+            .ok_or_else(|| {
+                AppError::NotFound(format!(
+                    "no live team session owns conversation {conversation_id}"
+                ))
+            })?;
+
+        self.send_message_to_agent(&team_id, &slot_id, content, None)
+            .await
+            .map_err(Into::into)
     }
 }
 
