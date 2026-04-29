@@ -66,9 +66,10 @@ async fn list_teams(
 
 async fn get_team(
     State(state): State<TeamRouterState>,
+    Extension(user): Extension<CurrentUser>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<TeamResponse>>, AppError> {
-    let team = state.service.get_team(&id).await?;
+    let team = state.service.get_team(&user.id, &id).await?;
     Ok(Json(ApiResponse::ok(team)))
 }
 

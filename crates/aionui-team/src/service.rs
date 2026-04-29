@@ -150,12 +150,15 @@ impl TeamSessionService {
         Ok(teams)
     }
 
-    pub async fn get_team(&self, team_id: &str) -> Result<TeamResponse, TeamError> {
+    pub async fn get_team(&self, user_id: &str, team_id: &str) -> Result<TeamResponse, TeamError> {
         let row = self
             .repo
             .get_team(team_id)
             .await?
             .ok_or_else(|| TeamError::TeamNotFound(team_id.into()))?;
+        if row.user_id != user_id {
+            return Err(TeamError::TeamNotFound(team_id.into()));
+        }
         let team = Team::from_row(&row)?;
         Ok(team.to_response())
     }
@@ -166,6 +169,9 @@ impl TeamSessionService {
             .get_team(team_id)
             .await?
             .ok_or_else(|| TeamError::TeamNotFound(team_id.into()))?;
+        if row.user_id != user_id {
+            return Err(TeamError::TeamNotFound(team_id.into()));
+        }
         let team = Team::from_row(&row)?;
 
         self.stop_session(team_id);
