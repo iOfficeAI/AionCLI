@@ -1,4 +1,7 @@
 pub mod lead;
+pub mod team_guide;
+
+pub use team_guide::{TEAM_GUIDE_PROMPT_TEMPLATE, build_team_guide_prompt};
 
 use crate::types::{
     MailboxMessage, MailboxMessageType, TaskStatus, TeamAgent, TeamTask, TeammateRole,
