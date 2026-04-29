@@ -174,6 +174,14 @@ impl IConversationRepository for MockRepo {
         Ok(vec![])
     }
 
+    async fn list_by_team_id(
+        &self,
+        _user_id: &str,
+        _team_id: &str,
+    ) -> Result<Vec<ConversationRow>, aionui_db::DbError> {
+        Ok(vec![])
+    }
+
     async fn list_associated(
         &self,
         _user_id: &str,
@@ -2388,6 +2396,159 @@ async fn list_backfills_mixed_rows() {
         .unwrap();
     let extras: Vec<_> = resp.items.iter().map(|c| c.extra.clone()).collect();
     assert!(extras.iter().any(|e| e["skills"] == json!(["cron", "pdf"])));
+}
+
+// ── send_message team route-fork tests (W3-D16b) ────────────────
+
+/// Captures calls to `route_agent_message` so tests can assert the fork
+/// dispatched to the team runtime instead of the solo-chat pipeline.
+struct RecordingTeamRouter {
+    calls: Mutex<Vec<(String, String, bool)>>,
+}
+
+impl RecordingTeamRouter {
+    fn new() -> Self {
+        Self {
+            calls: Mutex::new(vec![]),
+        }
+    }
+
+    fn take_calls(&self) -> Vec<(String, String, bool)> {
+        std::mem::take(&mut self.calls.lock().unwrap())
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::traits::ITeamMessageRouter for RecordingTeamRouter {
+    async fn route_agent_message(
+        &self,
+        conversation_id: &str,
+        content: &str,
+        silent: bool,
+    ) -> Result<(), AppError> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push((conversation_id.to_owned(), content.to_owned(), silent));
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn send_message_without_team_id_takes_solo_path() {
+    // No team_id in extra → must NOT call the injected router; user
+    // message still lands in repo via the solo pipeline.
+    let (svc, _broadcaster, repo, _default_task_mgr) = make_service();
+    let task_mgr: Arc<dyn IWorkerTaskManager> = Arc::new(MockTaskManager::new());
+
+    let router = Arc::new(RecordingTeamRouter::new());
+    svc.set_team_router(Some(router.clone()));
+
+    let conv = svc.create("user_1", make_create_req()).await.unwrap();
+
+    svc.send_message("user_1", &conv.id, make_send_req(), &task_mgr)
+        .await
+        .unwrap();
+
+    assert!(
+        router.take_calls().is_empty(),
+        "router must not be called for solo conversations"
+    );
+    let messages = repo
+        .get_messages(&conv.id, 1, 20, SortOrder::Asc)
+        .await
+        .unwrap()
+        .items;
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.msg_id.as_deref() == Some("msg-1")),
+        "solo path must still persist the user message"
+    );
+}
+
+#[tokio::test]
+async fn send_message_with_team_id_delegates_to_router() {
+    // extra.team_id present + router injected → forward to router and
+    // short-circuit the solo pipeline (no user message persisted, no
+    // status flip to running).
+    let (svc, _broadcaster, repo, _default_task_mgr) = make_service();
+    let task_mgr: Arc<dyn IWorkerTaskManager> = Arc::new(MockTaskManager::new());
+
+    let router = Arc::new(RecordingTeamRouter::new());
+    svc.set_team_router(Some(router.clone()));
+
+    let create_req: CreateConversationRequest = serde_json::from_value(json!({
+        "type": "acp",
+        "model": { "provider_id": "p1", "model": "m1" },
+        "extra": { "workspace": "/project", "team_id": "team-42" }
+    }))
+    .unwrap();
+    let conv = svc.create("user_1", create_req).await.unwrap();
+
+    svc.send_message("user_1", &conv.id, make_send_req(), &task_mgr)
+        .await
+        .unwrap();
+
+    let calls = router.take_calls();
+    assert_eq!(calls.len(), 1, "router must receive exactly one call");
+    assert_eq!(calls[0].0, conv.id);
+    assert_eq!(calls[0].1, "Hello");
+    assert!(!calls[0].2, "silent must default to false");
+
+    // Solo-pipeline side effects must be skipped.
+    let messages = repo
+        .get_messages(&conv.id, 1, 20, SortOrder::Asc)
+        .await
+        .unwrap()
+        .items;
+    assert!(
+        messages.is_empty(),
+        "team route must not double-persist user messages via the solo path"
+    );
+    let row = repo.get(&conv.id).await.unwrap().unwrap();
+    assert_ne!(
+        row.status.as_deref(),
+        Some("running"),
+        "team route must not flip conversation status via solo-path side effects"
+    );
+}
+
+#[tokio::test]
+async fn send_message_with_team_id_but_no_router_falls_back_to_solo() {
+    // extra.team_id present but router None (startup ordering / no team
+    // crate) → graceful degradation into solo pipeline.
+    let (svc, _broadcaster, repo, _default_task_mgr) = make_service();
+    let task_mgr: Arc<dyn IWorkerTaskManager> = Arc::new(MockTaskManager::new());
+
+    // Explicitly clear any router (defensive; constructor already None).
+    svc.set_team_router(None);
+
+    let create_req: CreateConversationRequest = serde_json::from_value(json!({
+        "type": "acp",
+        "model": { "provider_id": "p1", "model": "m1" },
+        "extra": { "workspace": "/project", "team_id": "team-99" }
+    }))
+    .unwrap();
+    let conv = svc.create("user_1", create_req).await.unwrap();
+
+    svc.send_message("user_1", &conv.id, make_send_req(), &task_mgr)
+        .await
+        .unwrap();
+
+    // Without a router, the solo pipeline must still run so the message
+    // isn't silently lost.
+    let messages = repo
+        .get_messages(&conv.id, 1, 20, SortOrder::Asc)
+        .await
+        .unwrap()
+        .items;
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.msg_id.as_deref() == Some("msg-1")),
+        "fallback path must persist the user message"
+    );
 }
 
 #[tokio::test]

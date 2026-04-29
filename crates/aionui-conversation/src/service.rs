@@ -876,6 +876,25 @@ impl ConversationService {
                 AppError::NotFound(format!("Conversation {conversation_id} not found"))
             })?;
 
+        // Route to the team runtime when this conversation belongs to a team
+        // and a router is injected. The solo-chat pipeline below is left
+        // untouched. When `team_id` is set but no router has been wired
+        // (startup ordering, or a build without the team crate), log a
+        // warning and fall back to the solo path so legacy conversations
+        // keep working — graceful degradation per §17.2.
+        if let Some(team_id) = extract_team_id(&row.extra) {
+            if let Some(router) = self.team_router() {
+                return router
+                    .route_agent_message(&row.id, &req.content, false)
+                    .await;
+            }
+            warn!(
+                conversation_id = %row.id,
+                team_id = %team_id,
+                "team_router not injected; falling back to solo-chat path"
+            );
+        }
+
         // Short-circuit for legacy Gemini conversations: the dedicated Gemini
         // runtime has been removed, so we cannot build an agent for this row.
         // Emit CONVERSATION_ARCHIVED (HTTP 410 Gone) without touching the
@@ -1364,6 +1383,25 @@ fn legacy_cron_trigger_to_artifact(
         created_at: row.created_at,
         updated_at: row.created_at,
     })
+}
+
+/// Extract a non-empty `team_id` from a serialized `extra` JSON string.
+///
+/// Accepts both `team_id` and legacy `teamId` keys. Returns `None` when
+/// the JSON is invalid, the key is absent, or the value is not a
+/// non-empty string — so the caller can cleanly distinguish "belongs to
+/// a team" from "solo conversation".
+fn extract_team_id(extra: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(extra).ok()?;
+    let raw = value
+        .get("team_id")
+        .or_else(|| value.get("teamId"))
+        .and_then(|v| v.as_str())?;
+    if raw.is_empty() {
+        None
+    } else {
+        Some(raw.to_owned())
+    }
 }
 
 /// Merge `patch` into `base` (top-level key overwrite).

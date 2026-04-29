@@ -831,6 +831,13 @@ mod tests {
         ) -> Result<Vec<aionui_db::models::ConversationRow>, DbError> {
             Ok(vec![])
         }
+        async fn list_by_team_id(
+            &self,
+            _user_id: &str,
+            _team_id: &str,
+        ) -> Result<Vec<aionui_db::models::ConversationRow>, DbError> {
+            Ok(vec![])
+        }
         async fn list_associated(
             &self,
             _user_id: &str,
@@ -957,6 +964,13 @@ mod tests {
             &self,
             _user_id: &str,
             _cron_job_id: &str,
+        ) -> Result<Vec<aionui_db::models::ConversationRow>, DbError> {
+            Ok(vec![])
+        }
+        async fn list_by_team_id(
+            &self,
+            _user_id: &str,
+            _team_id: &str,
         ) -> Result<Vec<aionui_db::models::ConversationRow>, DbError> {
             Ok(vec![])
         }
