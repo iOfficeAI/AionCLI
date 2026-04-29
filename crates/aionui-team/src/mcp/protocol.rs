@@ -51,6 +51,9 @@ pub const PROTOCOL_VERSION: &str = "2024-11-05";
 pub const SERVER_NAME: &str = "aionui-team-mcp";
 pub const SERVER_VERSION: &str = "1.0.0";
 
+/// Maximum allowed size of a single MCP frame payload (aligned with AionUi).
+pub const MAX_MCP_MESSAGE_SIZE: usize = 64 * 1024 * 1024;
+
 // ---------------------------------------------------------------------------
 // Response builders
 // ---------------------------------------------------------------------------
@@ -85,10 +88,10 @@ impl JsonRpcResponse {
 
 pub async fn read_frame<R: AsyncReadExt + Unpin>(reader: &mut R) -> std::io::Result<Vec<u8>> {
     let len = reader.read_u32().await? as usize;
-    if len > 10 * 1024 * 1024 {
+    if len > MAX_MCP_MESSAGE_SIZE {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            "frame too large (>10MB)",
+            "frame too large (>64MB)",
         ));
     }
     let mut buf = vec![0u8; len];
@@ -217,7 +220,7 @@ mod tests {
 
     #[tokio::test]
     async fn oversized_frame_rejected() {
-        let fake_len: u32 = 11 * 1024 * 1024;
+        let fake_len: u32 = (MAX_MCP_MESSAGE_SIZE as u32) + 1;
         let mut buf = Vec::new();
         buf.extend_from_slice(&fake_len.to_be_bytes());
         buf.extend_from_slice(&[0u8; 64]);
