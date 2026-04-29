@@ -1,4 +1,5 @@
 //! Application entry point: assembles all crates into an Axum server with DI and middleware.
+pub mod bridge;
 mod state_builders;
 
 use std::sync::Arc;

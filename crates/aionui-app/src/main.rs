@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 use std::time::Instant;
 
 use anyhow::Result;
@@ -7,7 +8,7 @@ use tokio::net::TcpListener;
 use tracing::info;
 use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
-use aionui_app::{AppConfig, AppServices, create_router};
+use aionui_app::{AppConfig, AppServices, bridge, create_router};
 
 #[derive(Parser)]
 #[command(name = "aionui-backend", about = "AionUi Backend Server")]
@@ -78,7 +79,16 @@ fn init_tracing(
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> Result<ExitCode> {
+    // mcp-bridge subcommand: lives entirely outside the main HTTP server and
+    // must not touch the database, logging setup, or `AppServices`. Spawned by
+    // ACP agent CLIs as a short-lived stdio ↔ TCP bridge process.
+    let mut argv = std::env::args();
+    let _prog = argv.next();
+    if argv.next().as_deref() == Some("mcp-bridge") {
+        return Ok(bridge::run_mcp_bridge().await);
+    }
+
     let cli = Cli::parse();
 
     let log_dir = cli
@@ -170,7 +180,7 @@ async fn main() -> Result<()> {
     services.database.close().await;
     info!("Server shut down gracefully");
 
-    Ok(())
+    Ok(ExitCode::SUCCESS)
 }
 
 async fn shutdown_signal() {
