@@ -213,6 +213,33 @@ pub struct SlashCommandItem {
     pub description: String,
 }
 
+/// Unified stream chunk published on the per-session broadcast channel.
+///
+/// Emitted by `AgentManagerHandle` implementations at every stream event so
+/// downstream subscribers (wake timeout watchdog, crash detector) can observe
+/// agent progress without intercepting the existing frontend event pipeline.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AgentStreamChunk {
+    Text {
+        text: String,
+    },
+    ToolUse {
+        tool_name: String,
+        input: serde_json::Value,
+    },
+    Thought {
+        content: String,
+    },
+    Finish {
+        agent_crash: bool,
+        stop_reason: Option<String>,
+    },
+    Error {
+        message: String,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -359,6 +386,77 @@ mod tests {
         assert!(extra.system_prompt.is_none());
         assert_eq!(extra.max_tokens, 8192);
         assert!(extra.max_turns.is_none());
+    }
+
+    #[test]
+    fn agent_stream_chunk_all_variants_serde_roundtrip() {
+        let cases = vec![
+            AgentStreamChunk::Text {
+                text: "hello".into(),
+            },
+            AgentStreamChunk::ToolUse {
+                tool_name: "read_file".into(),
+                input: json!({ "path": "/tmp/a.txt" }),
+            },
+            AgentStreamChunk::Thought {
+                content: "analyzing".into(),
+            },
+            AgentStreamChunk::Finish {
+                agent_crash: false,
+                stop_reason: Some("end_turn".into()),
+            },
+            AgentStreamChunk::Error {
+                message: "timeout".into(),
+            },
+        ];
+        for chunk in cases {
+            let json = serde_json::to_value(&chunk).unwrap();
+            let parsed: AgentStreamChunk = serde_json::from_value(json).unwrap();
+            match (chunk, parsed) {
+                (AgentStreamChunk::Text { text: a }, AgentStreamChunk::Text { text: b }) => {
+                    assert_eq!(a, b);
+                }
+                (
+                    AgentStreamChunk::ToolUse {
+                        tool_name: a1,
+                        input: a2,
+                    },
+                    AgentStreamChunk::ToolUse {
+                        tool_name: b1,
+                        input: b2,
+                    },
+                ) => {
+                    assert_eq!(a1, b1);
+                    assert_eq!(a2, b2);
+                }
+                (
+                    AgentStreamChunk::Thought { content: a },
+                    AgentStreamChunk::Thought { content: b },
+                ) => {
+                    assert_eq!(a, b);
+                }
+                (
+                    AgentStreamChunk::Finish {
+                        agent_crash: a1,
+                        stop_reason: a2,
+                    },
+                    AgentStreamChunk::Finish {
+                        agent_crash: b1,
+                        stop_reason: b2,
+                    },
+                ) => {
+                    assert_eq!(a1, b1);
+                    assert_eq!(a2, b2);
+                }
+                (
+                    AgentStreamChunk::Error { message: a },
+                    AgentStreamChunk::Error { message: b },
+                ) => {
+                    assert_eq!(a, b);
+                }
+                _ => panic!("variant mismatch after roundtrip"),
+            }
+        }
     }
 
     #[test]
