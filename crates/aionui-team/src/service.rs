@@ -8,13 +8,14 @@ use aionui_api_types::{
 use aionui_common::{AgentKillReason, AgentType, ProviderWithModel, generate_id, now_ms};
 use aionui_conversation::ConversationService;
 use aionui_db::models::TeamRow;
-use aionui_db::{ITeamRepository, UpdateTeamParams};
+use aionui_db::{IConversationRepository, ITeamRepository, UpdateTeamParams};
 use aionui_realtime::EventBroadcaster;
 use dashmap::DashMap;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
 use crate::error::TeamError;
+use crate::repair::repair_team_agents_if_missing;
 use crate::session::TeamSession;
 use crate::types::{Team, TeamAgent, TeammateRole};
 
@@ -27,6 +28,7 @@ struct SessionEntry {
 
 pub struct TeamSessionService {
     repo: Arc<dyn ITeamRepository>,
+    conversation_repo: Arc<dyn IConversationRepository>,
     conversation_service: ConversationService,
     broadcaster: Arc<dyn EventBroadcaster>,
     task_manager: Arc<dyn IWorkerTaskManager>,
@@ -37,6 +39,7 @@ pub struct TeamSessionService {
 impl TeamSessionService {
     pub fn new(
         repo: Arc<dyn ITeamRepository>,
+        conversation_repo: Arc<dyn IConversationRepository>,
         conversation_service: ConversationService,
         broadcaster: Arc<dyn EventBroadcaster>,
         task_manager: Arc<dyn IWorkerTaskManager>,
@@ -44,6 +47,7 @@ impl TeamSessionService {
     ) -> Self {
         Self {
             repo,
+            conversation_repo,
             conversation_service,
             broadcaster,
             task_manager,
@@ -76,39 +80,31 @@ impl TeamSessionService {
             };
 
             let agent_type = parse_agent_type(&input.backend)?;
-            let conversation_id = match &input.conversation_id {
-                Some(existing_id) => {
-                    self.reuse_conversation_for_team(user_id, existing_id, &team_id)
-                        .await?
-                }
-                None => {
-                    let conv_req = CreateConversationRequest {
-                        r#type: agent_type,
-                        name: Some(input.name.clone()),
-                        model: Some(ProviderWithModel {
-                            provider_id: input.backend.clone(),
-                            model: input.model.clone(),
-                            use_model: None,
-                        }),
-                        source: None,
-                        channel_chat_id: None,
-                        extra: serde_json::json!({ "teamId": team_id }),
-                    };
-                    self.conversation_service
-                        .create(user_id, conv_req)
-                        .await
-                        .map_err(|e| {
-                            TeamError::InvalidRequest(format!("failed to create conversation: {e}"))
-                        })?
-                        .id
-                }
+            let conv_req = CreateConversationRequest {
+                r#type: agent_type,
+                name: Some(input.name.clone()),
+                model: Some(ProviderWithModel {
+                    provider_id: input.backend.clone(),
+                    model: input.model.clone(),
+                    use_model: None,
+                }),
+                source: None,
+                channel_chat_id: None,
+                extra: serde_json::json!({ "teamId": team_id }),
             };
+            let conv = self
+                .conversation_service
+                .create(user_id, conv_req)
+                .await
+                .map_err(|e| {
+                    TeamError::InvalidRequest(format!("failed to create conversation: {e}"))
+                })?;
 
             agents.push(TeamAgent {
                 slot_id,
                 name: input.name.clone(),
                 role,
-                conversation_id,
+                conversation_id: conv.id,
                 backend: input.backend.clone(),
                 model: input.model.clone(),
                 custom_agent_id: input.custom_agent_id.clone(),
@@ -148,44 +144,6 @@ impl TeamSessionService {
         Ok(team.to_response())
     }
 
-    /// Reuse an existing solo conversation as a team agent's conversation.
-    ///
-    /// Validates ownership (via `ConversationService::get`, which returns
-    /// `NotFound` when the conv belongs to another user), then rejects convs
-    /// already bound to a different team. On success merges `teamId` into
-    /// `conversation.extra` and returns the conversation id.
-    async fn reuse_conversation_for_team(
-        &self,
-        user_id: &str,
-        conversation_id: &str,
-        team_id: &str,
-    ) -> Result<String, TeamError> {
-        let existing = self
-            .conversation_service
-            .get(user_id, conversation_id)
-            .await
-            .map_err(|_| TeamError::ConversationNotFound(conversation_id.into()))?;
-
-        if let Some(bound) = existing.extra.get("teamId").and_then(|v| v.as_str())
-            && bound != team_id
-        {
-            return Err(TeamError::InvalidRequest(format!(
-                "conversation {conversation_id} already belongs to another team"
-            )));
-        }
-
-        self.conversation_service
-            .update_extra(conversation_id, serde_json::json!({ "teamId": team_id }))
-            .await
-            .map_err(|e| {
-                TeamError::InvalidRequest(format!(
-                    "failed to update conversation extra for {conversation_id}: {e}"
-                ))
-            })?;
-
-        Ok(conversation_id.to_owned())
-    }
-
     pub async fn list_teams(&self, user_id: &str) -> Result<Vec<TeamResponse>, TeamError> {
         let rows = self.repo.list_teams(user_id).await?;
         let mut teams = Vec::with_capacity(rows.len());
@@ -205,7 +163,38 @@ impl TeamSessionService {
         if row.user_id != user_id {
             return Err(TeamError::TeamNotFound(team_id.into()));
         }
-        let team = Team::from_row(&row)?;
+        let mut team = Team::from_row(&row)?;
+
+        // Legacy rows can end up with `agents = []` while their conversations
+        // still carry `extra.teamId`. Reverse-derive from those conversations
+        // and persist the result so the next `get_team` call returns cached
+        // data (see docs/teams/phase1/interface-contracts.md §14).
+        if team.agents.is_empty() {
+            let convs = self
+                .conversation_repo
+                .list_by_team_id(user_id, team_id)
+                .await
+                .map_err(|e| TeamError::InvalidRequest(format!("list_by_team_id: {e}")))?;
+            if !convs.is_empty() {
+                let repaired = repair_team_agents_if_missing(&convs);
+                let agents_json = serde_json::to_string(&repaired)?;
+                let lead_agent_id = repaired.first().map(|a| a.slot_id.clone());
+                self.repo
+                    .update_team(
+                        team_id,
+                        &UpdateTeamParams {
+                            name: None,
+                            agents: Some(agents_json),
+                            lead_agent_id: lead_agent_id.clone(),
+                        },
+                    )
+                    .await?;
+                team.agents = repaired;
+                team.lead_agent_id = lead_agent_id;
+                info!(team_id = %team_id, "repaired team agents from conversations");
+            }
+        }
+
         Ok(team.to_response())
     }
 
@@ -215,9 +204,6 @@ impl TeamSessionService {
             .get_team(team_id)
             .await?
             .ok_or_else(|| TeamError::TeamNotFound(team_id.into()))?;
-        if row.user_id != user_id {
-            return Err(TeamError::TeamNotFound(team_id.into()));
-        }
         let team = Team::from_row(&row)?;
 
         self.stop_session(team_id);

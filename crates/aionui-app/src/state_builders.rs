@@ -416,7 +416,7 @@ pub fn build_team_state(
         ),
     );
     let conv_service = ConversationService::new_with_workspace_root(
-        conv_repo,
+        conv_repo.clone(),
         services.event_bus.clone(),
         std::path::PathBuf::from(&services.data_dir),
         skill_resolver,
@@ -426,6 +426,7 @@ pub fn build_team_state(
     }
     let service = Arc::new(TeamSessionService::new(
         team_repo,
+        conv_repo,
         conv_service,
         services.event_bus.clone(),
         services.worker_task_manager.clone(),

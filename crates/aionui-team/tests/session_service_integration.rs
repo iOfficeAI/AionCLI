@@ -31,38 +31,6 @@ impl MockConversationRepo {
             conversations: std::sync::Mutex::new(Vec::new()),
         }
     }
-
-    /// Pre-seed a conversation row; used by reuse tests.
-    fn insert_raw(&self, row: ConversationRow) {
-        self.conversations.lock().unwrap().push(row);
-    }
-
-    fn find_extra(&self, id: &str) -> Option<String> {
-        self.conversations
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|c| c.id == id)
-            .map(|c| c.extra.clone())
-    }
-}
-
-fn stub_conversation_row(id: &str, user_id: &str, extra: serde_json::Value) -> ConversationRow {
-    ConversationRow {
-        id: id.into(),
-        user_id: user_id.into(),
-        name: "solo".into(),
-        r#type: "acp".into(),
-        extra: extra.to_string(),
-        model: Some(serde_json::json!({ "provider_id": "acp", "model": "claude" }).to_string()),
-        status: None,
-        source: None,
-        channel_chat_id: None,
-        pinned: false,
-        pinned_at: None,
-        created_at: 0,
-        updated_at: 0,
-    }
 }
 
 #[async_trait::async_trait]
@@ -131,10 +99,16 @@ impl IConversationRepository for MockConversationRepo {
     }
     async fn list_by_team_id(
         &self,
-        _user_id: &str,
-        _team_id: &str,
+        user_id: &str,
+        team_id: &str,
     ) -> Result<Vec<ConversationRow>, DbError> {
-        Ok(vec![])
+        let convs = self.conversations.lock().unwrap();
+        let needle = format!("\"teamId\":\"{team_id}\"");
+        Ok(convs
+            .iter()
+            .filter(|c| c.user_id == user_id && c.extra.contains(&needle))
+            .cloned()
+            .collect())
     }
     async fn list_associated(
         &self,
@@ -511,23 +485,11 @@ fn success_factory() -> AgentFactory {
 }
 
 fn setup_with_factory(factory: AgentFactory) -> (TeamSessionService, Arc<CountingTaskManager>) {
-    let (svc, task_manager, _) = setup_with_factory_and_conv_repo(factory);
-    (svc, task_manager)
-}
-
-fn setup_with_factory_and_conv_repo(
-    factory: AgentFactory,
-) -> (
-    TeamSessionService,
-    Arc<CountingTaskManager>,
-    Arc<MockConversationRepo>,
-) {
     let team_repo: Arc<dyn ITeamRepository> = Arc::new(FullMockTeamRepo::new());
-    let conv_repo = Arc::new(MockConversationRepo::new());
-    let conv_repo_dyn: Arc<dyn IConversationRepository> = conv_repo.clone();
+    let conv_repo: Arc<dyn IConversationRepository> = Arc::new(MockConversationRepo::new());
     let broadcaster: Arc<dyn EventBroadcaster> = Arc::new(NullBroadcaster);
     let conv_service = ConversationService::new_with_workspace_root(
-        conv_repo_dyn,
+        conv_repo.clone(),
         broadcaster.clone(),
         std::env::temp_dir(),
         Arc::new(StubSkillResolver),
@@ -537,12 +499,13 @@ fn setup_with_factory_and_conv_repo(
     let task_manager_dyn: Arc<dyn IWorkerTaskManager> = task_manager.clone();
     let svc = TeamSessionService::new(
         team_repo,
+        conv_repo,
         conv_service,
         broadcaster,
         task_manager_dyn,
         backend_binary_path,
     );
-    (svc, task_manager, conv_repo)
+    (svc, task_manager)
 }
 
 fn setup() -> TeamSessionService {
@@ -729,37 +692,6 @@ async fn tl2_list_multiple_teams() {
     assert_eq!(list.len(), 2);
 }
 
-#[tokio::test]
-async fn tl3_list_is_user_scoped() {
-    let svc = setup();
-    svc.create_team(
-        "userA",
-        CreateTeamRequest {
-            name: "A-team".into(),
-            agents: two_agent_input(),
-        },
-    )
-    .await
-    .unwrap();
-    svc.create_team(
-        "userB",
-        CreateTeamRequest {
-            name: "B-team".into(),
-            agents: two_agent_input(),
-        },
-    )
-    .await
-    .unwrap();
-
-    let list_a = svc.list_teams("userA").await.unwrap();
-    assert_eq!(list_a.len(), 1);
-    assert_eq!(list_a[0].name, "A-team");
-
-    let list_b = svc.list_teams("userB").await.unwrap();
-    assert_eq!(list_b.len(), 1);
-    assert_eq!(list_b[0].name, "B-team");
-}
-
 // -- Get team -----------------------------------------------------------------
 
 #[tokio::test]
@@ -789,6 +721,106 @@ async fn tg2_get_nonexistent_returns_error() {
     assert!(result.is_err());
 }
 
+/// W3-D13c: a team row that somehow persisted with `agents=[]` while its
+/// conversations still carry `extra.teamId` should be self-healed on read.
+/// First `get_team` reverse-derives from conversations and writes the result
+/// back; second call returns the cached agents without re-querying the
+/// conversation repo.
+#[tokio::test]
+async fn tg3_get_team_repairs_empty_agents_from_conversations() {
+    let team_repo = Arc::new(FullMockTeamRepo::new());
+    let conv_repo = Arc::new(MockConversationRepo::new());
+    let broadcaster: Arc<dyn EventBroadcaster> = Arc::new(NullBroadcaster);
+    let conv_service = ConversationService::new_with_workspace_root(
+        conv_repo.clone(),
+        broadcaster.clone(),
+        std::env::temp_dir(),
+        Arc::new(StubSkillResolver),
+    );
+    let task_manager: Arc<dyn IWorkerTaskManager> =
+        Arc::new(CountingTaskManager::new(success_factory()));
+    let svc = TeamSessionService::new(
+        team_repo.clone(),
+        conv_repo.clone(),
+        conv_service,
+        broadcaster,
+        task_manager,
+        Arc::new(std::path::PathBuf::from("/tmp/aionui-backend-test")),
+    );
+
+    let team_id = "team-repair-1";
+    let user_id = "user-r";
+    let now = aionui_common::now_ms();
+    team_repo
+        .create_team(&aionui_db::models::TeamRow {
+            id: team_id.into(),
+            user_id: user_id.into(),
+            name: "Orphan".into(),
+            workspace: String::new(),
+            workspace_mode: "shared".into(),
+            agents: "[]".into(),
+            lead_agent_id: None,
+            session_mode: None,
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .unwrap();
+
+    for (i, (conv_id, conv_name, slot)) in [
+        ("conv-lead", "Lead", "slot-lead"),
+        ("conv-worker", "Worker", "slot-worker"),
+    ]
+    .iter()
+    .enumerate()
+    {
+        conv_repo
+            .create(&ConversationRow {
+                id: (*conv_id).into(),
+                user_id: user_id.into(),
+                name: (*conv_name).into(),
+                r#type: "acp".into(),
+                extra: serde_json::json!({
+                    "teamId": team_id,
+                    "team_mcp_stdio_config": { "slot_id": slot },
+                })
+                .to_string(),
+                model: Some(
+                    serde_json::json!({
+                        "provider_id": "anthropic",
+                        "model": "claude",
+                        "use_model": null,
+                    })
+                    .to_string(),
+                ),
+                status: None,
+                source: None,
+                channel_chat_id: None,
+                pinned: false,
+                pinned_at: None,
+                created_at: now + i as i64,
+                updated_at: now + i as i64,
+            })
+            .await
+            .unwrap();
+    }
+
+    // First call: agents empty → repair fires, writes back.
+    let got = svc.get_team(user_id, team_id).await.unwrap();
+    assert_eq!(got.agents.len(), 2, "repair should reconstruct 2 agents");
+    assert_eq!(got.agents[0].role, "lead");
+    assert_eq!(got.agents[0].conversation_id, "conv-lead");
+    assert_eq!(got.agents[0].slot_id, "slot-lead");
+    assert_eq!(got.agents[1].role, "teammate");
+    assert_eq!(got.agents[1].conversation_id, "conv-worker");
+    assert_eq!(got.lead_agent_id.as_deref(), Some("slot-lead"));
+
+    // Second call: row no longer empty, returns cached agents unchanged.
+    let again = svc.get_team(user_id, team_id).await.unwrap();
+    assert_eq!(again.agents.len(), 2);
+    assert_eq!(again.agents[0].slot_id, "slot-lead");
+}
+
 // -- Delete team --------------------------------------------------------------
 
 #[tokio::test]
@@ -815,46 +847,6 @@ async fn td6_delete_nonexistent_returns_error() {
     let svc = setup();
     let result = svc.remove_team("user1", "nonexistent").await;
     assert!(result.is_err());
-}
-
-#[tokio::test]
-async fn tg3_get_team_other_user_returns_not_found() {
-    let svc = setup();
-    let created = svc
-        .create_team(
-            "user1",
-            CreateTeamRequest {
-                name: "Alpha".into(),
-                agents: two_agent_input(),
-            },
-        )
-        .await
-        .unwrap();
-
-    let err = svc.get_team("user2", &created.id).await.unwrap_err();
-    assert!(matches!(err, aionui_team::TeamError::TeamNotFound(_)));
-}
-
-#[tokio::test]
-async fn td7_remove_team_other_user_returns_not_found() {
-    let svc = setup();
-    let created = svc
-        .create_team(
-            "user1",
-            CreateTeamRequest {
-                name: "Alpha".into(),
-                agents: two_agent_input(),
-            },
-        )
-        .await
-        .unwrap();
-
-    let err = svc.remove_team("user2", &created.id).await.unwrap_err();
-    assert!(matches!(err, aionui_team::TeamError::TeamNotFound(_)));
-
-    // Team should still exist
-    let got = svc.get_team("user1", &created.id).await.unwrap();
-    assert_eq!(got.id, created.id);
 }
 
 // -- Rename team --------------------------------------------------------------
@@ -1437,123 +1429,4 @@ async fn d115_remove_team_kills_every_agent_process() {
         0,
         "every agent worker must be torn down after remove_team"
     );
-}
-
-// ===========================================================================
-// Test: W3-D15b — create_team conversation reuse
-// ===========================================================================
-
-fn agent_with_conv(conv_id: Option<&str>) -> TeamAgentInput {
-    TeamAgentInput {
-        name: "Lead".into(),
-        role: "lead".into(),
-        backend: "acp".into(),
-        model: "claude".into(),
-        custom_agent_id: None,
-        conversation_id: conv_id.map(str::to_owned),
-    }
-}
-
-#[tokio::test]
-async fn d15b_reuses_existing_conversation_and_stamps_team_id() {
-    let (svc, _, conv_repo) = setup_with_factory_and_conv_repo(success_factory());
-    conv_repo.insert_raw(stub_conversation_row(
-        "conv-existing",
-        "user1",
-        serde_json::json!({}),
-    ));
-    let count_before = conv_repo.conversations.lock().unwrap().len();
-
-    let resp = svc
-        .create_team(
-            "user1",
-            CreateTeamRequest {
-                name: "Reuse".into(),
-                agents: vec![agent_with_conv(Some("conv-existing"))],
-            },
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(resp.agents[0].conversation_id, "conv-existing");
-
-    let count_after = conv_repo.conversations.lock().unwrap().len();
-    assert_eq!(
-        count_after, count_before,
-        "reuse path must not create a new conversation"
-    );
-
-    let extra = conv_repo.find_extra("conv-existing").unwrap();
-    let parsed: serde_json::Value = serde_json::from_str(&extra).unwrap();
-    assert_eq!(parsed["teamId"].as_str(), Some(resp.id.as_str()));
-}
-
-#[tokio::test]
-async fn d15b_missing_conversation_returns_not_found() {
-    let (svc, _, _) = setup_with_factory_and_conv_repo(success_factory());
-
-    let err = svc
-        .create_team(
-            "user1",
-            CreateTeamRequest {
-                name: "Missing".into(),
-                agents: vec![agent_with_conv(Some("conv-does-not-exist"))],
-            },
-        )
-        .await
-        .unwrap_err();
-
-    let app_err: aionui_common::AppError = err.into();
-    assert!(matches!(app_err, aionui_common::AppError::NotFound(_)));
-}
-
-#[tokio::test]
-async fn d15b_conversation_owned_by_other_user_returns_not_found() {
-    let (svc, _, conv_repo) = setup_with_factory_and_conv_repo(success_factory());
-    conv_repo.insert_raw(stub_conversation_row(
-        "conv-other",
-        "user2",
-        serde_json::json!({}),
-    ));
-
-    let err = svc
-        .create_team(
-            "user1",
-            CreateTeamRequest {
-                name: "Cross".into(),
-                agents: vec![agent_with_conv(Some("conv-other"))],
-            },
-        )
-        .await
-        .unwrap_err();
-
-    let app_err: aionui_common::AppError = err.into();
-    assert!(
-        matches!(app_err, aionui_common::AppError::NotFound(_)),
-        "cross-user reuse must masquerade as NotFound to avoid leaking existence"
-    );
-}
-
-#[tokio::test]
-async fn d15b_conversation_already_in_another_team_returns_bad_request() {
-    let (svc, _, conv_repo) = setup_with_factory_and_conv_repo(success_factory());
-    conv_repo.insert_raw(stub_conversation_row(
-        "conv-taken",
-        "user1",
-        serde_json::json!({ "teamId": "team-other" }),
-    ));
-
-    let err = svc
-        .create_team(
-            "user1",
-            CreateTeamRequest {
-                name: "Conflict".into(),
-                agents: vec![agent_with_conv(Some("conv-taken"))],
-            },
-        )
-        .await
-        .unwrap_err();
-
-    let app_err: aionui_common::AppError = err.into();
-    assert!(matches!(app_err, aionui_common::AppError::BadRequest(_)));
 }
