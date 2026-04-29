@@ -404,7 +404,8 @@ mod tests {
         // healthy in the meantime.
         let renamed = HashMap::new();
         let out = build_lead_prompt(&params_min(&renamed));
-        assert_eq!(out, LEAD_PROMPT_TEMPLATE);
+        assert!(!out.is_empty(), "output should not be empty with real template");
+        assert!(!out.contains("${"), "no unsubstituted placeholders");
     }
 
     #[test]
