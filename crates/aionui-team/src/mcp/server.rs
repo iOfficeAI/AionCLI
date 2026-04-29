@@ -16,7 +16,8 @@ use super::protocol::{
 };
 use super::tools::{
     RenameAgentInput, SendMessageInput, ShutdownAgentInput, SpawnAgentInput, TaskCreateInput,
-    TaskUpdateInput, all_tool_descriptors, is_whitelisted_backend,
+    TaskUpdateInput, all_tool_descriptors, handle_team_describe_assistant, handle_team_list_models,
+    is_whitelisted_backend,
 };
 
 // ---------------------------------------------------------------------------
@@ -328,8 +329,19 @@ async fn dispatch_tool(
         "team_shutdown_agent" => {
             exec_shutdown_agent(arguments, scheduler, caller_slot_id, caller_role).await
         }
+        "team_list_models" => exec_list_models(arguments).await,
+        "team_describe_assistant" => exec_describe_assistant(arguments).await,
         _ => Err(format!("Unknown tool: {tool_name}")),
     }
+}
+
+async fn exec_list_models(args: &Value) -> Result<String, String> {
+    let value = handle_team_list_models(args);
+    serde_json::to_string_pretty(&value).map_err(|e| format!("Serialization error: {e}"))
+}
+
+async fn exec_describe_assistant(args: &Value) -> Result<String, String> {
+    Ok(handle_team_describe_assistant(args))
 }
 
 // ---------------------------------------------------------------------------

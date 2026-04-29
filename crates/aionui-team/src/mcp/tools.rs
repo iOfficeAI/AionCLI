@@ -30,6 +30,27 @@ When calling this tool, provide the model parameter if a specific model was reco
 
 The new agent will be created and added to the team. You can then assign tasks and send messages to it."#;
 
+/// Description for `team_list_models` — verbatim from team-prompts.md §5.2.
+pub const TEAM_LIST_MODELS_DESCRIPTION: &str = "Query available models for team agent types. Returns the real-time model list that matches the frontend model selector.
+
+Use this to:
+- Check what models are available before spawning an agent with a specific model
+- See all available agent types and their models at once
+- Verify a model ID is valid for a given agent type
+
+Pass agent_type to query a specific backend, or omit it to see all.";
+
+/// Description for `team_describe_assistant` — verbatim from team-prompts.md §5.2.
+pub const TEAM_DESCRIBE_ASSISTANT_DESCRIPTION: &str =
+    "Get detailed information about a preset assistant before spawning it as a teammate.
+
+Returns the preset's full description, enabled skills, and example tasks so you can
+judge whether it fits the user's request. Use this when two or more presets look
+relevant from the one-line catalog in your system prompt.
+
+Only works on preset assistants listed in \"Available Preset Assistants for Spawning\".
+After confirming a match, call team_spawn_agent with the same custom_agent_id.";
+
 // ---------------------------------------------------------------------------
 // Tool descriptors (returned by tools/list)
 // ---------------------------------------------------------------------------
@@ -135,6 +156,28 @@ pub fn all_tool_descriptors() -> Vec<ToolDescriptor> {
                     "reason": { "type": "string", "description": "Reason for shutdown" }
                 },
                 "required": ["slot_id"]
+            }),
+        },
+        ToolDescriptor {
+            name: "team_describe_assistant".into(),
+            description: TEAM_DESCRIBE_ASSISTANT_DESCRIPTION.into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "custom_agent_id": { "type": "string", "description": "The preset assistant ID from the \"Available Preset Assistants\" catalog (e.g., \"word-creator\")." },
+                    "locale": { "type": "string", "description": "Locale like \"zh-CN\" or \"en-US\". Defaults to the user's current UI language when omitted." }
+                },
+                "required": ["custom_agent_id"]
+            }),
+        },
+        ToolDescriptor {
+            name: "team_list_models".into(),
+            description: TEAM_LIST_MODELS_DESCRIPTION.into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "agent_type": { "type": "string", "description": "Agent type/backend to query (e.g. \"gemini\", \"claude\", \"codex\"). Shows all when omitted." }
+                }
             }),
         },
     ]
@@ -254,11 +297,41 @@ pub fn parse_tool_call(
                 blocked_by: input.blocked_by,
             })
         }
-        "team_task_list" | "team_members" | "team_rename_agent" | "team_shutdown_agent" => {
-            Err("handled directly by server".into())
-        }
+        "team_task_list"
+        | "team_members"
+        | "team_rename_agent"
+        | "team_shutdown_agent"
+        | "team_list_models"
+        | "team_describe_assistant" => Err("handled directly by server".into()),
         _ => Err(format!("Unknown tool: {tool_name}")),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Phase-1 minimal handlers for `team_list_models` and `team_describe_assistant`
+// ---------------------------------------------------------------------------
+
+/// Phase-1 minimal `team_list_models` handler. Returns a hard-coded
+/// agent-type → models mapping. Wave 2 wires this to the real registry.
+pub fn handle_team_list_models(_args: &Value) -> Value {
+    json!({
+        "agent_types": [
+            {
+                "type": "claude",
+                "models": ["claude-sonnet-4", "claude-opus-4"]
+            },
+            {
+                "type": "codex",
+                "models": ["codex-mini-latest"]
+            }
+        ]
+    })
+}
+
+/// Phase-1 minimal `team_describe_assistant` handler. Backend has no preset
+/// assistants wired yet, so every call returns the not-found text.
+pub fn handle_team_describe_assistant(_args: &Value) -> String {
+    "Preset assistant not found".to_owned()
 }
 
 // ---------------------------------------------------------------------------
@@ -271,7 +344,7 @@ mod tests {
 
     #[test]
     fn all_descriptors_count() {
-        assert_eq!(all_tool_descriptors().len(), 8);
+        assert_eq!(all_tool_descriptors().len(), 10);
     }
 
     #[test]
@@ -280,7 +353,7 @@ mod tests {
         let mut names: Vec<&str> = descs.iter().map(|d| d.name.as_str()).collect();
         names.sort();
         names.dedup();
-        assert_eq!(names.len(), 8);
+        assert_eq!(names.len(), 10);
     }
 
     #[test]
@@ -441,5 +514,64 @@ mod tests {
         let result = parse_tool_call("team_shutdown_agent", &args, TeammateRole::Lead);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("handled directly by server"));
+    }
+
+    // ---- D4 descriptor text matches team-prompts.md §5.2 verbatim ----
+
+    #[test]
+    fn team_list_models_descriptor_text_matches() {
+        let desc = all_tool_descriptors()
+            .into_iter()
+            .find(|d| d.name == "team_list_models")
+            .expect("team_list_models descriptor missing");
+        assert_eq!(desc.description, TEAM_LIST_MODELS_DESCRIPTION);
+        assert!(
+            desc.description
+                .starts_with("Query available models for team agent types.")
+        );
+        assert!(
+            desc.description
+                .contains("Pass agent_type to query a specific backend, or omit it to see all.")
+        );
+    }
+
+    #[test]
+    fn team_describe_assistant_descriptor_text_matches() {
+        let desc = all_tool_descriptors()
+            .into_iter()
+            .find(|d| d.name == "team_describe_assistant")
+            .expect("team_describe_assistant descriptor missing");
+        assert_eq!(desc.description, TEAM_DESCRIBE_ASSISTANT_DESCRIPTION);
+        assert!(
+            desc.description
+                .starts_with("Get detailed information about a preset assistant")
+        );
+        assert!(desc.description.contains(
+            "After confirming a match, call team_spawn_agent with the same custom_agent_id."
+        ));
+    }
+
+    // ---- D4 handlers return non-error payloads ----
+
+    #[test]
+    fn team_list_models_handler_returns_non_error() {
+        let value = handle_team_list_models(&json!({}));
+        let agent_types = value
+            .get("agent_types")
+            .and_then(|v| v.as_array())
+            .expect("agent_types array missing");
+        assert!(!agent_types.is_empty());
+        let types: Vec<&str> = agent_types
+            .iter()
+            .filter_map(|e| e.get("type").and_then(|v| v.as_str()))
+            .collect();
+        assert!(types.contains(&"claude"));
+        assert!(types.contains(&"codex"));
+    }
+
+    #[test]
+    fn team_describe_assistant_handler_returns_non_error() {
+        let text = handle_team_describe_assistant(&json!({"custom_agent_id": "unknown"}));
+        assert_eq!(text, "Preset assistant not found");
     }
 }
