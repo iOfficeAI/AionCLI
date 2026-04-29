@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use anyhow::Result;
 use clap::Parser;
@@ -92,12 +93,15 @@ async fn main() -> Result<()> {
         local: cli.local,
     };
 
+    let boot = Instant::now();
+
     // Initialize database and all services
     info!(
         "Initializing database at {}",
         config.database_path().display()
     );
     let database = aionui_db::init_database(&config.database_path()).await?;
+    info!(elapsed_ms = boot.elapsed().as_millis(), "startup: database initialized");
 
     // Materialize the embedded builtin-skills corpus to disk before any
     // service can read from it. Gated by a .version file so this is a
@@ -135,10 +139,12 @@ async fn main() -> Result<()> {
             }
         }
     }
+    info!(elapsed_ms = boot.elapsed().as_millis(), "startup: builtin skills materialized");
 
     let services =
         AppServices::from_database_with_data_dir(database, config.data_dir.clone(), config.local)
             .await?;
+    info!(elapsed_ms = boot.elapsed().as_millis(), "startup: services constructed");
 
     if config.local {
         info!("Running in local mode — authentication is disabled");
@@ -154,7 +160,7 @@ async fn main() -> Result<()> {
     let addr = config.socket_addr();
     let listener = TcpListener::bind(&addr).await?;
 
-    info!("Server listening on {addr}");
+    info!(elapsed_ms = boot.elapsed().as_millis(), "Server listening on {addr}");
 
     axum::serve(listener, router)
         .with_graceful_shutdown(shutdown_signal())
