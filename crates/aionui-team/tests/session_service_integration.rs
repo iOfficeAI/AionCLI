@@ -274,6 +274,20 @@ impl aionui_conversation::skill_resolver::SkillResolver for StubSkillResolver {
     async fn auto_inject_names(&self) -> Vec<String> {
         Vec::new()
     }
+    async fn resolve_skills(
+        &self,
+        _names: &[String],
+    ) -> Vec<aionui_conversation::skill_resolver::ResolvedAgentSkill> {
+        Vec::new()
+    }
+    async fn link_workspace_skills(
+        &self,
+        _workspace: &std::path::Path,
+        _rel_dirs: &[&str],
+        _skills: &[aionui_conversation::skill_resolver::ResolvedAgentSkill],
+    ) -> usize {
+        0
+    }
 }
 
 fn setup() -> TeamSessionService {
@@ -286,7 +300,8 @@ fn setup() -> TeamSessionService {
         std::env::temp_dir(),
         Arc::new(StubSkillResolver),
     );
-    TeamSessionService::new(team_repo, conv_service, broadcaster)
+    let backend_binary_path = Arc::new(std::path::PathBuf::from("/tmp/aionui-backend-test"));
+    TeamSessionService::new(team_repo, conv_service, broadcaster, backend_binary_path)
 }
 
 fn two_agent_input() -> Vec<TeamAgentInput> {

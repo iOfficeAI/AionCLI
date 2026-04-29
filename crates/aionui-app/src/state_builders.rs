@@ -408,10 +408,17 @@ pub fn build_team_state(
     if let Some(cron_service) = cron_service {
         conv_service.set_cron_service(Some(cron_service));
     }
+    let backend_binary_path = Arc::new(
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.canonicalize().ok())
+            .unwrap_or_else(|| std::path::PathBuf::from("aionui-backend")),
+    );
     let service = Arc::new(TeamSessionService::new(
         team_repo,
         conv_service,
         services.event_bus.clone(),
+        backend_binary_path,
     ));
     TeamRouterState { service }
 }

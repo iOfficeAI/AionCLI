@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use aionui_api_types::{
@@ -19,6 +20,7 @@ pub struct TeamSessionService {
     repo: Arc<dyn ITeamRepository>,
     conversation_service: ConversationService,
     broadcaster: Arc<dyn EventBroadcaster>,
+    backend_binary_path: Arc<PathBuf>,
     sessions: DashMap<String, TeamSession>,
 }
 
@@ -27,11 +29,13 @@ impl TeamSessionService {
         repo: Arc<dyn ITeamRepository>,
         conversation_service: ConversationService,
         broadcaster: Arc<dyn EventBroadcaster>,
+        backend_binary_path: Arc<PathBuf>,
     ) -> Self {
         Self {
             repo,
             conversation_service,
             broadcaster,
+            backend_binary_path,
             sessions: DashMap::new(),
         }
     }
@@ -355,7 +359,13 @@ impl TeamSessionService {
             .ok_or_else(|| TeamError::TeamNotFound(team_id.into()))?;
         let team = Team::from_row(&row)?;
 
-        let session = TeamSession::start(team, self.repo.clone(), self.broadcaster.clone()).await?;
+        let session = TeamSession::start(
+            team,
+            self.repo.clone(),
+            self.broadcaster.clone(),
+            self.backend_binary_path.clone(),
+        )
+        .await?;
 
         self.sessions.insert(team_id.to_owned(), session);
         Ok(())
