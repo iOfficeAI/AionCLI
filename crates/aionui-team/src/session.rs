@@ -63,11 +63,11 @@ impl TeamSession {
     }
 
     pub fn mcp_stdio_config(&self, slot_id: &str) -> TeamMcpStdioConfig {
-        TeamMcpStdioConfig::new(
-            self.mcp_server.port(),
-            self.mcp_server.auth_token().to_owned(),
-            slot_id.to_owned(),
-        )
+        TeamMcpStdioConfig {
+            port: self.mcp_server.port(),
+            token: self.mcp_server.auth_token().to_owned(),
+            slot_id: slot_id.to_owned(),
+        }
     }
 
     pub async fn send_message(&self, content: &str) -> Result<(), TeamError> {
