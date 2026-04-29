@@ -107,6 +107,11 @@ pub struct TeammateManager {
     task_board: Arc<TaskBoard>,
     events: TeamEventEmitter,
     active_wakes: DashSet<String>,
+    /// slot_id -> earliest original name captured before the first rename.
+    /// Written once per slot by `rename_agent` and consumed by prompt
+    /// builders to render `[formerly: <original>]` annotations
+    /// (see interface-contracts §15.2).
+    renamed_agents: Mutex<HashMap<String, String>>,
 }
 
 /// Status set that counts as "settled" for the purpose of
@@ -150,6 +155,7 @@ impl TeammateManager {
             task_board,
             events,
             active_wakes: DashSet::new(),
+            renamed_agents: Mutex::new(HashMap::new()),
         }
     }
 
@@ -401,16 +407,49 @@ impl TeammateManager {
     }
 
     /// Rename an agent slot.
+    ///
+    /// Normalizes `new_name` (§15.1), rejects collisions with any other
+    /// agent's normalized name, and — on the first rename of a given
+    /// slot — records the pre-rename name in `renamed_agents` for later
+    /// consumption by prompt builders (§15.2).
     pub async fn rename_agent(&self, slot_id: &str, new_name: &str) -> Result<(), TeamError> {
+        let normalized_new = normalize_name(new_name);
+
         let mut slots = self.slots.lock().await;
-        let slot = slots
+        let old_name = slots
+            .get(slot_id)
+            .ok_or_else(|| TeamError::AgentNotFound(slot_id.to_owned()))?
+            .agent
+            .name
+            .clone();
+
+        let conflict = slots
+            .iter()
+            .any(|(id, s)| id != slot_id && normalize_name(&s.agent.name) == normalized_new);
+        if conflict {
+            return Err(TeamError::InvalidRequest("name conflict".into()));
+        }
+
+        slots
             .get_mut(slot_id)
-            .ok_or_else(|| TeamError::AgentNotFound(slot_id.to_owned()))?;
-        slot.agent.name = new_name.to_owned();
+            .expect("slot existence checked above")
+            .agent
+            .name = new_name.to_owned();
         drop(slots);
+
+        let mut renamed = self.renamed_agents.lock().await;
+        renamed.entry(slot_id.to_owned()).or_insert(old_name);
+        drop(renamed);
+
         self.events.broadcast_agent_renamed(slot_id, new_name);
         debug!(team_id = %self.team_id, slot_id, new_name, "agent renamed");
         Ok(())
+    }
+
+    /// Snapshot of the original names captured at the first rename per slot.
+    /// Used by prompt builders to render `[formerly: <original>]`.
+    pub async fn renamed_agents_snapshot(&self) -> HashMap<String, String> {
+        self.renamed_agents.lock().await.clone()
     }
 
     pub async fn list_agents(&self) -> Vec<TeamAgent> {
@@ -948,6 +987,33 @@ mod tests {
             .collect();
         assert_eq!(renamed_events.len(), 1);
         assert_eq!(renamed_events[0].data["name"], "Renamed Worker");
+    }
+
+    #[tokio::test]
+    async fn rename_agent_records_original_name_on_first_rename() {
+        let agents = make_team_agents();
+        let (mgr, _) = make_manager(&agents);
+
+        mgr.rename_agent("worker-1", "Renamed Worker").await.unwrap();
+
+        let snapshot = mgr.renamed_agents_snapshot().await;
+        assert_eq!(snapshot.get("worker-1").map(String::as_str), Some("Worker1"));
+        assert_eq!(mgr.get_agent("worker-1").await.unwrap().name, "Renamed Worker");
+    }
+
+    #[tokio::test]
+    async fn rename_agent_rejects_collision_with_existing_name() {
+        let agents = make_team_agents();
+        let (mgr, _) = make_manager(&agents);
+
+        // "  worker2 " normalizes to "worker2", which equals the canonical
+        // form of the existing worker-2 agent ("Worker2").
+        let result = mgr.rename_agent("worker-1", "  worker2 ").await;
+        assert!(matches!(result, Err(TeamError::InvalidRequest(_))));
+
+        // Original name preserved, no rename recorded.
+        assert_eq!(mgr.get_agent("worker-1").await.unwrap().name, "Worker1");
+        assert!(mgr.renamed_agents_snapshot().await.is_empty());
     }
 
     // -- execute_action: SendMessage -----------------------------------------
