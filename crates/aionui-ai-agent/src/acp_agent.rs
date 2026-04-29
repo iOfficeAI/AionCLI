@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -8,16 +9,17 @@ use crate::acp_protocol::{AcpProtocol, PermissionDecision, PermissionRequest};
 
 use crate::acp_runtime_snapshot::AcpRuntimeSnapshot;
 use agent_client_protocol::schema::{
-    AgentCapabilities, AvailableCommand, CancelNotification, ContentBlock, LoadSessionRequest,
-    NewSessionRequest, PromptRequest, SessionConfigOption, SessionId, SessionModeState,
-    SessionModelState, SetSessionConfigOptionRequest, SetSessionModeRequest,
-    SetSessionModelRequest, UsageUpdate,
+    AgentCapabilities, AvailableCommand, CancelNotification, ContentBlock, EnvVariable,
+    LoadSessionRequest, McpServer, McpServerStdio, NewSessionRequest, PromptRequest,
+    SessionConfigOption, SessionId, SessionModeState, SessionModelState,
+    SetSessionConfigOptionRequest, SetSessionModeRequest, SetSessionModelRequest, UsageUpdate,
 };
 
 use crate::cli_process::CliAgentProcess;
 use crate::stream_event::{AgentStreamEvent, permission_request_to_event_data};
 use crate::types::{AcpBuildExtra, SendMessageData, SlashCommandItem};
 
+use aionui_api_types::TeamMcpStdioConfig;
 use aionui_common::{
     AcpBackend, AgentKillReason, AgentType, AppError, CommandSpec, Confirmation,
     ConversationStatus, TimestampMs, now_ms,
@@ -81,6 +83,56 @@ fn confirm_option_id(data: &Value) -> Option<String> {
     }
 }
 
+/// Build a `NewSessionRequest` for `session/new`, injecting the team MCP
+/// stdio server when `config.team_mcp_stdio_config` is present.
+///
+/// When the config is absent the returned payload is identical to the
+/// legacy single-chat path (`mcp_servers` empty), so solo conversations
+/// are unaffected.
+///
+/// The stdio server follows the phase1 interface-contracts §3 shape:
+/// `command = backend_binary_path`, `args = ["mcp-bridge"]`, `env` =
+/// the three `TEAM_MCP_*` pairs defined on `TeamMcpStdioConfig`.
+fn build_new_session_request(
+    workspace: &str,
+    config: &AcpBuildExtra,
+    backend_binary_path: &std::path::Path,
+) -> NewSessionRequest {
+    let req = NewSessionRequest::new(workspace);
+    let Some(cfg) = config.team_mcp_stdio_config.as_ref() else {
+        return req;
+    };
+    req.mcp_servers(vec![team_mcp_server(cfg, backend_binary_path)])
+}
+
+/// Translate a `TeamMcpStdioConfig` into the ACP SDK wire type expected by
+/// `NewSessionRequest::mcp_servers`.
+///
+/// This mirrors `aionui_team::mcp::bridge::TeamMcpStdioServerSpec::into_sdk`,
+/// inlined here because `aionui-team` already depends on this crate; a
+/// reverse dep would cycle. The field shapes are fixed by phase1
+/// interface-contracts §3 and kept byte-for-byte identical.
+fn team_mcp_server(cfg: &TeamMcpStdioConfig, backend_binary_path: &std::path::Path) -> McpServer {
+    // `team_id` is not carried by `TeamMcpStdioConfig`; phase1 uses the
+    // fixed `"aionui-team"` name for server disambiguation (see
+    // interface-contracts §7 note).
+    let env = vec![
+        EnvVariable::new(
+            TeamMcpStdioConfig::ENV_PORT.to_owned(),
+            cfg.port.to_string(),
+        ),
+        EnvVariable::new(TeamMcpStdioConfig::ENV_TOKEN.to_owned(), cfg.token.clone()),
+        EnvVariable::new(
+            TeamMcpStdioConfig::ENV_SLOT_ID.to_owned(),
+            cfg.slot_id.clone(),
+        ),
+    ];
+    let stdio = McpServerStdio::new("aionui-team".to_owned(), backend_binary_path.to_path_buf())
+        .args(vec!["mcp-bridge".to_owned()])
+        .env(env);
+    McpServer::Stdio(stdio)
+}
+
 /// Internal state that changes at runtime.
 struct AcpState {
     /// Current conversation status.
@@ -137,6 +189,10 @@ pub struct AcpAgentManager {
     closing: std::sync::atomic::AtomicBool,
     /// Shared skill manager — used to discover skills for first-message injection.
     skill_manager: Arc<crate::skill_manager::AcpSkillManager>,
+    /// Absolute path to the backend binary, used as the `command` of the
+    /// stdio MCP bridge when a team session is attached to this agent.
+    /// Captured once at app startup (`std::env::current_exe()`).
+    backend_binary_path: Arc<PathBuf>,
 }
 
 impl AcpAgentManager {
@@ -297,6 +353,7 @@ impl AcpAgentManager {
         command_spec: CommandSpec,
         config: AcpBuildExtra,
         skill_manager: Arc<crate::skill_manager::AcpSkillManager>,
+        backend_binary_path: Arc<PathBuf>,
     ) -> Result<Self, AppError> {
         let backend = config
             .backend
@@ -354,6 +411,7 @@ impl AcpAgentManager {
             runtime_snapshot: RwLock::new(runtime_snapshot),
             closing: std::sync::atomic::AtomicBool::new(false),
             skill_manager,
+            backend_binary_path,
         };
 
         Ok(manager)
@@ -451,9 +509,14 @@ impl AcpAgentManager {
             crate::stream_event::StartEventData { session_id: None },
         ));
 
+        let req = build_new_session_request(
+            &self.workspace,
+            &self.config,
+            self.backend_binary_path.as_path(),
+        );
         let session_response = self
             .protocol
-            .new_session(NewSessionRequest::new(&self.workspace))
+            .new_session(req)
             .await
             .map_err(AppError::from)?;
 
@@ -916,5 +979,66 @@ mod tests {
             normalize_requested_mode(AcpBackend::Claude, "bypassPermissions"),
             "bypassPermissions"
         );
+    }
+
+    fn build_extra_without_team() -> AcpBuildExtra {
+        serde_json::from_value(json!({ "backend": "claude" })).unwrap()
+    }
+
+    fn build_extra_with_team() -> AcpBuildExtra {
+        serde_json::from_value(json!({
+            "backend": "claude",
+            "team_mcp_stdio_config": {
+                "port": 54321,
+                "token": "tok-abc",
+                "slot_id": "slot-lead",
+            },
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn build_new_session_request_skips_mcp_servers_without_team_config() {
+        // Solo-chat path: no `team_mcp_stdio_config` → payload must stay
+        // byte-for-byte identical to the legacy `NewSessionRequest::new(cwd)`.
+        let req = build_new_session_request(
+            "/workspace",
+            &build_extra_without_team(),
+            std::path::Path::new("/usr/bin/aionui-backend"),
+        );
+        assert!(
+            req.mcp_servers.is_empty(),
+            "solo chat must not inject any MCP servers, got {:?}",
+            req.mcp_servers
+        );
+    }
+
+    #[test]
+    fn build_new_session_request_injects_team_stdio_server() {
+        let req = build_new_session_request(
+            "/workspace",
+            &build_extra_with_team(),
+            std::path::Path::new("/usr/bin/aionui-backend"),
+        );
+        assert_eq!(req.mcp_servers.len(), 1, "exactly one team MCP server");
+
+        let server = req.mcp_servers.into_iter().next().unwrap();
+        let stdio = match server {
+            McpServer::Stdio(s) => s,
+            other => panic!("expected Stdio variant, got {other:?}"),
+        };
+
+        assert_eq!(stdio.name, "aionui-team");
+        assert_eq!(stdio.command, PathBuf::from("/usr/bin/aionui-backend"));
+        assert_eq!(stdio.args, vec!["mcp-bridge".to_owned()]);
+
+        let env: std::collections::HashMap<_, _> = stdio
+            .env
+            .iter()
+            .map(|v| (v.name.as_str(), v.value.as_str()))
+            .collect();
+        assert_eq!(env.get(TeamMcpStdioConfig::ENV_PORT), Some(&"54321"));
+        assert_eq!(env.get(TeamMcpStdioConfig::ENV_TOKEN), Some(&"tok-abc"));
+        assert_eq!(env.get(TeamMcpStdioConfig::ENV_SLOT_ID), Some(&"slot-lead"));
     }
 }
