@@ -170,6 +170,16 @@ impl TeamSessionService {
 
         self.stop_session(team_id);
 
+        // D11.5: tear down every agent worker before the team's conversations
+        // are deleted — otherwise the spawned ACP/CLI processes become orphans.
+        // Failures here (e.g. the task was never built, or already gone) must
+        // not block the delete path.
+        for agent in &team.agents {
+            let _ = self
+                .task_manager
+                .kill(&agent.conversation_id, Some(AgentKillReason::TeamDeleted));
+        }
+
         for agent in &team.agents {
             let _ = self
                 .conversation_service

@@ -1253,3 +1253,53 @@ async fn d9_ensure_session_rollbacks_when_build_fails() {
         "session must not be registered after build failure"
     );
 }
+
+// ===========================================================================
+// Test: D11.5 remove_team cascades kill to every agent process
+// ===========================================================================
+
+#[tokio::test]
+async fn d115_remove_team_kills_every_agent_process() {
+    let (svc, tm) = setup_with_factory(success_factory());
+    let created = svc
+        .create_team(
+            "user1",
+            CreateTeamRequest {
+                name: "T".into(),
+                agents: two_agent_input(),
+            },
+        )
+        .await
+        .unwrap();
+
+    // Bring two agents online — after ensure_session, active_count == 2.
+    svc.ensure_session(&created.id).await.unwrap();
+    assert_eq!(
+        tm.active_count(),
+        2,
+        "ensure_session must register 2 live agents"
+    );
+
+    let before_kill = tm.snapshot().kill.len();
+
+    svc.remove_team("user1", &created.id).await.unwrap();
+
+    // remove_team must have issued one kill per agent with reason TeamDeleted,
+    // and the task manager's active_count must drop back to 0.
+    let calls = tm.snapshot();
+    let new_kills = &calls.kill[before_kill..];
+    assert_eq!(
+        new_kills.len(),
+        created.agents.len(),
+        "remove_team must kill every agent once"
+    );
+    for (i, agent) in created.agents.iter().enumerate() {
+        assert_eq!(new_kills[i].0, agent.conversation_id);
+        assert_eq!(new_kills[i].1, Some(AgentKillReason::TeamDeleted));
+    }
+    assert_eq!(
+        tm.active_count(),
+        0,
+        "every agent worker must be torn down after remove_team"
+    );
+}
