@@ -98,6 +98,13 @@ pub async fn build_module_states(
 
     let (channel_state, channel_components) = build_channel_state(services).await;
 
+    let backend_binary_path = Arc::new(
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.canonicalize().ok())
+            .unwrap_or_else(|| std::path::PathBuf::from("aionui-backend")),
+    );
+
     let states = ModuleStates {
         system: build_system_state(services),
         conversation: build_conversation_state(services, Some(cron.cron_service.clone())),
@@ -111,7 +118,11 @@ pub async fn build_module_states(
         hub: hub_state,
         skill: skill_state,
         channel: channel_state,
-        team: build_team_state(services, Some(cron.cron_service.clone())),
+        team: build_team_state(
+            services,
+            Some(cron.cron_service.clone()),
+            backend_binary_path.clone(),
+        ),
         cron,
         office: build_office_state(services),
         shell: build_shell_state(services),
@@ -385,9 +396,14 @@ pub async fn build_channel_state(
 }
 
 /// Build the default `TeamRouterState` from application services.
+///
+/// `backend_binary_path` is resolved once in `build_module_states` via
+/// `std::env::current_exe()` and cloned into each builder that needs it,
+/// per `docs/teams/phase1/interface-contracts.md` §10.
 pub fn build_team_state(
     services: &AppServices,
     cron_service: Option<Arc<aionui_cron::service::CronService>>,
+    backend_binary_path: Arc<std::path::PathBuf>,
 ) -> TeamRouterState {
     let pool = services.database.pool().clone();
     let team_repo: Arc<dyn aionui_db::ITeamRepository> =
@@ -408,12 +424,6 @@ pub fn build_team_state(
     if let Some(cron_service) = cron_service {
         conv_service.set_cron_service(Some(cron_service));
     }
-    let backend_binary_path = Arc::new(
-        std::env::current_exe()
-            .ok()
-            .and_then(|p| p.canonicalize().ok())
-            .unwrap_or_else(|| std::path::PathBuf::from("aionui-backend")),
-    );
     let service = Arc::new(TeamSessionService::new(
         team_repo,
         conv_service,
