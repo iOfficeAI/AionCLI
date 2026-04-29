@@ -844,3 +844,111 @@ async fn mcp_status_tcp_ready_is_broadcast_on_successful_bind() {
 
     env.server.stop();
 }
+
+// ---------------------------------------------------------------------------
+// Tests: W5-D30b — shutdown_rejected detection in team_send_message
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tsr1_shutdown_rejected_notifies_lead_and_preserves_agent() {
+    let env = setup().await;
+    let mut stream = connect_and_init(env.server.port(), "test-token-123", "worker-1").await;
+
+    let resp = call_tool(
+        &mut stream,
+        2,
+        "team_send_message",
+        json!({"to": "lead-1", "message": "shutdown_rejected: still working"}),
+    )
+    .await;
+
+    assert!(!is_error_response(&resp));
+    let text = extract_text(&resp);
+    assert!(
+        text.contains("shutdown_rejected"),
+        "response should echo the sentinel, got: {text}"
+    );
+    assert!(
+        text.contains("still working"),
+        "response should echo the reason, got: {text}"
+    );
+
+    // Leader mailbox contains the notification, worker did not receive a
+    // literal copy of the sentinel.
+    let state = env._repo.state.lock().unwrap();
+    let lead_msgs: Vec<_> = state.messages.iter().filter(|m| m.to_agent_id == "lead-1").collect();
+    assert_eq!(lead_msgs.len(), 1, "expected exactly one message to lead");
+    assert_eq!(lead_msgs[0].from_agent_id, "worker-1");
+    assert!(lead_msgs[0].content.contains("Worker"));
+    assert!(lead_msgs[0].content.contains("declined shutdown"));
+    assert!(lead_msgs[0].content.contains("still working"));
+
+    let lead_self_msgs: Vec<_> = state
+        .messages
+        .iter()
+        .filter(|m| m.to_agent_id == "lead-1" && m.content == "shutdown_rejected: still working")
+        .collect();
+    assert!(
+        lead_self_msgs.is_empty(),
+        "raw sentinel must not be delivered as a normal message"
+    );
+    drop(state);
+
+    env.server.stop();
+}
+
+#[tokio::test]
+async fn tsr2_shutdown_rejected_with_whitespace_reason() {
+    let env = setup().await;
+    let mut stream = connect_and_init(env.server.port(), "test-token-123", "worker-1").await;
+
+    let resp = call_tool(
+        &mut stream,
+        2,
+        "team_send_message",
+        json!({"to": "lead-1", "message": "  shutdown_rejected:   need more time  "}),
+    )
+    .await;
+
+    assert!(!is_error_response(&resp));
+
+    let state = env._repo.state.lock().unwrap();
+    let lead_msgs: Vec<_> = state.messages.iter().filter(|m| m.to_agent_id == "lead-1").collect();
+    assert_eq!(lead_msgs.len(), 1);
+    // Reason is trimmed before inclusion in the notification.
+    assert!(lead_msgs[0].content.contains("need more time"));
+    assert!(!lead_msgs[0].content.contains("  need more time  "));
+    drop(state);
+
+    env.server.stop();
+}
+
+#[tokio::test]
+async fn tsr3_send_message_without_sentinel_still_routes_normally() {
+    let env = setup().await;
+    let mut stream = connect_and_init(env.server.port(), "test-token-123", "worker-1").await;
+
+    let resp = call_tool(
+        &mut stream,
+        2,
+        "team_send_message",
+        json!({"to": "lead-1", "message": "regular update"}),
+    )
+    .await;
+
+    assert!(!is_error_response(&resp));
+    let text = extract_text(&resp);
+    assert!(text.contains("Message sent"));
+
+    // The literal message lands in the lead mailbox unchanged.
+    let state = env._repo.state.lock().unwrap();
+    let lead_msg = state
+        .messages
+        .iter()
+        .find(|m| m.to_agent_id == "lead-1")
+        .expect("message should be delivered");
+    assert_eq!(lead_msg.content, "regular update");
+    drop(state);
+
+    env.server.stop();
+}

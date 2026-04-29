@@ -395,10 +395,18 @@ async fn exec_send_message(args: &Value, scheduler: &TeammateManager, caller_slo
         debug!(from = caller_slot_id, "shutdown_approved intercepted");
         return Ok(json!({"status": "shutdown_approved_received"}).to_string());
     }
-    if trimmed.starts_with("shutdown_rejected:") {
-        // W5-D30b will wire the real rejection handling; this stub intercepts the sentinel so it never reaches the recipient.
-        debug!(from = caller_slot_id, "shutdown_rejected intercepted");
-        return Ok(json!({"status": "shutdown_rejected_received"}).to_string());
+    // Reason: a teammate replying to a shutdown request with
+    // `shutdown_rejected: <reason>` is a protocol sentinel, not a normal
+    // message. Divert it to a leader-directed notification and return without
+    // removing the agent — the teammate keeps running.
+    if let Some(rest) = trimmed.strip_prefix("shutdown_rejected:") {
+        let reason = rest.trim();
+        scheduler
+            .notify_shutdown_rejected(caller_slot_id, reason)
+            .await
+            .map_err(|e| e.to_string())?;
+        debug!(from = caller_slot_id, reason, "shutdown_rejected handled");
+        return Ok(format!("shutdown_rejected: {reason}"));
     }
 
     let action = crate::scheduler::SchedulerAction::SendMessage {

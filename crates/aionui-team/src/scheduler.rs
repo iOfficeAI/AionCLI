@@ -797,6 +797,38 @@ impl TeammateManager {
         Ok(())
     }
 
+    /// Notify the leader that a teammate declined a shutdown request.
+    ///
+    /// Called when `team_send_message` intercepts a `shutdown_rejected: <reason>`
+    /// payload. The teammate continues to run; the lead receives a mailbox
+    /// message describing who refused and why. No-op when no lead exists or
+    /// when the sender is the lead itself.
+    pub async fn notify_shutdown_rejected(&self, from_slot_id: &str, reason: &str) -> Result<(), TeamError> {
+        let Some(lead_slot_id) = self.find_lead_slot_id().await else {
+            return Ok(());
+        };
+        if lead_slot_id == from_slot_id {
+            return Ok(());
+        }
+        let agent_name = self
+            .get_agent(from_slot_id)
+            .await
+            .map(|a| a.name)
+            .unwrap_or_else(|_| from_slot_id.to_owned());
+        let content = format!("Teammate '{agent_name}' declined shutdown: {reason}");
+        self.mailbox
+            .write(
+                &self.team_id,
+                &lead_slot_id,
+                from_slot_id,
+                MailboxMessageType::Message,
+                &content,
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
     async fn handle_send_message(&self, from_slot_id: &str, to: &str, message: &str) -> Result<(), TeamError> {
         if to == "*" {
             let slots = self.slots.lock().await;
@@ -2505,5 +2537,66 @@ mod tests {
 
         let msgs2 = mailbox.read_unread("t1", "worker-2").await.unwrap();
         assert!(msgs2.is_empty());
+    }
+
+    // -- W5-D30b: notify_shutdown_rejected -------------------------------------
+
+    #[tokio::test]
+    async fn notify_shutdown_rejected_delivers_to_lead_mailbox() {
+        let agents = make_team_agents();
+        let repo = Arc::new(MockTeamRepo::new());
+        let mailbox = Arc::new(Mailbox::new(repo.clone()));
+        let task_board = Arc::new(TaskBoard::new(repo));
+        let broadcaster: Arc<dyn EventBroadcaster> = Arc::new(RecordingBroadcaster::new());
+        let mgr = TeammateManager::new("t1".into(), &agents, mailbox.clone(), task_board, broadcaster);
+
+        mgr.notify_shutdown_rejected("worker-1", "still working on task X")
+            .await
+            .unwrap();
+
+        let lead_msgs = mailbox.read_unread("t1", "lead-1").await.unwrap();
+        assert_eq!(lead_msgs.len(), 1);
+        assert_eq!(lead_msgs[0].from_agent_id, "worker-1");
+        assert!(lead_msgs[0].content.contains("Worker1"));
+        assert!(lead_msgs[0].content.contains("declined shutdown"));
+        assert!(lead_msgs[0].content.contains("still working on task X"));
+
+        // Agent was not removed
+        assert!(mgr.get_agent("worker-1").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn notify_shutdown_rejected_noop_when_no_lead() {
+        let agents = vec![
+            make_agent("worker-1", "Worker1", TeammateRole::Teammate),
+            make_agent("worker-2", "Worker2", TeammateRole::Teammate),
+        ];
+        let repo = Arc::new(MockTeamRepo::new());
+        let mailbox = Arc::new(Mailbox::new(repo.clone()));
+        let task_board = Arc::new(TaskBoard::new(repo));
+        let broadcaster: Arc<dyn EventBroadcaster> = Arc::new(RecordingBroadcaster::new());
+        let mgr = TeammateManager::new("t1".into(), &agents, mailbox.clone(), task_board, broadcaster);
+
+        mgr.notify_shutdown_rejected("worker-1", "busy").await.unwrap();
+
+        let msgs1 = mailbox.read_unread("t1", "worker-1").await.unwrap();
+        let msgs2 = mailbox.read_unread("t1", "worker-2").await.unwrap();
+        assert!(msgs1.is_empty());
+        assert!(msgs2.is_empty());
+    }
+
+    #[tokio::test]
+    async fn notify_shutdown_rejected_noop_when_sender_is_lead() {
+        let agents = make_team_agents();
+        let repo = Arc::new(MockTeamRepo::new());
+        let mailbox = Arc::new(Mailbox::new(repo.clone()));
+        let task_board = Arc::new(TaskBoard::new(repo));
+        let broadcaster: Arc<dyn EventBroadcaster> = Arc::new(RecordingBroadcaster::new());
+        let mgr = TeammateManager::new("t1".into(), &agents, mailbox.clone(), task_board, broadcaster);
+
+        mgr.notify_shutdown_rejected("lead-1", "irrelevant").await.unwrap();
+
+        let lead_msgs = mailbox.read_unread("t1", "lead-1").await.unwrap();
+        assert!(lead_msgs.is_empty());
     }
 }
