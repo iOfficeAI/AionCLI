@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use aionui_realtime::EventBroadcaster;
-use dashmap::DashSet;
+use dashmap::{DashMap, DashSet};
 use tokio::sync::Mutex;
 use tracing::debug;
 
@@ -15,6 +16,8 @@ use crate::types::{
 };
 
 pub const WAKE_TIMEOUT_MS: u64 = 60_000;
+
+const FINALIZE_DEDUP_WINDOW: Duration = Duration::from_secs(5);
 
 // ---------------------------------------------------------------------------
 // SchedulerAction — actions parsed from an agent's turn response
@@ -89,6 +92,10 @@ pub struct TeammateManager {
     task_board: Arc<TaskBoard>,
     events: TeamEventEmitter,
     active_wakes: DashSet<String>,
+    // Reason: Finish / Error events may fire back-to-back for the same
+    // conversation; without this dedup window, finalize_turn would run twice
+    // and double-write the IdleNotification (aionui-audit §4.3, §8 #3).
+    finalized_turns: Arc<DashMap<String, Instant>>,
 }
 
 /// Status set that counts as "settled" for the purpose of
@@ -132,6 +139,7 @@ impl TeammateManager {
             task_board,
             events,
             active_wakes: DashSet::new(),
+            finalized_turns: Arc::new(DashMap::new()),
         }
     }
 
@@ -430,6 +438,42 @@ impl TeammateManager {
     /// Idempotent: no-op if the lock was never held.
     pub fn release_wake_lock(&self, slot_id: &str) {
         self.active_wakes.remove(slot_id);
+    }
+
+    /// Attempt to claim the right to finalize the turn for `conversation_id`.
+    ///
+    /// Returns `true` when the caller should proceed with finalize. Returns
+    /// `false` when another finalize ran for the same conversation within
+    /// the last [`FINALIZE_DEDUP_WINDOW`] and the caller should skip.
+    ///
+    /// On success, records the current instant and spawns a task to remove
+    /// the entry after the window elapses — keeps the map bounded without
+    /// requiring callers to clean up.
+    pub fn begin_finalize(&self, conversation_id: &str) -> bool {
+        let now = Instant::now();
+        let should_proceed = !matches!(
+            self.finalized_turns.get(conversation_id),
+            Some(entry) if now.duration_since(*entry.value()) < FINALIZE_DEDUP_WINDOW
+        );
+        if should_proceed {
+            self.finalized_turns.insert(conversation_id.to_owned(), now);
+            let map = self.finalized_turns.clone();
+            let key = conversation_id.to_owned();
+            tokio::spawn(async move {
+                tokio::time::sleep(FINALIZE_DEDUP_WINDOW).await;
+                map.remove(&key);
+            });
+        }
+        should_proceed
+    }
+
+    /// Drop the finalize-dedup entry for `conversation_id` immediately.
+    ///
+    /// Reason: re-wake paths (W4-D18) start a fresh turn whose own Finish
+    /// would otherwise be swallowed by a lingering dedup entry from the
+    /// previous turn (aionui-audit §8 #3).
+    pub fn clear_finalized_turn(&self, conversation_id: &str) {
+        self.finalized_turns.remove(conversation_id);
     }
 
     // -----------------------------------------------------------------------
@@ -1543,6 +1587,41 @@ mod tests {
         assert!(
             mgr.acquire_wake_lock("worker-2"),
             "different slot must not be blocked"
+        );
+    }
+
+    // -- W4-D19a: finalize-turn dedup ----------------------------------------
+
+    #[tokio::test]
+    async fn begin_finalize_first_call_returns_true() {
+        let agents = make_team_agents();
+        let (mgr, _) = make_manager(&agents);
+
+        assert!(mgr.begin_finalize("conv-worker-1"));
+    }
+
+    #[tokio::test]
+    async fn begin_finalize_within_window_returns_false() {
+        let agents = make_team_agents();
+        let (mgr, _) = make_manager(&agents);
+
+        assert!(mgr.begin_finalize("conv-worker-1"));
+        assert!(
+            !mgr.begin_finalize("conv-worker-1"),
+            "second finalize within 5s window must be deduped"
+        );
+    }
+
+    #[tokio::test]
+    async fn clear_finalized_turn_allows_immediate_retry() {
+        let agents = make_team_agents();
+        let (mgr, _) = make_manager(&agents);
+
+        assert!(mgr.begin_finalize("conv-worker-1"));
+        mgr.clear_finalized_turn("conv-worker-1");
+        assert!(
+            mgr.begin_finalize("conv-worker-1"),
+            "clearing the dedup entry must let the next finalize proceed"
         );
     }
 
