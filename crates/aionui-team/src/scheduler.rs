@@ -1259,6 +1259,22 @@ mod tests {
 
         let all = mgr.list_agents().await;
         assert_eq!(all.len(), 2);
+        assert!(
+            all.iter().all(|a| a.slot_id != "worker-2"),
+            "list_agents must not contain the removed slot_id"
+        );
+        assert!(
+            all.iter().any(|a| a.slot_id == "lead-1") && all.iter().any(|a| a.slot_id == "worker-1"),
+            "list_agents must retain every slot that was not removed"
+        );
+
+        assert!(
+            matches!(
+                mgr.get_agent("worker-2").await,
+                Err(TeamError::AgentNotFound(ref s)) if s == "worker-2"
+            ),
+            "get_agent on a removed slot must return AgentNotFound"
+        );
 
         let removed_events: Vec<_> = bc
             .events()
@@ -1331,6 +1347,30 @@ mod tests {
         assert!(
             mgr.finalized_turns.get(conv_id).is_none(),
             "finalized_turns must not retain the removed slot's conversation_id"
+        );
+    }
+
+    #[tokio::test]
+    async fn remove_agent_twice_second_call_is_noop_and_no_extra_broadcast() {
+        let agents = make_team_agents();
+        let (mgr, bc) = make_manager(&agents);
+
+        mgr.remove_agent("worker-2").await.unwrap();
+        let second = mgr.remove_agent("worker-2").await;
+        assert!(
+            matches!(second, Err(TeamError::AgentNotFound(ref s)) if s == "worker-2"),
+            "second remove of the same slot must fail with AgentNotFound"
+        );
+
+        let removed_events: Vec<_> = bc
+            .events()
+            .into_iter()
+            .filter(|e| e.name == "team.agent.removed")
+            .collect();
+        assert_eq!(
+            removed_events.len(),
+            1,
+            "failed second remove must not emit another team.agent.removed"
         );
     }
 
