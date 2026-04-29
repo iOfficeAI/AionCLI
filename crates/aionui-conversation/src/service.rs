@@ -24,6 +24,7 @@ use crate::convert::{
 };
 use crate::skill_resolver::SkillResolver;
 use crate::stream_relay::StreamRelay;
+use crate::traits::ITeamMessageRouter;
 
 const MAX_CRON_CONTINUATIONS_PER_TURN: usize = 4;
 
@@ -40,6 +41,7 @@ pub struct ConversationService {
     workspace_root: std::path::PathBuf,
     skill_resolver: Arc<dyn SkillResolver>,
     cron_service: Arc<std::sync::RwLock<Option<Arc<dyn ICronService>>>>,
+    team_router: Arc<std::sync::RwLock<Option<Arc<dyn ITeamMessageRouter>>>>,
 }
 
 impl ConversationService {
@@ -55,6 +57,7 @@ impl ConversationService {
             workspace_root: std::path::PathBuf::from("data"),
             skill_resolver,
             cron_service: Arc::new(std::sync::RwLock::new(None)),
+            team_router: Arc::new(std::sync::RwLock::new(None)),
         }
     }
 
@@ -71,6 +74,7 @@ impl ConversationService {
             workspace_root,
             skill_resolver,
             cron_service: Arc::new(std::sync::RwLock::new(None)),
+            team_router: Arc::new(std::sync::RwLock::new(None)),
         }
     }
 
@@ -87,6 +91,7 @@ impl ConversationService {
             workspace_root: std::path::PathBuf::from("data"),
             skill_resolver,
             cron_service: Arc::new(std::sync::RwLock::new(None)),
+            team_router: Arc::new(std::sync::RwLock::new(None)),
         }
     }
 
@@ -94,6 +99,20 @@ impl ConversationService {
         if let Ok(mut guard) = self.cron_service.write() {
             *guard = cron_service;
         }
+    }
+
+    /// Inject the team-message router. Called by `build_app_services` once
+    /// `TeamSessionService` is constructed (W3-D16c). When `None`, routing
+    /// falls back to the single-chat path.
+    pub fn set_team_router(&self, team_router: Option<Arc<dyn ITeamMessageRouter>>) {
+        if let Ok(mut guard) = self.team_router.write() {
+            *guard = team_router;
+        }
+    }
+
+    /// Snapshot of the currently injected team router, if any.
+    pub fn team_router(&self) -> Option<Arc<dyn ITeamMessageRouter>> {
+        self.team_router.read().ok().and_then(|g| g.clone())
     }
 
     /// Create a new conversation.
