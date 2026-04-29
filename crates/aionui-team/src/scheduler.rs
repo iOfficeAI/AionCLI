@@ -17,6 +17,24 @@ use crate::types::{
 pub const WAKE_TIMEOUT_MS: u64 = 60_000;
 
 // ---------------------------------------------------------------------------
+// normalize_name — canonical form for agent-name conflict checks
+// ---------------------------------------------------------------------------
+
+/// Normalize an agent name to its canonical form for conflict detection.
+///
+/// Rules (see interface-contracts §15.1):
+/// 1. Trim leading/trailing whitespace.
+/// 2. Drop control characters (`char::is_control`).
+/// 3. Lowercase (Unicode-aware via `to_lowercase`).
+pub fn normalize_name(name: &str) -> String {
+    name.trim()
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect::<String>()
+        .to_lowercase()
+}
+
+// ---------------------------------------------------------------------------
 // SchedulerAction — actions parsed from an agent's turn response
 // ---------------------------------------------------------------------------
 
@@ -597,6 +615,35 @@ mod tests {
     use super::*;
     use crate::test_utils::MockTeamRepo;
     use aionui_api_types::WebSocketMessage;
+
+    // -----------------------------------------------------------------
+    // normalize_name — §15.1 contract
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn normalize_name_trims_outer_whitespace() {
+        assert_eq!(normalize_name("  Alice  "), "alice");
+        assert_eq!(normalize_name("\tBob\n"), "bob");
+    }
+
+    #[test]
+    fn normalize_name_lowercases_ascii_and_unicode() {
+        assert_eq!(normalize_name("ALICE"), "alice");
+        assert_eq!(normalize_name("Crème"), "crème");
+    }
+
+    #[test]
+    fn normalize_name_filters_control_characters() {
+        // Null + bell in the middle + outer whitespace.
+        assert_eq!(normalize_name("  Ali\x00ce\x07 "), "alice");
+    }
+
+    #[test]
+    fn normalize_name_collides_on_case_and_whitespace() {
+        // Conflict-detection invariant: two inputs that only differ by
+        // surrounding whitespace / case must normalize to the same string.
+        assert_eq!(normalize_name("  Leader  "), normalize_name("leader"));
+    }
 
     struct RecordingBroadcaster {
         events: std::sync::Mutex<Vec<WebSocketMessage<serde_json::Value>>>,
