@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use aionui_api_types::TeamMcpStdioConfig;
 use aionui_common::{AcpBackend, AgentType, ProviderWithModel};
 
 /// Data payload for sending a user message to an Agent.
@@ -71,6 +72,12 @@ pub struct AcpBuildExtra {
     /// Associated cron job ID.
     #[serde(default)]
     pub cron_job_id: Option<String>,
+    /// Team session MCP stdio config. When present, the factory injects it as
+    /// a stdio MCP server on `session/new`. Written by
+    /// `TeamSessionService::ensure_session` into `conversation.extra`; solo
+    /// conversations leave this unset.
+    #[serde(default)]
+    pub team_mcp_stdio_config: Option<TeamMcpStdioConfig>,
 }
 
 /// OpenClaw gateway configuration.
@@ -224,6 +231,33 @@ mod tests {
         let with_field = r#"{"backend":"claude","skills":["cron","pdf"]}"#;
         let parsed: AcpBuildExtra = serde_json::from_str(with_field).unwrap();
         assert_eq!(parsed.skills, vec!["cron".to_owned(), "pdf".to_owned()]);
+    }
+
+    #[test]
+    fn acp_build_extra_missing_team_mcp_stdio_config_is_none() {
+        // Legacy extra (pre-team-wave1) must deserialize cleanly with the new
+        // optional `team_mcp_stdio_config` absent — this keeps solo chat
+        // conversations working without any migration.
+        let legacy = r#"{"backend":"claude","skills":["cron"]}"#;
+        let parsed: AcpBuildExtra = serde_json::from_str(legacy).unwrap();
+        assert!(parsed.team_mcp_stdio_config.is_none());
+    }
+
+    #[test]
+    fn acp_build_extra_parses_team_mcp_stdio_config() {
+        let with_cfg = r#"{
+            "backend":"claude",
+            "team_mcp_stdio_config":{
+                "port":54321,
+                "token":"tok-abc",
+                "slot_id":"slot-lead"
+            }
+        }"#;
+        let parsed: AcpBuildExtra = serde_json::from_str(with_cfg).unwrap();
+        let cfg = parsed.team_mcp_stdio_config.expect("config present");
+        assert_eq!(cfg.port, 54321);
+        assert_eq!(cfg.token, "tok-abc");
+        assert_eq!(cfg.slot_id, "slot-lead");
     }
 
     #[test]
