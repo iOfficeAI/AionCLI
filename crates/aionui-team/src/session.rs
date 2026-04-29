@@ -523,6 +523,29 @@ mod tests {
         fn broadcast(&self, _msg: WebSocketMessage<serde_json::Value>) {}
     }
 
+    /// RecordingBroadcaster used by the D29d-1 ratification test below to
+    /// assert that `team.agent.spawned` is *not* emitted on failed spawns.
+    #[derive(Default)]
+    struct RecordingBroadcaster {
+        events: Mutex<Vec<WebSocketMessage<serde_json::Value>>>,
+    }
+
+    impl RecordingBroadcaster {
+        fn new() -> Self {
+            Self::default()
+        }
+
+        fn names(&self) -> Vec<String> {
+            self.events.lock().unwrap().iter().map(|e| e.name.clone()).collect()
+        }
+    }
+
+    impl EventBroadcaster for RecordingBroadcaster {
+        fn broadcast(&self, msg: WebSocketMessage<serde_json::Value>) {
+            self.events.lock().unwrap().push(msg);
+        }
+    }
+
     fn backend_path() -> Arc<PathBuf> {
         Arc::new(PathBuf::from("/tmp/aionui-backend-test"))
     }
@@ -1223,6 +1246,26 @@ mod tests {
         .unwrap()
     }
 
+    async fn start_session_with_recorder(backend: &str) -> (TeamSession, Arc<RecordingBroadcaster>) {
+        let mut team = make_team();
+        team.agents[0].backend = backend.to_string();
+        let repo: Arc<dyn ITeamRepository> = Arc::new(MockTeamRepo::new());
+        let recorder = Arc::new(RecordingBroadcaster::new());
+        let broadcaster: Arc<dyn EventBroadcaster> = recorder.clone();
+        let session = TeamSession::start(
+            team,
+            repo,
+            broadcaster,
+            backend_path(),
+            empty_task_manager(),
+            "user-test".into(),
+            Weak::<TeamSessionService>::new(),
+        )
+        .await
+        .unwrap();
+        (session, recorder)
+    }
+
     fn spawn_req(agent_type: Option<&str>) -> SpawnAgentRequest {
         SpawnAgentRequest {
             name: "Helper".into(),
@@ -1352,6 +1395,49 @@ mod tests {
         assert!(
             matches!(&err, TeamError::InvalidRequest(msg) if msg.contains("empty")),
             "expected InvalidRequest about empty name, got {err:?}"
+        );
+        session.stop();
+    }
+
+    // -- W5-D29d-1 ratification: spawn emit-order contract ------------------
+    //
+    // The success-path emission of `team.agent.spawned` is exercised by
+    // `scheduler::tests::add_agent_broadcasts_spawned_event` — `spawn_agent`
+    // reaches that emission via `scheduler.add_agent(&new_agent)` after
+    // `persist_spawned_agent` returns. This ratification test locks the
+    // *ordering* half of the contract: the event must NOT be published
+    // before the DB step succeeds. If a future refactor hoists broadcast
+    // above the persist/add_agent boundary (so the frontend sees a spawned
+    // agent that never persisted), this test regresses.
+
+    #[tokio::test]
+    async fn spawn_agent_does_not_emit_before_db_step() {
+        let (session, recorder) = start_session_with_recorder("claude").await;
+        let err = session
+            .spawn_agent("lead-1", spawn_req(Some("claude")))
+            .await
+            .expect_err("unit test has no service wire; spawn stops at DB step");
+        assert_reached_db_step(err);
+        assert!(
+            !recorder.names().iter().any(|n| n == "team.agent.spawned"),
+            "team.agent.spawned must not be emitted when spawn fails before add_agent; saw {:?}",
+            recorder.names()
+        );
+        session.stop();
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_does_not_emit_on_guard_rejection() {
+        let (session, recorder) = start_session_with_recorder("claude").await;
+        let err = session
+            .spawn_agent("worker-1", spawn_req(Some("claude")))
+            .await
+            .expect_err("non-lead caller must be rejected");
+        assert!(matches!(&err, TeamError::LeaderOnly(what) if what == "spawn_agent"));
+        assert!(
+            !recorder.names().iter().any(|n| n == "team.agent.spawned"),
+            "team.agent.spawned must not be emitted when guard rejects the caller; saw {:?}",
+            recorder.names()
         );
         session.stop();
     }
