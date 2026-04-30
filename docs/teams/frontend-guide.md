@@ -51,32 +51,38 @@
 | D25c-1 broadcast channel 挂在 AcpAgentManager | ✅ | |
 | D25c-2 ACP dispatch 各点 emit | ✅ | `subscribe_stream` 能收到 Text / Thought / ToolUse / Finish / Error |
 | D18b-1 wake_timeouts 存储 | ✅ | |
-| D18b-2 `arm_wake_timeout` 任务 | 🔄 | |
-| D18c wake lock 接入 | 🔄 | |
+| D18b-2 `arm_wake_timeout` 任务 | ✅ | |
+| D18c wake lock 接入 | ✅ | |
 
 ### Wave 5 — spawn / shutdown / Guide MCP
 
 | 模块 | 状态 | 说明 |
 |------|:---:|------|
-| D26a GuideMcpServer 骨架 | 🔄 | |
-| D26b-1 `aion_create_team` 参数解析 | 🔄 | |
-| D26c `aion_list_models` 处理器 | 🔄 | |
+| D26a GuideMcpServer 骨架 | ✅ | 应用级单例，暴露 `aion_create_team` / `aion_list_models` 给 solo agent |
+| D26b-1 `aion_create_team` 参数解析 | ✅ | |
+| D26b-2 `handle_aion_create_team` handler | 🔄 | 调 service + 返回结构化 |
+| D26c `aion_list_models` 处理器 | ✅ | |
 | D28a `is_team_capable_backend` 白名单 | ✅ | `guide/capability.rs`，白名单 `claude / codex / gemini / aionrs` |
+| D28b Guide prompt 注入（solo 互斥） | ✅ | solo agent 首轮消息注入 Team Guide prompt |
+| D28c Guide MCP guard（solo 互斥） | ✅ | team 模式下不注入 Guide |
 | D29a-1 `SpawnAgentRequest` + 方法骨架 | ✅ | |
 | D29a-2 caller role==Lead 校验 | ✅ | |
-| D29a-3 name normalize + 唯一性 | 🔄 | |
-| D29a-4 backend 白名单校验 | 🔄 | |
-| **D29b spawn_agent 真实落地** | 🔄 | 完成后 `team_spawn_agent` 从 no-op 变真实创建 |
+| D29a-3 name normalize + 唯一性 | ✅ | |
+| D29a-4 backend 白名单校验 | ✅ | |
+| **D29b spawn_agent 真实落地** | ✅ | **已合入** — conversation 创建 + slot 分配 + kill/warmup agent |
+| D29d-1 `team.agent.spawned` WS 事件 | 🔄 | spawn 成功后广播 |
+| D29e MCP dispatch 接通 session | 🔄 | `exec_spawn_agent` 改成调 `TeamSession::spawn_agent` |
 | D30a-1 shutdown_approved/rejected 字符串拦截 | ✅ | |
+| D30a-2 `team.agent.shutdown` WS 事件 | ✅ | shutdown_approved 后广播通知前端 |
 | D30b `shutdown_rejected:<reason>` 处理 | ✅ | `mcp/server.rs` 已拦截 |
 | D30c `shutdown_agent` target=Lead 校验 | ✅ | 拒绝关 lead |
-| D30d-1 `remove_agent` 真 kill agent 进程 | 🔄 | |
+| D30d-1 `remove_agent` 真 kill agent 进程 | ✅ | |
 | D30d-2 `remove_agent` 清 active_wakes / wake_timeouts / finalized_turns | ✅ | |
-| D30d-3 `remove_agent` 摘 slot + 广播 `team.agent.removed` | 🔄 | |
+| D30d-3 `remove_agent` 测试加强 | ✅ | 二次 remove → AgentNotFound + 精确 slot 匹配 |
 | D31a TeamMcpPhase enum + WS payload 类型 | ✅ | 10-phase，见下文 |
 | D31b-1 `team.mcpStatus` TCP 就绪广播 | ✅ | `TcpReady` / `TcpError` |
-| D31b-2 service-layer `team.mcpStatus` 广播 | ⏳ | |
-| e2e smoke scaffold | ✅ | `crates/aionui-team/tests/e2e_smoke.rs` 5 个用户故事 |
+| D31b-2 service-layer `team.mcpStatus` 广播 | ✅ | 5 点广播（LoadFailed/SessionError/Injecting/ConfigWriteFailed/Ready） |
+| e2e smoke（真实链路） | ✅ | 4 个 scenario 全绿：REST→MCP→Agent→DB |
 
 ## MCP Transport 变更（Wave 4）
 
@@ -97,7 +103,7 @@ agent 连接 MCP server 后，以下工具对 agent 可见且可调用：
 | 工具 | 状态 | 说明 |
 |------|:---:|------|
 | `team_send_message` | ✅ Working | agent 间发消息；新增 `shutdown_approved` / `shutdown_rejected:<reason>` 字符串语义（Wave 5 D30a/b） |
-| `team_spawn_agent` | 🔄 落地中 | 校验链基本完成（caller=Lead ✅、backend 白名单 🔄、name normalize 🔄）。**D29b 合入后**从 no-op 变真实创建 |
+| `team_spawn_agent` | ✅ Working | caller=Lead 校验 + backend 白名单 + name normalize + 真实创建 conversation + slot 分配 + agent 启动。MCP dispatch 接通进行中 |
 | `team_task_create` | ✅ Working | 创建任务 |
 | `team_task_update` | ✅ Working | 更新任务状态 |
 | `team_task_list` | ✅ Working | 列出所有任务 |
@@ -111,15 +117,15 @@ agent 连接 MCP server 后，以下工具对 agent 可见且可调用：
 
 | 工具 | 状态 | 说明 |
 |------|:---:|------|
-| `aion_create_team` | 🔄 落地中 | 骨架 + 参数解析写完（D26a、D26b-1），handler 接入进行中 |
-| `aion_list_models` | 🔄 落地中 | D26c handler 已写，待合 + 注入会话 |
+| `aion_create_team` | 🔄 落地中 | 骨架 + 参数解析 ✅，handler (D26b-2) 进行中 |
+| `aion_list_models` | ✅ | D26c handler 已合入 |
 
 前端一般不直接感知这个 MCP；但当用户在单聊里说"帮我起一个团队"时，agent 会调 `aion_create_team`，后端应该：
 1. 建 team + 复用当前 conversation 作为 lead
 2. 启动 session（自动注入 per-team MCP）
 3. 推 WS 事件通知前端跳转
 
-目前 Guide MCP 尚未挂进 session（D28b/c 待落），solo agent 还调不到这两个工具。前端仍需走 `POST /api/teams` 显式建团。
+D28b/c 已合入：solo team-capable agent 的首轮消息里已注入 Team Guide prompt，且 MCP guard 确保 team 模式下不重复注入。GuideMcpServer（应用级单例）的 HTTP config 注入等全局 server 启动就绪后自动生效。目前 solo agent 可看到 prompt 引导，但 MCP 工具调用还需 Guide server 完全上线。前端仍可走 `POST /api/teams` 显式建团。
 
 ### shutdown 协议（Wave 5）
 
@@ -128,7 +134,7 @@ Lead 调 `team_shutdown_agent` 后，teammate 可以在下一个回合里用 `te
 - `shutdown_approved` → scheduler 触发 `remove_agent`，该 agent 的 `active_wakes` / `wake_timeouts` / `finalized_turns` 被清，最终广播 `team.agent.removed`
 - `shutdown_rejected:<reason>` → scheduler 取消 pending 的 shutdown，lead 下一回合能看到理由（已实现）
 
-完整 `remove_agent` 链路（kill 进程 + 清状态 + 摘 slot + 广播）需要 D30d-1 / D30d-3 合入后闭环；D30d-2（清调度器状态）已在。
+完整 `remove_agent` 链路已闭环：kill 进程 (D30d-1 ✅) + 清状态 (D30d-2 ✅) + 摘 slot + 广播 `team.agent.removed` (D30d-3 ✅)。shutdown_approved 后还会额外广播 `team.agent.shutdown` (D30a-2 ✅)。
 
 前端不需要特殊处理 — 继续订阅 `team.agent.removed` / `team.agent.status`，收到 `removed` 就把 slot 从列表摘掉。
 

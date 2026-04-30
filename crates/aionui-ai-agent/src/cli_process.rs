@@ -201,6 +201,11 @@ impl CliAgentProcess {
         let mut cmd = Command::new(&config.command);
         cmd.args(&config.args)
             .envs(config.env.iter().map(|e| (&e.name, &e.value)))
+            .envs(Self::agent_spawn_env())
+            .env_remove("CLAUDECODE")
+            .env_remove("NODE_OPTIONS")
+            .env_remove("NODE_INSPECT")
+            .env_remove("NODE_DEBUG")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -290,6 +295,48 @@ impl CliAgentProcess {
             _stderr_handle: Arc::new(stderr_handle),
             _exit_handle: Arc::new(exit_handle),
         })
+    }
+
+    /// Build environment variables for agent subprocess spawn.
+    /// Mirrors the frontend `acpConnectors.ts::getCleanAgentEnv` logic:
+    /// - Set BUN_INSTALL_CACHE_DIR / BUN_TMPDIR to stable paths
+    /// - Set CLAUDE_CODE_EXECUTABLE so claude-agent-sdk finds the CLI
+    fn agent_spawn_env() -> Vec<(String, String)> {
+        let data_dir = dirs::data_local_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("aionui");
+        let bun_cache = data_dir.join("bun-cache");
+        let bun_tmp = data_dir.join("bun-tmp");
+
+        let mut env = vec![
+            ("BUN_INSTALL_CACHE_DIR".into(), bun_cache.to_string_lossy().into_owned()),
+            ("BUN_TMPDIR".into(), bun_tmp.to_string_lossy().into_owned()),
+        ];
+
+        if let Some(claude_path) = Self::find_native_claude() {
+            env.push(("CLAUDE_CODE_EXECUTABLE".into(), claude_path));
+        }
+
+        env
+    }
+
+    /// Find the native Claude Code binary, skipping superset wrapper scripts.
+    /// Mirrors the logic in `~/.superset/bin/claude` (find_real_binary).
+    fn find_native_claude() -> Option<String> {
+        let path_var = std::env::var("PATH").unwrap_or_default();
+        let home = std::env::var("HOME").unwrap_or_default();
+        let superset_bin = format!("{home}/.superset/bin");
+
+        for dir in path_var.split(':') {
+            if dir.is_empty() || dir == superset_bin || dir.contains(".superset") {
+                continue;
+            }
+            let candidate = std::path::Path::new(dir).join("claude");
+            if candidate.is_file() {
+                return Some(candidate.to_string_lossy().into_owned());
+            }
+        }
+        None
     }
 
     /// Take ownership of stdin and stdout for the SDK transport.

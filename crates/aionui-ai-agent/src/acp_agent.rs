@@ -1390,11 +1390,7 @@ mod tests {
         // load-bearing when the D26a follow-up starts pushing
         // `McpServer::Http` onto the list.
         let extra: AcpBuildExtra = serde_json::from_value(json!({ "backend": "custom" })).unwrap();
-        let req = build_new_session_request(
-            "/workspace",
-            &extra,
-            std::path::Path::new("/usr/bin/aionui-backend"),
-        );
+        let req = build_new_session_request("/workspace", &extra, std::path::Path::new("/usr/bin/aionui-backend"));
         assert!(
             req.mcp_servers.is_empty(),
             "non-capable backend must not inject Guide MCP, got {:?}",
@@ -1407,11 +1403,7 @@ mod tests {
         // Defensive: `extra.backend` is optional and historically may be
         // absent on legacy conversations. Guard must handle `None`.
         let extra: AcpBuildExtra = serde_json::from_value(json!({})).unwrap();
-        let req = build_new_session_request(
-            "/workspace",
-            &extra,
-            std::path::Path::new("/usr/bin/aionui-backend"),
-        );
+        let req = build_new_session_request("/workspace", &extra, std::path::Path::new("/usr/bin/aionui-backend"));
         assert!(
             req.mcp_servers.is_empty(),
             "missing backend must not inject Guide MCP, got {:?}",
