@@ -795,6 +795,7 @@ async fn sb1_bridge_config_generation() {
         port: env.server.port(),
         token: env.server.auth_token().to_string(),
         slot_id: "lead-1".into(),
+        binary_path: "/bin/aionui-backend".into(),
     };
 
     let spec = TeamMcpStdioServerSpec::from_config("/bin/aionui-backend", &config);
@@ -819,12 +820,14 @@ async fn sb3_different_agents_get_different_slot_ids() {
         port,
         token: token.clone(),
         slot_id: "lead-1".into(),
+        binary_path: "/b".into(),
     };
     let cfg_worker = TeamMcpStdioConfig {
         team_id: "t".into(),
         port,
         token,
         slot_id: "worker-1".into(),
+        binary_path: "/b".into(),
     };
     let spec_lead = TeamMcpStdioServerSpec::from_config("/b", &cfg_lead);
     let spec_worker = TeamMcpStdioServerSpec::from_config("/b", &cfg_worker);

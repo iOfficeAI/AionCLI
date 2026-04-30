@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use aionui_api_types::TeamMcpStdioConfig;
+use aionui_api_types::{GuideMcpConfig, TeamMcpStdioConfig};
 use aionui_common::{AgentType, ProviderWithModel};
 
 /// Data payload for sending a user message to an Agent.
@@ -79,6 +79,11 @@ pub struct AcpBuildExtra {
     /// conversations leave this unset.
     #[serde(default)]
     pub team_mcp_stdio_config: Option<TeamMcpStdioConfig>,
+    /// Guide MCP stdio config for solo team-capable sessions.
+    /// When present alongside a team-capable `backend` and no `team_mcp_stdio_config`,
+    /// `build_new_session_request` injects the Guide as a stdio MCP server.
+    #[serde(default)]
+    pub guide_mcp_config: Option<GuideMcpConfig>,
 }
 
 /// OpenClaw gateway configuration.

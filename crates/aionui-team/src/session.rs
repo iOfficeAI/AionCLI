@@ -126,6 +126,10 @@ impl TeamSession {
         &self.team.id
     }
 
+    pub fn user_id(&self) -> &str {
+        &self.user_id
+    }
+
     pub fn scheduler(&self) -> &Arc<TeammateManager> {
         &self.scheduler
     }
@@ -133,9 +137,10 @@ impl TeamSession {
     pub fn mcp_stdio_config(&self, slot_id: &str) -> TeamMcpStdioConfig {
         TeamMcpStdioConfig {
             team_id: self.team.id.clone(),
-            port: self.mcp_server.http_port(),
+            port: self.mcp_server.port(),
             token: self.mcp_server.auth_token().to_owned(),
             slot_id: slot_id.to_owned(),
+            binary_path: self.backend_binary_path.to_string_lossy().into_owned(),
         }
     }
 
@@ -329,14 +334,36 @@ impl TeamSession {
 
         self.mirror_unread_to_conversation(&input).await;
 
-        let Some(handle) = self.task_manager.get_task(&input.conversation_id) else {
-            warn!(
-                team_id = %self.team.id,
-                slot_id,
-                conversation_id = %input.conversation_id,
-                "no active agent task for conversation; skipping wake (ensure_session must run first)"
-            );
-            return;
+        let handle = if let Some(h) = self.task_manager.get_task(&input.conversation_id) {
+            h
+        } else {
+            // Task missing — warmup to create it (mirrors AionUi's getOrBuildTask).
+            if let Some(svc) = self.service.upgrade() {
+                if let Err(e) = svc
+                    .conversation_service_ref()
+                    .warmup(&self.user_id, &input.conversation_id, &self.task_manager)
+                    .await
+                {
+                    warn!(
+                        team_id = %self.team.id,
+                        slot_id,
+                        conversation_id = %input.conversation_id,
+                        error = %e,
+                        "warmup in try_wake failed; skipping wake"
+                    );
+                    return;
+                }
+            }
+            let Some(h) = self.task_manager.get_task(&input.conversation_id) else {
+                warn!(
+                    team_id = %self.team.id,
+                    slot_id,
+                    conversation_id = %input.conversation_id,
+                    "no active agent task after warmup; skipping wake"
+                );
+                return;
+            };
+            h
         };
 
         let data = SendMessageData {

@@ -1,4 +1,5 @@
 use aion_agent::session::SessionManager;
+use aionui_api_types::GuideMcpConfig;
 use aionui_common::{AgentType, AppError, CommandSpec};
 use aionui_db::{IProviderRepository, IRemoteAgentRepository};
 use std::path::PathBuf;
@@ -30,6 +31,10 @@ pub struct AgentFactoryDeps {
     /// stdio MCP bridge injected into ACP `session/new` for team sessions.
     /// Captured once at app startup (`std::env::current_exe()`).
     pub backend_binary_path: Arc<PathBuf>,
+    /// Guide MCP server config. When `Some`, injected into solo (non-team)
+    /// ACP agent sessions so the agent gets the `aion_create_team` tool.
+    /// `None` when the Guide server failed to start (graceful degradation).
+    pub guide_mcp_config: Option<GuideMcpConfig>,
 }
 
 /// Build a production agent factory that dispatches to concrete agent types.
@@ -102,6 +107,24 @@ async fn build_agent(deps: Arc<AgentFactoryDeps>, options: BuildTaskOptions) -> 
 
             if config.backend.is_none() {
                 config.backend.clone_from(&meta.backend);
+            }
+
+            // Inject Guide MCP config for solo (non-team) sessions.
+            // Team sessions already carry `team_mcp_stdio_config`; the
+            // two are mutually exclusive per the build_new_session_request guard.
+            if config.team_mcp_stdio_config.is_some() {
+                debug!(conversation_id, "guide_mcp: skipped: has team_mcp");
+            } else if config.guide_mcp_config.is_some() {
+                debug!(conversation_id, "guide_mcp: skipped: caller already set guide_mcp_config");
+            } else if deps.guide_mcp_config.is_none() {
+                debug!(conversation_id, "guide_mcp: skipped: guide server not running");
+            } else {
+                config.guide_mcp_config.clone_from(&deps.guide_mcp_config);
+                info!(
+                    conversation_id,
+                    guide_mcp_port = deps.guide_mcp_config.as_ref().map(|c| c.port),
+                    "guide_mcp: injected into solo session"
+                );
             }
 
             // Registry resolved the spawn command via `which()` at
