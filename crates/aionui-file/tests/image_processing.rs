@@ -38,7 +38,10 @@ async fn get_image_base64_png() {
     fs::write(&file, &png_bytes).unwrap();
 
     let svc = make_service(dir.path());
-    let result = svc.get_image_base64(file.to_str().unwrap()).await.unwrap();
+    let result = svc
+        .get_image_base64(file.to_str().unwrap(), None)
+        .await
+        .unwrap();
 
     assert!(
         result.starts_with("data:image/png;base64,"),
@@ -60,7 +63,10 @@ async fn get_image_base64_jpeg() {
     fs::write(&file, &jpeg_bytes).unwrap();
 
     let svc = make_service(dir.path());
-    let result = svc.get_image_base64(file.to_str().unwrap()).await.unwrap();
+    let result = svc
+        .get_image_base64(file.to_str().unwrap(), None)
+        .await
+        .unwrap();
 
     assert!(result.starts_with("data:image/jpeg;base64,"));
 }
@@ -74,7 +80,10 @@ async fn get_image_base64_svg() {
     fs::write(&file, svg_content).unwrap();
 
     let svc = make_service(dir.path());
-    let result = svc.get_image_base64(file.to_str().unwrap()).await.unwrap();
+    let result = svc
+        .get_image_base64(file.to_str().unwrap(), None)
+        .await
+        .unwrap();
 
     assert!(result.starts_with("data:image/svg+xml;base64,"));
 
@@ -89,10 +98,26 @@ async fn get_image_base64_nonexistent() {
     let dir = tempfile::tempdir().unwrap();
     let svc = make_service(dir.path());
     let result = svc
-        .get_image_base64(dir.path().join("missing.png").to_str().unwrap())
+        .get_image_base64(dir.path().join("missing.png").to_str().unwrap(), None)
         .await;
 
     assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn image_base64_with_extra_workspace_root() {
+    let sandbox = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let file = workspace.path().join("test.png");
+    let png_bytes = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+    fs::write(&file, &png_bytes).unwrap();
+
+    let svc = make_service(sandbox.path());
+    let result = svc
+        .get_image_base64(file.to_str().unwrap(), Some(workspace.path()))
+        .await;
+
+    assert!(result.unwrap().starts_with("data:image/png;base64,"));
 }
 
 #[tokio::test]
@@ -103,7 +128,10 @@ async fn get_image_base64_gif() {
     fs::write(&file, gif_bytes).unwrap();
 
     let svc = make_service(dir.path());
-    let result = svc.get_image_base64(file.to_str().unwrap()).await.unwrap();
+    let result = svc
+        .get_image_base64(file.to_str().unwrap(), None)
+        .await
+        .unwrap();
 
     assert!(result.starts_with("data:image/gif;base64,"));
 }
@@ -112,7 +140,7 @@ async fn get_image_base64_gif() {
 async fn get_image_base64_path_traversal_rejected() {
     let dir = tempfile::tempdir().unwrap();
     let svc = make_service(dir.path());
-    let result = svc.get_image_base64("../../etc/passwd").await;
+    let result = svc.get_image_base64("../../etc/passwd", None).await;
 
     assert!(result.is_err());
 }
@@ -122,7 +150,7 @@ async fn get_image_base64_outside_sandbox_rejected() {
     let dir = tempfile::tempdir().unwrap();
     let svc = make_service(dir.path());
     // /tmp exists but is outside the sandbox (dir.path())
-    let result = svc.get_image_base64("/etc/hosts").await;
+    let result = svc.get_image_base64("/etc/hosts", None).await;
 
     assert!(result.is_err());
 }

@@ -22,18 +22,24 @@ pub struct ListWorkspaceFilesRequest {
 #[derive(Debug, Deserialize)]
 pub struct GetFileMetadataRequest {
     pub path: String,
+    #[serde(default)]
+    pub workspace: Option<String>,
 }
 
 /// Request body for `POST /api/fs/read` — read file.
 #[derive(Debug, Deserialize)]
 pub struct ReadFileRequest {
     pub path: String,
+    #[serde(default)]
+    pub workspace: Option<String>,
 }
 
 /// Request body for `POST /api/fs/read-buffer` — read file as binary.
 #[derive(Debug, Deserialize)]
 pub struct ReadFileBufferRequest {
     pub path: String,
+    #[serde(default)]
+    pub workspace: Option<String>,
 }
 
 /// Request body for `POST /api/fs/write` — write file.
@@ -85,6 +91,8 @@ pub struct CreateTempFileRequest {
 #[derive(Debug, Deserialize)]
 pub struct GetImageBase64Request {
     pub path: String,
+    #[serde(default)]
+    pub workspace: Option<String>,
 }
 
 /// Request body for `POST /api/fs/fetch-remote-image` — fetch remote image.

@@ -4,6 +4,7 @@ use axum::extract::{Extension, Json, Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
+use std::path::{Path as FsPath, PathBuf};
 
 use aionui_api_types::{
     ApiResponse, DetectStarOfficeRequest, DocumentConversionRequest, GetSnapshotContentRequest, ListSnapshotsRequest,
@@ -12,7 +13,9 @@ use aionui_api_types::{
 };
 use aionui_auth::CurrentUser;
 use aionui_common::AppError;
+use aionui_file::path_safety::validate_path_with_extra_root;
 
+use crate::error::OfficeError;
 use crate::state::OfficeRouterState;
 use crate::types::DocType;
 
@@ -103,8 +106,10 @@ async fn start_preview(
     doc_type: DocType,
 ) -> Result<Json<ApiResponse<PreviewUrlResponse>>, AppError> {
     let Json(req) = body.map_err(|e| AppError::BadRequest(e.to_string()))?;
+    let validated_path = validate_office_path(&state, &req.file_path, req.workspace.as_deref())?;
+    let validated_path = validated_path.to_string_lossy().into_owned();
 
-    let result = state.watch_manager.start(&req.file_path, doc_type).await;
+    let result = state.watch_manager.start(&validated_path, doc_type).await;
 
     let resp = match result {
         Ok(port) => {
@@ -113,7 +118,7 @@ async fn start_preview(
         }
         Err(e) => PreviewUrlResponse {
             url: String::new(),
-            error: Some(e.to_string()),
+            error: Some(preview_error_code(&e).to_owned()),
         },
     };
 
@@ -188,8 +193,35 @@ async fn convert_document(
     body: Result<Json<DocumentConversionRequest>, JsonRejection>,
 ) -> Result<Json<ApiResponse<aionui_api_types::DocumentConversionResponse>>, AppError> {
     let Json(req) = body.map_err(|e| AppError::BadRequest(e.to_string()))?;
-    let resp = state.conversion_service.convert(&req.file_path, req.to).await?;
+    let validated_path = validate_office_path(&state, &req.file_path, req.workspace.as_deref())?;
+    let resp = state
+        .conversion_service
+        .convert(validated_path.to_string_lossy().as_ref(), req.to)
+        .await?;
     Ok(Json(ApiResponse::ok(resp)))
+}
+
+fn validate_office_path(
+    state: &OfficeRouterState,
+    file_path: &str,
+    workspace: Option<&str>,
+) -> Result<PathBuf, AppError> {
+    let allowed_roots: Vec<&FsPath> = state.allowed_roots.iter().map(PathBuf::as_path).collect();
+    validate_path_with_extra_root(file_path, &allowed_roots, workspace.map(FsPath::new))
+}
+
+fn preview_error_code(error: &OfficeError) -> &'static str {
+    match error {
+        OfficeError::OfficecliNotFound => "OFFICECLI_NOT_FOUND",
+        OfficeError::InstallFailed(_) => "OFFICECLI_INSTALL_FAILED",
+        OfficeError::PortTimeout(_) => "OFFICECLI_PORT_TIMEOUT",
+        OfficeError::StartFailed(_)
+        | OfficeError::Io(_)
+        | OfficeError::Snapshot(_)
+        | OfficeError::Json(_)
+        | OfficeError::Conversion(_)
+        | OfficeError::ToolNotFound(_) => "OFFICECLI_START_FAILED",
+    }
 }
 
 // -- Reverse proxy handlers -----------------------------------------------
@@ -331,6 +363,7 @@ mod tests {
             star_office_detector: detector,
             conversion_service: conversion,
             proxy_service: proxy,
+            allowed_roots: vec![std::env::temp_dir()],
         }
     }
 }

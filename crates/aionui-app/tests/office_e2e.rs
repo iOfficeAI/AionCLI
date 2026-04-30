@@ -30,6 +30,16 @@ use aionui_office::{
 // ── Helpers ──────────────────────────────────────────────────────────
 
 async fn build_office_app() -> (axum::Router, AppServices, tempfile::TempDir) {
+    let default_roots = vec![
+        std::env::temp_dir(),
+        dirs::home_dir().unwrap_or_else(std::env::temp_dir),
+    ];
+    build_office_app_with_roots(default_roots).await
+}
+
+async fn build_office_app_with_roots(
+    allowed_roots: Vec<std::path::PathBuf>,
+) -> (axum::Router, AppServices, tempfile::TempDir) {
     let tmp = tempfile::TempDir::new().unwrap();
     let data_dir = tmp.path().to_str().unwrap().to_string();
 
@@ -39,13 +49,13 @@ async fn build_office_app() -> (axum::Router, AppServices, tempfile::TempDir) {
         .unwrap();
     let (mut states, _) = build_module_states(&services).await;
 
-    states.office = build_test_office_state(tmp.path());
+    states.office = build_test_office_state(tmp.path(), allowed_roots);
 
     let router = create_router_with_states(&services, states);
     (router, services, tmp)
 }
 
-fn build_test_office_state(data_dir: &std::path::Path) -> OfficeRouterState {
+fn build_test_office_state(data_dir: &std::path::Path, allowed_roots: Vec<std::path::PathBuf>) -> OfficeRouterState {
     use aionui_office::error::OfficeError;
     use aionui_office::types::DocType;
     use aionui_office::{ProcessHandle, ProcessSpawner};
@@ -93,6 +103,7 @@ fn build_test_office_state(data_dir: &std::path::Path) -> OfficeRouterState {
         star_office_detector: detector,
         conversion_service: conversion,
         proxy_service: proxy,
+        allowed_roots,
     }
 }
 
@@ -148,10 +159,13 @@ async fn au2_unauthenticated_all_office_endpoints() {
 
 #[tokio::test]
 async fn wp4_word_preview_officecli_not_available() {
-    let (mut app, services, _tmp) = build_office_app().await;
+    let (mut app, services, tmp) = build_office_app().await;
     let (token, csrf) = setup_and_login(&mut app, &services, "user1", "pass123").await;
 
-    let body = json!({"file_path": "/tmp/test.docx"});
+    let file_path = tmp.path().join("test.docx");
+    std::fs::write(&file_path, b"docx").unwrap();
+
+    let body = json!({"file_path": file_path.to_str().unwrap()});
     let req = json_with_token("POST", "/api/word-preview/start", body, &token, &csrf);
     let resp = app.clone().oneshot(req).await.unwrap();
 
@@ -160,7 +174,97 @@ async fn wp4_word_preview_officecli_not_available() {
     assert_eq!(json["success"], true);
     let url = json["data"]["url"].as_str().unwrap();
     assert!(url.is_empty(), "url should be empty when officecli unavailable");
-    assert!(json["data"]["error"].is_string(), "should have error message");
+    assert_eq!(json["data"]["error"], "OFFICECLI_INSTALL_FAILED");
+}
+
+#[tokio::test]
+async fn wp5_word_preview_with_workspace_accepts_non_sandbox_path() {
+    let sandbox = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let file_path = outside.path().join("demo.docx");
+    std::fs::write(&file_path, b"docx").unwrap();
+
+    let (mut app, services, _tmp) = build_office_app_with_roots(vec![sandbox.path().to_path_buf()]).await;
+    let (token, csrf) = setup_and_login(&mut app, &services, "user2", "pass123").await;
+
+    let body = json!({
+        "file_path": file_path.to_str().unwrap(),
+        "workspace": outside.path().to_str().unwrap()
+    });
+    let req = json_with_token("POST", "/api/word-preview/start", body, &token, &csrf);
+    let resp = app.clone().oneshot(req).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    assert_eq!(json["success"], true);
+    assert_eq!(json["data"]["error"], "OFFICECLI_INSTALL_FAILED");
+}
+
+#[tokio::test]
+async fn wp6_word_preview_without_workspace_rejects_non_sandbox_path() {
+    let sandbox = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let file_path = outside.path().join("demo.docx");
+    std::fs::write(&file_path, b"docx").unwrap();
+
+    let (mut app, services, _tmp) = build_office_app_with_roots(vec![sandbox.path().to_path_buf()]).await;
+    let (token, csrf) = setup_and_login(&mut app, &services, "user3", "pass123").await;
+
+    let body = json!({
+        "file_path": file_path.to_str().unwrap()
+    });
+    let req = json_with_token("POST", "/api/word-preview/start", body, &token, &csrf);
+    let resp = app.clone().oneshot(req).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    let json = body_json(resp).await;
+    assert_eq!(json["code"], "PATH_OUTSIDE_SANDBOX");
+}
+
+#[tokio::test]
+async fn ep1_excel_preview_with_workspace_accepts_non_sandbox_path() {
+    let sandbox = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let file_path = outside.path().join("demo.xlsx");
+    std::fs::write(&file_path, b"xlsx").unwrap();
+
+    let (mut app, services, _tmp) = build_office_app_with_roots(vec![sandbox.path().to_path_buf()]).await;
+    let (token, csrf) = setup_and_login(&mut app, &services, "user4", "pass123").await;
+
+    let body = json!({
+        "file_path": file_path.to_str().unwrap(),
+        "workspace": outside.path().to_str().unwrap()
+    });
+    let req = json_with_token("POST", "/api/excel-preview/start", body, &token, &csrf);
+    let resp = app.clone().oneshot(req).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    assert_eq!(json["success"], true);
+    assert_eq!(json["data"]["error"], "OFFICECLI_INSTALL_FAILED");
+}
+
+#[tokio::test]
+async fn pp1_ppt_preview_with_workspace_accepts_non_sandbox_path() {
+    let sandbox = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let file_path = outside.path().join("demo.pptx");
+    std::fs::write(&file_path, b"pptx").unwrap();
+
+    let (mut app, services, _tmp) = build_office_app_with_roots(vec![sandbox.path().to_path_buf()]).await;
+    let (token, csrf) = setup_and_login(&mut app, &services, "user5", "pass123").await;
+
+    let body = json!({
+        "file_path": file_path.to_str().unwrap(),
+        "workspace": outside.path().to_str().unwrap()
+    });
+    let req = json_with_token("POST", "/api/ppt-preview/start", body, &token, &csrf);
+    let resp = app.clone().oneshot(req).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    assert_eq!(json["success"], true);
+    assert_eq!(json["data"]["error"], "OFFICECLI_INSTALL_FAILED");
 }
 
 // ── SH-1: Save snapshot ─────────────────────────────────────────────
@@ -450,11 +554,31 @@ async fn dc4_excel_file_not_found() {
     let req = json_with_token("POST", "/api/document/convert", body, &token, &csrf);
     let resp = app.clone().oneshot(req).await.unwrap();
 
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let json = body_json(resp).await;
-    assert_eq!(json["success"], true);
-    assert_eq!(json["data"]["result"]["success"], false);
-    assert!(json["data"]["result"]["error"].is_string());
+    assert_eq!(json["code"], "BAD_REQUEST");
+}
+
+#[tokio::test]
+async fn dc5_document_convert_rejects_outside_sandbox() {
+    let sandbox = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let xlsx_path = outside.path().join("test.xlsx");
+    create_test_xlsx(&xlsx_path);
+
+    let (mut app, services, _tmp) = build_office_app_with_roots(vec![sandbox.path().to_path_buf()]).await;
+    let (token, csrf) = setup_and_login(&mut app, &services, "user6", "pass123").await;
+
+    let body = json!({
+        "file_path": xlsx_path.to_str().unwrap(),
+        "to": "excel-json"
+    });
+    let req = json_with_token("POST", "/api/document/convert", body, &token, &csrf);
+    let resp = app.clone().oneshot(req).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    let json = body_json(resp).await;
+    assert_eq!(json["code"], "PATH_OUTSIDE_SANDBOX");
 }
 
 // ── DC-9: Invalid conversion target ─────────────────────────────────

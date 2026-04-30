@@ -13,7 +13,9 @@ use aionui_api_types::WebSocketMessage;
 use aionui_common::AppError;
 use aionui_realtime::EventBroadcaster;
 
-use crate::path_safety::{has_traversal, validate_path, validate_path_for_write};
+use crate::path_safety::{
+    has_traversal, validate_path, validate_path_for_write, validate_path_with_extra_root,
+};
 use crate::types::{
     ContentUpdateEvent, ContentUpdateOperation, CopyResult, DirOrFile, FileMetadata, WorkspaceFlatFile, ZipEntry,
 };
@@ -86,6 +88,32 @@ impl FileService {
     /// Get the allowed root references for path validation.
     fn allowed_roots_refs(&self) -> Vec<&Path> {
         self.allowed_roots.iter().map(|p| p.as_path()).collect()
+    }
+
+    fn allowed_roots_with_extra<'a>(&'a self, extra_root: Option<&'a Path>) -> Vec<&'a Path> {
+        let mut roots = self.allowed_roots_refs();
+        if let Some(extra_root) = extra_root {
+            roots.push(extra_root);
+        }
+        roots
+    }
+
+    fn path_uses_allowed_root(&self, path: &Path, extra_root: Option<&Path>) -> bool {
+        let candidate = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            match std::env::current_dir() {
+                Ok(current_dir) => current_dir.join(path),
+                Err(_) => path.to_path_buf(),
+            }
+        };
+
+        self.allowed_roots
+            .iter()
+            .map(PathBuf::as_path)
+            .chain(extra_root)
+            .filter_map(|root| std::fs::canonicalize(root).ok())
+            .any(|root| candidate.starts_with(root))
     }
 
     /// List immediate children of `dir`, building a single-level tree.
@@ -550,9 +578,13 @@ impl crate::traits::IFileService for FileService {
         Ok(files)
     }
 
-    async fn get_file_metadata(&self, path: &str) -> Result<FileMetadata, AppError> {
+    async fn get_file_metadata(
+        &self,
+        path: &str,
+        extra_root: Option<&Path>,
+    ) -> Result<FileMetadata, AppError> {
         let roots = self.allowed_roots_refs();
-        let canonical = validate_path(path, &roots)?;
+        let canonical = validate_path_with_extra_root(path, &roots, extra_root)?;
 
         let result = tokio::task::spawn_blocking(move || get_file_metadata_sync(&canonical))
             .await
@@ -563,7 +595,11 @@ impl crate::traits::IFileService for FileService {
 
     // -- File read/write (task 7.4) --
 
-    async fn read_file(&self, path: &str) -> Result<Option<String>, AppError> {
+    async fn read_file(
+        &self,
+        path: &str,
+        extra_root: Option<&Path>,
+    ) -> Result<Option<String>, AppError> {
         if has_traversal(path) {
             return Err(AppError::BadRequest(format!(
                 "path '{}' contains invalid traversal patterns",
@@ -572,17 +608,21 @@ impl crate::traits::IFileService for FileService {
         }
 
         let roots = self.allowed_roots_refs();
-        let canonical = match validate_path(path, &roots) {
+        let canonical = match validate_path_with_extra_root(path, &roots, extra_root) {
             Ok(c) => c,
-            Err(_) => {
-                // File may not exist or may be outside sandbox.
-                // Use validate_path_for_write to check the parent.
-                // If parent is in sandbox, file simply doesn't exist → None.
-                // If parent check also fails, return None (no info leak).
-                match validate_path_for_write(path, &roots) {
-                    Ok(_) => return Ok(None),
-                    Err(_) => return Ok(None),
+            Err(err) => {
+                if matches!(err, AppError::BadRequest(_))
+                    && validate_path_for_write(path, &self.allowed_roots_with_extra(extra_root))
+                        .is_ok()
+                {
+                    return Ok(None);
                 }
+                if matches!(err, AppError::BadRequest(_))
+                    && self.path_uses_allowed_root(Path::new(path), extra_root)
+                {
+                    return Ok(None);
+                }
+                return Err(err);
             }
         };
 
@@ -591,7 +631,11 @@ impl crate::traits::IFileService for FileService {
             .map_err(|e| AppError::Internal(format!("read file task failed: {e}")))?
     }
 
-    async fn read_file_buffer(&self, path: &str) -> Result<Option<Vec<u8>>, AppError> {
+    async fn read_file_buffer(
+        &self,
+        path: &str,
+        extra_root: Option<&Path>,
+    ) -> Result<Option<Vec<u8>>, AppError> {
         if has_traversal(path) {
             return Err(AppError::BadRequest(format!(
                 "path '{}' contains invalid traversal patterns",
@@ -600,12 +644,22 @@ impl crate::traits::IFileService for FileService {
         }
 
         let roots = self.allowed_roots_refs();
-        let canonical = match validate_path(path, &roots) {
+        let canonical = match validate_path_with_extra_root(path, &roots, extra_root) {
             Ok(c) => c,
-            Err(_) => match validate_path_for_write(path, &roots) {
-                Ok(_) => return Ok(None),
-                Err(_) => return Ok(None),
-            },
+            Err(err) => {
+                if matches!(err, AppError::BadRequest(_))
+                    && validate_path_for_write(path, &self.allowed_roots_with_extra(extra_root))
+                        .is_ok()
+                {
+                    return Ok(None);
+                }
+                if matches!(err, AppError::BadRequest(_))
+                    && self.path_uses_allowed_root(Path::new(path), extra_root)
+                {
+                    return Ok(None);
+                }
+                return Err(err);
+            }
         };
 
         tokio::task::spawn_blocking(move || read_file_buffer_sync(&canonical))
@@ -818,7 +872,11 @@ impl crate::traits::IFileService for FileService {
         .map_err(|e| AppError::Internal(format!("create temp file task failed: {e}")))?
     }
 
-    async fn get_image_base64(&self, path: &str) -> Result<String, AppError> {
+    async fn get_image_base64(
+        &self,
+        path: &str,
+        extra_root: Option<&Path>,
+    ) -> Result<String, AppError> {
         if has_traversal(path) {
             return Err(AppError::BadRequest(format!(
                 "path '{}' contains invalid traversal patterns",
@@ -827,7 +885,7 @@ impl crate::traits::IFileService for FileService {
         }
 
         let roots = self.allowed_roots_refs();
-        let canonical = validate_path(path, &roots)?;
+        let canonical = validate_path_with_extra_root(path, &roots, extra_root)?;
 
         tokio::task::spawn_blocking(move || get_image_base64_sync(&canonical))
             .await

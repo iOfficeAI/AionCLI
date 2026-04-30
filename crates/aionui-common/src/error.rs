@@ -77,7 +77,13 @@ impl AppError {
             Self::NotFound(_) => "NOT_FOUND",
             Self::BadRequest(_) => "BAD_REQUEST",
             Self::Unauthorized(_) => "UNAUTHORIZED",
-            Self::Forbidden(_) => "FORBIDDEN",
+            Self::Forbidden(message) => {
+                if message.contains("outside the allowed sandbox") {
+                    "PATH_OUTSIDE_SANDBOX"
+                } else {
+                    "FORBIDDEN"
+                }
+            }
             Self::Conflict(_) => "CONFLICT",
             Self::RateLimited => "RATE_LIMITED",
             Self::Internal(_) => "INTERNAL_ERROR",
@@ -135,6 +141,10 @@ mod tests {
         assert_eq!(AppError::BadRequest("x".into()).error_code(), "BAD_REQUEST");
         assert_eq!(AppError::Unauthorized("x".into()).error_code(), "UNAUTHORIZED");
         assert_eq!(AppError::Forbidden("x".into()).error_code(), "FORBIDDEN");
+        assert_eq!(
+            AppError::Forbidden("path '/tmp/x' is outside the allowed sandbox".into()).error_code(),
+            "PATH_OUTSIDE_SANDBOX"
+        );
         assert_eq!(AppError::Conflict("x".into()).error_code(), "CONFLICT");
         assert_eq!(AppError::RateLimited.error_code(), "RATE_LIMITED");
         assert_eq!(AppError::Internal("x".into()).error_code(), "INTERNAL_ERROR");

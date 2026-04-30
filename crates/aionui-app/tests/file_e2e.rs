@@ -6,7 +6,7 @@ use axum::http::StatusCode;
 use serde_json::json;
 use tower::ServiceExt;
 
-use common::{body_json, build_app, json_with_token, setup_and_login};
+use common::{body_json, build_app, build_app_with_file_roots, json_with_token, setup_and_login};
 
 // ===========================================================================
 // Auth guard
@@ -214,6 +214,111 @@ async fn read_file_nonexistent_returns_null() {
 
     let json = body_json(resp).await;
     assert!(json["data"].is_null());
+}
+
+#[tokio::test]
+async fn read_file_with_workspace_field_accepts_non_home_path() {
+    let sandbox = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let (mut app, services) = build_app_with_file_roots(vec![sandbox.path().to_path_buf()]).await;
+    let (token, csrf) = setup_and_login(&mut app, &services, "admin", "StrongP@ss1").await;
+
+    let file_path = workspace.path().join("preview.md");
+    std::fs::write(&file_path, "# hello").unwrap();
+
+    let req = json_with_token(
+        "POST",
+        "/api/fs/read",
+        json!({
+            "path": file_path.to_str().unwrap(),
+            "workspace": workspace.path().to_str().unwrap()
+        }),
+        &token,
+        &csrf,
+    );
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let json = body_json(resp).await;
+    assert_eq!(json["data"], "# hello");
+}
+
+#[tokio::test]
+async fn read_file_without_workspace_rejects_non_sandbox_path() {
+    let sandbox = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let (mut app, services) = build_app_with_file_roots(vec![sandbox.path().to_path_buf()]).await;
+    let (token, csrf) = setup_and_login(&mut app, &services, "admin", "StrongP@ss1").await;
+
+    let file_path = workspace.path().join("preview.md");
+    std::fs::write(&file_path, "# hello").unwrap();
+
+    let req = json_with_token(
+        "POST",
+        "/api/fs/read",
+        json!({ "path": file_path.to_str().unwrap() }),
+        &token,
+        &csrf,
+    );
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    let json = body_json(resp).await;
+    assert_eq!(json["code"], "PATH_OUTSIDE_SANDBOX");
+}
+
+#[tokio::test]
+async fn read_file_non_existent_within_sandbox_returns_null() {
+    let sandbox = tempfile::tempdir().unwrap();
+    let (mut app, services) = build_app_with_file_roots(vec![sandbox.path().to_path_buf()]).await;
+    let (token, csrf) = setup_and_login(&mut app, &services, "admin", "StrongP@ss1").await;
+
+    let file_path = sandbox.path().join("missing.md");
+
+    let req = json_with_token(
+        "POST",
+        "/api/fs/read",
+        json!({ "path": file_path.to_str().unwrap() }),
+        &token,
+        &csrf,
+    );
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let json = body_json(resp).await;
+    assert!(json["data"].is_null());
+}
+
+#[tokio::test]
+async fn image_base64_with_workspace_field_accepts_non_home_path() {
+    let sandbox = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let (mut app, services) = build_app_with_file_roots(vec![sandbox.path().to_path_buf()]).await;
+    let (token, csrf) = setup_and_login(&mut app, &services, "admin", "StrongP@ss1").await;
+
+    let file_path = workspace.path().join("preview.png");
+    std::fs::write(&file_path, [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]).unwrap();
+
+    let req = json_with_token(
+        "POST",
+        "/api/fs/image-base64",
+        json!({
+            "path": file_path.to_str().unwrap(),
+            "workspace": workspace.path().to_str().unwrap()
+        }),
+        &token,
+        &csrf,
+    );
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let json = body_json(resp).await;
+    assert!(
+        json["data"]
+            .as_str()
+            .unwrap()
+            .starts_with("data:image/png;base64,")
+    );
 }
 
 #[tokio::test]

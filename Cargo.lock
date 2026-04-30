@@ -618,6 +618,7 @@ dependencies = [
  "aionui-api-types",
  "aionui-auth",
  "aionui-common",
+ "aionui-file",
  "aionui-realtime",
  "async-trait",
  "axum",

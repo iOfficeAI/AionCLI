@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use aionui_common::AppError;
 
@@ -28,11 +28,24 @@ pub fn validate_path(path: &str, allowed_roots: &[&Path]) -> Result<PathBuf, App
     if is_allowed {
         Ok(canonical)
     } else {
-        Err(AppError::BadRequest(format!(
+        Err(AppError::Forbidden(format!(
             "path '{}' is outside the allowed sandbox",
             path
         )))
     }
+}
+
+/// Like [`validate_path`], but also accepts a request-scoped extra root.
+pub fn validate_path_with_extra_root(
+    path: &str,
+    base_roots: &[&Path],
+    extra: Option<&Path>,
+) -> Result<PathBuf, AppError> {
+    let mut allowed_roots = base_roots.to_vec();
+    if let Some(extra_root) = extra {
+        allowed_roots.push(extra_root);
+    }
+    validate_path(path, &allowed_roots)
 }
 
 /// Like [`validate_path`] but the target does not need to exist yet.
@@ -65,7 +78,7 @@ pub fn validate_path_for_write(path: &str, allowed_roots: &[&Path]) -> Result<Pa
     });
 
     if !is_allowed {
-        return Err(AppError::BadRequest(format!(
+        return Err(AppError::Forbidden(format!(
             "path '{}' is outside the allowed sandbox",
             path
         )));
@@ -81,7 +94,10 @@ pub fn validate_path_for_write(path: &str, allowed_roots: &[&Path]) -> Result<Pa
 /// — always call [`validate_path`] or [`validate_path_for_write`] as the
 /// authoritative check.
 pub fn has_traversal(path: &str) -> bool {
-    path.contains("..") || path.contains('\0')
+    path.contains('\0')
+        || Path::new(path)
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
 }
 
 #[cfg(test)]
@@ -111,7 +127,7 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
-            err.to_string().contains("outside the allowed sandbox"),
+            matches!(err, AppError::Forbidden(_)),
             "unexpected error: {err}"
         );
     }
@@ -222,5 +238,36 @@ mod tests {
         assert!(!has_traversal("/home/user/project/src/main.rs"));
         assert!(!has_traversal("relative/path/file.txt"));
         assert!(!has_traversal(".hidden_file"));
+    }
+
+    #[test]
+    fn has_traversal_allows_legal_filename_with_dots() {
+        assert!(!has_traversal("foo..bar.md"));
+        assert!(!has_traversal("README..old"));
+        assert!(!has_traversal("my..file.txt"));
+    }
+
+    #[test]
+    fn has_traversal_still_rejects_parent_dir() {
+        assert!(has_traversal("../etc"));
+        assert!(has_traversal("a/../b"));
+        assert!(has_traversal(".."));
+        assert!(has_traversal("/foo/../bar"));
+    }
+
+    #[test]
+    fn validate_path_accepts_extra_workspace_root() {
+        let sandbox = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let file = workspace.path().join("hello.txt");
+        fs::write(&file, "hi").unwrap();
+
+        let result = validate_path_with_extra_root(
+            file.to_str().unwrap(),
+            &[sandbox.path()],
+            Some(workspace.path()),
+        );
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), fs::canonicalize(file).unwrap());
     }
 }

@@ -9,6 +9,7 @@ use wiremock::MockServer;
 
 use aionui_app::{AppServices, build_module_states, create_router, create_router_with_states};
 use aionui_extension::{ExternalPathsManager, SkillPaths, SkillRouterState};
+use aionui_file::FileService;
 use aionui_system::VersionCheckService;
 
 pub async fn build_app() -> (axum::Router, AppServices) {
@@ -68,6 +69,18 @@ pub async fn build_app_with_noop_opener() -> (axum::Router, AppServices) {
     states.shell.shell_service = std::sync::Arc::new(aionui_shell::ShellService::new(std::sync::Arc::new(
         aionui_shell::NoopSystemOpener,
     )));
+    let router = create_router_with_states(&services, states);
+    (router, services)
+}
+
+pub async fn build_app_with_file_roots(
+    allowed_roots: Vec<std::path::PathBuf>,
+) -> (axum::Router, AppServices) {
+    let db = aionui_db::init_database_memory().await.unwrap();
+    let services = AppServices::from_database(db).await.unwrap();
+    let (mut states, _) = build_module_states(&services).await;
+    states.file.file_service =
+        std::sync::Arc::new(FileService::new(services.event_bus.clone(), allowed_roots));
     let router = create_router_with_states(&services, states);
     (router, services)
 }

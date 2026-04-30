@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::conversion::ConversionService;
@@ -13,4 +14,5 @@ pub struct OfficeRouterState {
     pub star_office_detector: Arc<StarOfficeDetector>,
     pub conversion_service: Arc<ConversionService>,
     pub proxy_service: Arc<ProxyService>,
+    pub allowed_roots: Vec<PathBuf>,
 }

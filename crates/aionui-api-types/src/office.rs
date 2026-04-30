@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Deserialize)]
 pub struct StartPreviewRequest {
     pub file_path: String,
+    #[serde(default)]
+    pub workspace: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -140,6 +142,8 @@ pub enum ConversionTarget {
 pub struct DocumentConversionRequest {
     pub file_path: String,
     pub to: ConversionTarget,
+    #[serde(default)]
+    pub workspace: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -231,9 +235,10 @@ mod tests {
 
     #[test]
     fn start_preview_request_deserialize() {
-        let raw = json!({"file_path": "/path/to/doc.docx"});
+        let raw = json!({"file_path": "/path/to/doc.docx", "workspace": "/tmp/ws"});
         let req: StartPreviewRequest = serde_json::from_value(raw).unwrap();
         assert_eq!(req.file_path, "/path/to/doc.docx");
+        assert_eq!(req.workspace.as_deref(), Some("/tmp/ws"));
     }
 
     #[test]
@@ -247,6 +252,13 @@ mod tests {
         let raw = json!({"file_path": "/path/to/doc.docx"});
         let req: StopPreviewRequest = serde_json::from_value(raw).unwrap();
         assert_eq!(req.file_path, "/path/to/doc.docx");
+    }
+
+    #[test]
+    fn start_preview_request_workspace_optional() {
+        let raw = json!({"file_path": "/path/to/doc.docx"});
+        let req: StartPreviewRequest = serde_json::from_value(raw).unwrap();
+        assert!(req.workspace.is_none());
     }
 
     // -- B. PreviewUrlResponse ------------------------------------------------
@@ -679,10 +691,15 @@ mod tests {
 
     #[test]
     fn document_conversion_request_deserialize() {
-        let raw = json!({"file_path": "/sheet.xlsx", "to": "excel-json"});
+        let raw = json!({
+            "file_path": "/sheet.xlsx",
+            "to": "excel-json",
+            "workspace": "/tmp/ws"
+        });
         let req: DocumentConversionRequest = serde_json::from_value(raw).unwrap();
         assert_eq!(req.file_path, "/sheet.xlsx");
         assert_eq!(req.to, ConversionTarget::ExcelJson);
+        assert_eq!(req.workspace.as_deref(), Some("/tmp/ws"));
     }
 
     #[test]
@@ -695,6 +712,13 @@ mod tests {
     fn document_conversion_request_invalid_to() {
         let raw = json!({"file_path": "/a.docx", "to": "pdf"});
         assert!(serde_json::from_value::<DocumentConversionRequest>(raw).is_err());
+    }
+
+    #[test]
+    fn document_conversion_request_workspace_optional() {
+        let raw = json!({"file_path": "/sheet.xlsx", "to": "excel-json"});
+        let req: DocumentConversionRequest = serde_json::from_value(raw).unwrap();
+        assert!(req.workspace.is_none());
     }
 
     #[test]
