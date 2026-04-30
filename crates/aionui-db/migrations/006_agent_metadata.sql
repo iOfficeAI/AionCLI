@@ -113,7 +113,7 @@ VALUES
      1, 'gemini', '["--experimental-acp"]', '[]',
      '[".gemini/skills"]',
      '{"supports_side_question":false}',
-     NULL,
+     'yolo',
      NULL, NULL, NULL, NULL, NULL, NULL,
      unixepoch('now','subsec')*1000, unixepoch('now','subsec')*1000),
 
@@ -123,7 +123,7 @@ VALUES
      1, 'qwen', '["--acp"]', '[]',
      '[".qwen/skills"]',
      '{"supports_side_question":false}',
-     NULL,
+     'yolo',
      NULL, NULL, NULL, NULL, NULL, NULL,
      unixepoch('now','subsec')*1000, unixepoch('now','subsec')*1000),
 
@@ -146,7 +146,7 @@ VALUES
      1, 'droid', '["exec","--output-format","acp"]', '[]',
      '[".factory/skills"]',
      '{"supports_side_question":false}',
-     NULL,
+     'yolo',
      NULL, NULL, NULL, NULL, NULL, NULL,
      unixepoch('now','subsec')*1000, unixepoch('now','subsec')*1000),
 
@@ -156,7 +156,7 @@ VALUES
      1, 'goose', '["acp"]', '[]',
      '[".goose/skills"]',
      '{"supports_side_question":false}',
-     NULL,
+     'yolo',
      NULL, NULL, NULL, NULL, NULL, NULL,
      unixepoch('now','subsec')*1000, unixepoch('now','subsec')*1000),
 
@@ -166,7 +166,7 @@ VALUES
      1, 'auggie', '["--acp"]', '[]',
      NULL,
      '{"supports_side_question":false}',
-     NULL,
+     'yolo',
      NULL, NULL, NULL, NULL, NULL, NULL,
      unixepoch('now','subsec')*1000, unixepoch('now','subsec')*1000),
 
@@ -176,7 +176,7 @@ VALUES
      1, 'kimi', '["acp"]', '[]',
      '[".kimi/skills"]',
      '{"supports_side_question":false}',
-     NULL,
+     'yolo',
      NULL, NULL, NULL, NULL, NULL, NULL,
      unixepoch('now','subsec')*1000, unixepoch('now','subsec')*1000),
 
@@ -186,7 +186,7 @@ VALUES
      1, 'opencode', '["acp"]', '[]',
      '[".opencode/skills"]',
      '{"supports_side_question":false}',
-     NULL,
+     'build',
      NULL, NULL, NULL, NULL, NULL, NULL,
      unixepoch('now','subsec')*1000, unixepoch('now','subsec')*1000),
 
@@ -196,7 +196,7 @@ VALUES
      1, 'copilot', '["--acp","--stdio"]', '[]',
      NULL,
      '{"supports_side_question":false}',
-     NULL,
+     'yolo',
      NULL, NULL, NULL, NULL, NULL, NULL,
      unixepoch('now','subsec')*1000, unixepoch('now','subsec')*1000),
 
@@ -206,7 +206,7 @@ VALUES
      1, 'qoder', '["--acp"]', '[]',
      NULL,
      '{"supports_side_question":false}',
-     NULL,
+     'yolo',
      NULL, NULL, NULL, NULL, NULL, NULL,
      unixepoch('now','subsec')*1000, unixepoch('now','subsec')*1000),
 
@@ -216,7 +216,7 @@ VALUES
      1, 'vibe', '[]', '[]',
      '[".vibe/skills"]',
      '{"supports_side_question":false}',
-     NULL,
+     'yolo',
      NULL, NULL, NULL, NULL, NULL, NULL,
      unixepoch('now','subsec')*1000, unixepoch('now','subsec')*1000),
 
@@ -226,7 +226,7 @@ VALUES
      1, 'cursor', '["acp"]', '[]',
      '[".cursor/skills"]',
      '{"supports_side_question":false}',
-     NULL,
+     'agent',
      NULL, NULL, NULL, NULL, NULL, NULL,
      unixepoch('now','subsec')*1000, unixepoch('now','subsec')*1000),
 
@@ -236,7 +236,7 @@ VALUES
      1, 'kiro', '["acp"]', '[]',
      NULL,
      '{"supports_side_question":false}',
-     NULL,
+     'yolo',
      NULL, NULL, NULL, NULL, NULL, NULL,
      unixepoch('now','subsec')*1000, unixepoch('now','subsec')*1000),
 
@@ -246,7 +246,7 @@ VALUES
      1, 'hermes', '["acp"]', '[]',
      NULL,
      '{"supports_side_question":false}',
-     NULL,
+     'yolo',
      NULL, NULL, NULL, NULL, NULL, NULL,
      unixepoch('now','subsec')*1000, unixepoch('now','subsec')*1000),
 
@@ -256,7 +256,7 @@ VALUES
      1, 'snow', '["--acp"]', '[]',
      NULL,
      '{"supports_side_question":false}',
-     NULL,
+     'yolo',
      NULL, NULL, NULL, NULL, NULL, NULL,
      unixepoch('now','subsec')*1000, unixepoch('now','subsec')*1000);
 
@@ -276,7 +276,7 @@ VALUES
      1, 'nanobot', '["--experimental-acp"]', '[]',
      NULL,
      '{}',
-     NULL,
+     'yolo',
      NULL, NULL, NULL, NULL, NULL, NULL,
      unixepoch('now','subsec')*1000, unixepoch('now','subsec')*1000),
 
@@ -286,7 +286,7 @@ VALUES
      1, 'openclaw', '[]', '[]',
      NULL,
      '{}',
-     NULL,
+     'yolo',
      NULL, NULL, NULL, NULL, NULL, NULL,
      unixepoch('now','subsec')*1000, unixepoch('now','subsec')*1000),
 
@@ -296,6 +296,6 @@ VALUES
      1, NULL, '[]', '[]',
      '[".aionrs/skills"]',
      '{}',
-     NULL,
+     'yolo',
      NULL, NULL, NULL, NULL, NULL, NULL,
      unixepoch('now','subsec')*1000, unixepoch('now','subsec')*1000);

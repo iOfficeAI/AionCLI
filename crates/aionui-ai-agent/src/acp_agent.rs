@@ -1195,7 +1195,7 @@ mod tests {
         // Cursor → agent.
         let cursor_like = metadata_with_yolo_id(Some("agent"));
         assert_eq!(normalize_requested_mode(&cursor_like, "yolo"), "agent");
-        // Gemini / Qwen / … have no yolo equivalent; alias flows through.
+        // When a row has no yolo_id the alias flows through unchanged.
         let gemini_like = metadata_with_yolo_id(None);
         assert_eq!(normalize_requested_mode(&gemini_like, "yolo"), "yolo");
     }
