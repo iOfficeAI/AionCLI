@@ -255,7 +255,7 @@ GET /api/conversations/{conversation_id}/messages
 3. [ ] （可选）订阅 `team.mcpStatus` 展示 MCP 连接进度，不订阅也能正常用
 4. [ ] 进入某 agent 聊天页：`GET /api/conversations/{conversation_id}/messages` 拉历史
 5. [ ] 用户在任意 agent 页发言：`POST /api/conversations/{conversation_id}/messages`（lead 也走这个，不再有 team-level 发消息端点）
-6. [ ] 重进 app / 后端重启后：调一次 `POST /api/teams/{id}/session`（幂等，重新激活 MCP）
+6. [ ] 进入 team 页面时：调一次 `POST /api/teams/{id}/session`（幂等）— 仅用于后端重启后恢复 MCP server。建团时不需要调（后端自动 ensure）
 7. [ ] 关闭 team 页/切换：不需要主动 stop session；真要回收调 `DELETE .../session`
 
 **不要做**：不要前端再造一套 agent 状态机/任务调度；不要缓存 mailbox；不要试图通过 team API 拉消息历史或发消息。
