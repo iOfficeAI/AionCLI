@@ -41,9 +41,7 @@ pub async fn run_guide_stdio() -> ExitCode {
     let backend = std::env::var("AION_MCP_BACKEND").unwrap_or_default();
     let conversation_id = std::env::var("AION_MCP_CONVERSATION_ID").unwrap_or_default();
 
-    eprintln!(
-        "[mcp-guide-stdio] Started OK. PORT={port}, BACKEND={backend}, CONV_ID={conversation_id}"
-    );
+    eprintln!("[mcp-guide-stdio] Started OK. PORT={port}, BACKEND={backend}, CONV_ID={conversation_id}");
 
     let server = GuideServer {
         port: port.parse().unwrap_or(0),
@@ -99,26 +97,37 @@ struct ListModelsParams {
     agent_type: Option<String>,
 }
 
-
 #[tool_router(server_handler)]
 impl GuideServer {
-    #[tool(name = "aion_create_team", description = "Create a multi-agent Team. Only call after user explicitly confirms team configuration.")]
+    #[tool(
+        name = "aion_create_team",
+        description = "Create a multi-agent Team. Only call after user explicitly confirms team configuration."
+    )]
     async fn create_team(&self, Parameters(params): Parameters<CreateTeamParams>) -> String {
         eprintln!("[mcp-guide-stdio] tools/call: aion_create_team");
-        self.forward_tool("aion_create_team", &serde_json::json!({
-            "summary": params.summary,
-            "name": params.name,
-            "workspace": params.workspace,
-        }))
+        self.forward_tool(
+            "aion_create_team",
+            &serde_json::json!({
+                "summary": params.summary,
+                "name": params.name,
+                "workspace": params.workspace,
+            }),
+        )
         .await
     }
 
-    #[tool(name = "aion_list_models", description = "Query available models for team agent types. Pass agent_type to filter, or omit to see all.")]
+    #[tool(
+        name = "aion_list_models",
+        description = "Query available models for team agent types. Pass agent_type to filter, or omit to see all."
+    )]
     async fn list_models(&self, Parameters(params): Parameters<ListModelsParams>) -> String {
         eprintln!("[mcp-guide-stdio] tools/call: aion_list_models");
-        self.forward_tool("aion_list_models", &serde_json::json!({
-            "agent_type": params.agent_type,
-        }))
+        self.forward_tool(
+            "aion_list_models",
+            &serde_json::json!({
+                "agent_type": params.agent_type,
+            }),
+        )
         .await
     }
 }
@@ -134,7 +143,8 @@ impl GuideServer {
         });
 
         eprintln!("[mcp-guide-stdio] HTTP POST {url}");
-        match self.http_client
+        match self
+            .http_client
             .post(&url)
             .header("Authorization", format!("Bearer {}", self.token))
             .json(&body)

@@ -29,7 +29,12 @@ impl GuideMcpServer {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let service_slot: Arc<RwLock<Weak<TeamSessionService>>> = Arc::new(RwLock::new(Weak::new()));
 
-        tokio::spawn(accept_loop(listener, auth_token.clone(), shutdown_rx, service_slot.clone()));
+        tokio::spawn(accept_loop(
+            listener,
+            auth_token.clone(),
+            shutdown_rx,
+            service_slot.clone(),
+        ));
 
         debug!(http_port = http_addr.port(), "Guide MCP Server started");
 
@@ -78,8 +83,8 @@ async fn handle_aion_create_team(
     args: &serde_json::Value,
     service: Arc<RwLock<Weak<TeamSessionService>>>,
 ) -> serde_json::Value {
-    use aionui_api_types::{CreateTeamRequest, TeamAgentInput};
     use crate::guide::handlers::parse_create_team_args;
+    use aionui_api_types::{CreateTeamRequest, TeamAgentInput};
 
     let svc = match service.read().await.upgrade() {
         Some(s) => s,

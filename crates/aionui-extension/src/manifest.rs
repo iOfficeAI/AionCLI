@@ -239,10 +239,10 @@ fn normalize_mcp_server(value: &mut Value) {
         return;
     };
 
-    if !obj.contains_key("id") {
-        if let Some(Value::String(name)) = obj.get("name") {
-            obj.insert("id".into(), Value::String(name.clone()));
-        }
+    if !obj.contains_key("id")
+        && let Some(Value::String(name)) = obj.get("name")
+    {
+        obj.insert("id".into(), Value::String(name.clone()));
     }
 }
 
@@ -374,13 +374,7 @@ fn normalize_webui(value: &mut Value) {
             .get("urlPrefix")
             .or_else(|| asset_obj.get("url_prefix"))
             .and_then(Value::as_str)
-            .map(|prefix| {
-                prefix
-                    .trim_matches('/')
-                    .replace('/', "-")
-                    .replace('.', "-")
-                    .replace('_', "-")
-            })
+            .map(|prefix| prefix.trim_matches('/').replace(['/', '.', '_'], "-"))
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| format!("legacy-webui-assets-{index}"));
 

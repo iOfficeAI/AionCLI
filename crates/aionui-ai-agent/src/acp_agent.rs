@@ -13,13 +13,13 @@ use crate::stream_event::{
 use crate::team_guide_prompt;
 use crate::types::{AcpBuildExtra, AgentStreamChunk, SendMessageData, SlashCommandItem};
 use agent_client_protocol::schema::{
-    AgentCapabilities, AvailableCommand, CancelNotification, ContentBlock, EnvVariable,
-    LoadSessionRequest, McpServer, McpServerStdio, NewSessionRequest, PromptRequest,
-    SessionConfigKind, SessionConfigOption, SessionId, SessionModeState, SessionModelState,
-    SetSessionConfigOptionRequest, SetSessionModeRequest, SetSessionModelRequest, UsageUpdate,
+    AgentCapabilities, AvailableCommand, CancelNotification, ContentBlock, EnvVariable, LoadSessionRequest, McpServer,
+    McpServerStdio, NewSessionRequest, PromptRequest, SessionConfigKind, SessionConfigOption, SessionId,
+    SessionModeState, SessionModelState, SetSessionConfigOptionRequest, SetSessionModeRequest, SetSessionModelRequest,
+    UsageUpdate,
 };
-use aionui_api_types::{GuideMcpConfig, TeamMcpStdioConfig};
 use aionui_api_types::{AgentHandshake, AgentMetadata};
+use aionui_api_types::{GuideMcpConfig, TeamMcpStdioConfig};
 use aionui_common::{
     AgentKillReason, AgentType, AppError, CommandSpec, Confirmation, ConversationStatus, TimestampMs,
     normalize_keys_to_snake_case, now_ms,
@@ -190,7 +190,10 @@ fn build_new_session_request(workspace: &str, config: &AcpBuildExtra) -> NewSess
     }
     // Solo: inject Guide MCP stdio server for team-capable backends
     if let Some(guide_cfg) = config.guide_mcp_config.as_ref()
-        && config.backend.as_deref().map_or(false, |b| TEAM_CAPABLE_BACKENDS.contains(&b))
+        && config
+            .backend
+            .as_deref()
+            .is_some_and(|b| TEAM_CAPABLE_BACKENDS.contains(&b))
     {
         return req.mcp_servers(vec![guide_mcp_server(guide_cfg, config)]);
     }
@@ -222,10 +225,7 @@ fn guide_mcp_server(cfg: &GuideMcpConfig, extra: &AcpBuildExtra) -> McpServer {
     let env = vec![
         EnvVariable::new("AION_MCP_PORT".to_owned(), cfg.port.to_string()),
         EnvVariable::new("AION_MCP_TOKEN".to_owned(), cfg.token.clone()),
-        EnvVariable::new(
-            "AION_MCP_BACKEND".to_owned(),
-            extra.backend.clone().unwrap_or_default(),
-        ),
+        EnvVariable::new("AION_MCP_BACKEND".to_owned(), extra.backend.clone().unwrap_or_default()),
     ];
     let stdio = McpServerStdio::new("aionui-team-guide", &cfg.binary_path)
         .args(vec!["mcp-guide-stdio".to_owned()])

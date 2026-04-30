@@ -217,7 +217,10 @@ impl TeamStdioServer {
 
     #[tool(name = "team_task_create", description = "Create a new task on the team task board.")]
     async fn task_create(&self, Parameters(params): Parameters<TaskCreateParams>) -> String {
-        eprintln!("[mcp-team-stdio] tools/call: team_task_create subject={}", params.subject);
+        eprintln!(
+            "[mcp-team-stdio] tools/call: team_task_create subject={}",
+            params.subject
+        );
         self.forward_to_tcp(
             "team_task_create",
             &serde_json::json!({
@@ -230,9 +233,15 @@ impl TeamStdioServer {
         .await
     }
 
-    #[tool(name = "team_task_update", description = "Update an existing task on the team task board.")]
+    #[tool(
+        name = "team_task_update",
+        description = "Update an existing task on the team task board."
+    )]
     async fn task_update(&self, Parameters(params): Parameters<TaskUpdateParams>) -> String {
-        eprintln!("[mcp-team-stdio] tools/call: team_task_update task_id={}", params.task_id);
+        eprintln!(
+            "[mcp-team-stdio] tools/call: team_task_update task_id={}",
+            params.task_id
+        );
         self.forward_to_tcp(
             "team_task_update",
             &serde_json::json!({
@@ -252,7 +261,10 @@ impl TeamStdioServer {
         self.forward_to_tcp("team_task_list", &serde_json::json!({})).await
     }
 
-    #[tool(name = "team_members", description = "List all team members with their roles and current status.")]
+    #[tool(
+        name = "team_members",
+        description = "List all team members with their roles and current status."
+    )]
     async fn members(&self) -> String {
         eprintln!("[mcp-team-stdio] tools/call: team_members");
         self.forward_to_tcp("team_members", &serde_json::json!({})).await
@@ -260,7 +272,10 @@ impl TeamStdioServer {
 
     #[tool(name = "team_rename_agent", description = "Rename a team member.")]
     async fn rename_agent(&self, Parameters(params): Parameters<RenameAgentParams>) -> String {
-        eprintln!("[mcp-team-stdio] tools/call: team_rename_agent slot_id={}", params.slot_id);
+        eprintln!(
+            "[mcp-team-stdio] tools/call: team_rename_agent slot_id={}",
+            params.slot_id
+        );
         self.forward_to_tcp(
             "team_rename_agent",
             &serde_json::json!({ "slot_id": params.slot_id, "new_name": params.new_name }),
@@ -273,7 +288,10 @@ impl TeamStdioServer {
         description = "Initiate shutdown of a teammate (Lead only). Sends a shutdown_request to the target agent."
     )]
     async fn shutdown_agent(&self, Parameters(params): Parameters<ShutdownAgentParams>) -> String {
-        eprintln!("[mcp-team-stdio] tools/call: team_shutdown_agent slot_id={}", params.slot_id);
+        eprintln!(
+            "[mcp-team-stdio] tools/call: team_shutdown_agent slot_id={}",
+            params.slot_id
+        );
         self.forward_to_tcp(
             "team_shutdown_agent",
             &serde_json::json!({ "slot_id": params.slot_id, "reason": params.reason }),
@@ -287,8 +305,11 @@ impl TeamStdioServer {
     )]
     async fn list_models(&self, Parameters(params): Parameters<ListModelsParams>) -> String {
         eprintln!("[mcp-team-stdio] tools/call: team_list_models");
-        self.forward_to_tcp("team_list_models", &serde_json::json!({ "agent_type": params.agent_type }))
-            .await
+        self.forward_to_tcp(
+            "team_list_models",
+            &serde_json::json!({ "agent_type": params.agent_type }),
+        )
+        .await
     }
 
     #[tool(
@@ -296,7 +317,10 @@ impl TeamStdioServer {
         description = "Get detailed information about a preset assistant before spawning it as a teammate.\n\nReturns the preset's full description, enabled skills, and example tasks so you can\njudge whether it fits the user's request. Use this when two or more presets look\nrelevant from the one-line catalog in your system prompt.\n\nOnly works on preset assistants listed in \"Available Preset Assistants for Spawning\".\nAfter confirming a match, call team_spawn_agent with the same custom_agent_id."
     )]
     async fn describe_assistant(&self, Parameters(params): Parameters<DescribeAssistantParams>) -> String {
-        eprintln!("[mcp-team-stdio] tools/call: team_describe_assistant id={}", params.custom_agent_id);
+        eprintln!(
+            "[mcp-team-stdio] tools/call: team_describe_assistant id={}",
+            params.custom_agent_id
+        );
         self.forward_to_tcp(
             "team_describe_assistant",
             &serde_json::json!({ "custom_agent_id": params.custom_agent_id }),

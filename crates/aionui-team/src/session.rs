@@ -338,21 +338,20 @@ impl TeamSession {
             h
         } else {
             // Task missing — warmup to create it (mirrors AionUi's getOrBuildTask).
-            if let Some(svc) = self.service.upgrade() {
-                if let Err(e) = svc
+            if let Some(svc) = self.service.upgrade()
+                && let Err(e) = svc
                     .conversation_service_ref()
                     .warmup(&self.user_id, &input.conversation_id, &self.task_manager)
                     .await
-                {
-                    warn!(
-                        team_id = %self.team.id,
-                        slot_id,
-                        conversation_id = %input.conversation_id,
-                        error = %e,
-                        "warmup in try_wake failed; skipping wake"
-                    );
-                    return;
-                }
+            {
+                warn!(
+                    team_id = %self.team.id,
+                    slot_id,
+                    conversation_id = %input.conversation_id,
+                    error = %e,
+                    "warmup in try_wake failed; skipping wake"
+                );
+                return;
             }
             let Some(h) = self.task_manager.get_task(&input.conversation_id) else {
                 warn!(

@@ -662,15 +662,14 @@ impl TeamSessionService {
         };
 
         // Ensure the agent task exists (mirrors AionUi's getOrBuildTask).
-        if self.task_manager.get_task(&conv_id).is_none() {
-            if let Err(e) = self
+        if self.task_manager.get_task(&conv_id).is_none()
+            && let Err(e) = self
                 .conversation_service
                 .warmup(&user_id, &conv_id, &self.task_manager)
                 .await
-            {
-                warn!(team_id, slot_id, conversation_id = %conv_id, error = %e, "warmup in wake failed");
-                return Ok(());
-            }
+        {
+            warn!(team_id, slot_id, conversation_id = %conv_id, error = %e, "warmup in wake failed");
+            return Ok(());
         }
 
         let task_mgr = self.task_manager.clone();

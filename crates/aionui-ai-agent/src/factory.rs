@@ -112,7 +112,10 @@ async fn build_agent(deps: Arc<AgentFactoryDeps>, options: BuildTaskOptions) -> 
             if config.team_mcp_stdio_config.is_some() {
                 debug!(conversation_id, "guide_mcp: skipped: has team_mcp");
             } else if config.guide_mcp_config.is_some() {
-                debug!(conversation_id, "guide_mcp: skipped: caller already set guide_mcp_config");
+                debug!(
+                    conversation_id,
+                    "guide_mcp: skipped: caller already set guide_mcp_config"
+                );
             } else if deps.guide_mcp_config.is_none() {
                 debug!(conversation_id, "guide_mcp: skipped: guide server not running");
             } else {
