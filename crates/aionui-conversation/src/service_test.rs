@@ -1515,8 +1515,7 @@ impl ICronService for MockCronContinuationService {
 
 fn make_send_req() -> SendMessageRequest {
     serde_json::from_value(json!({
-        "content": "Hello",
-        "msg_id": "msg-1"
+        "content": "Hello"
     }))
     .unwrap()
 }
@@ -1540,7 +1539,6 @@ async fn send_message_persists_hidden_user_message_when_requested() {
     let conv = svc.create("user_1", make_create_req()).await.unwrap();
     let req: SendMessageRequest = serde_json::from_value(json!({
         "content": "Hidden cron prompt",
-        "msg_id": "msg-hidden",
         "hidden": true
     }))
     .unwrap();
@@ -1548,11 +1546,14 @@ async fn send_message_persists_hidden_user_message_when_requested() {
     svc.send_message("user_1", &conv.id, req, &task_mgr).await.unwrap();
 
     let messages = repo.get_messages(&conv.id, 1, 20, SortOrder::Asc).await.unwrap().items;
+    // The user message is the only hidden text row written by the service.
     let user_message = messages
         .iter()
-        .find(|message| message.msg_id.as_deref() == Some("msg-hidden"))
-        .expect("hidden user message should be persisted");
+        .find(|message| message.r#type == "text" && message.position.as_deref() == Some("right"))
+        .expect("user message should be persisted");
     assert!(user_message.hidden);
+    // msg_id is server-generated and must be non-empty for frontend routing.
+    assert!(user_message.msg_id.as_deref().is_some_and(|s| !s.is_empty()));
 }
 
 #[tokio::test]
@@ -1562,8 +1563,7 @@ async fn send_message_empty_content_returns_bad_request() {
 
     let conv = svc.create("user_1", make_create_req()).await.unwrap();
     let req: SendMessageRequest = serde_json::from_value(json!({
-        "content": "",
-        "msg_id": "msg-1"
+        "content": ""
     }))
     .unwrap();
 
@@ -1578,8 +1578,7 @@ async fn send_message_whitespace_content_returns_bad_request() {
 
     let conv = svc.create("user_1", make_create_req()).await.unwrap();
     let req: SendMessageRequest = serde_json::from_value(json!({
-        "content": "   ",
-        "msg_id": "msg-1"
+        "content": "   "
     }))
     .unwrap();
 
@@ -1702,8 +1701,7 @@ async fn send_message_continues_cron_system_responses() {
 
     let task_mgr_dyn: Arc<dyn IWorkerTaskManager> = task_mgr.clone();
     let req: SendMessageRequest = serde_json::from_value(json!({
-        "content": "Create the task now",
-        "msg_id": "msg-1"
+        "content": "Create the task now"
     }))
     .unwrap();
 

@@ -23,29 +23,17 @@ pub trait IFileService: Send + Sync {
     async fn list_workspace_files(&self, root: &str) -> Result<Vec<WorkspaceFlatFile>, AppError>;
 
     /// Get metadata for a single file or directory.
-    async fn get_file_metadata(
-        &self,
-        path: &str,
-        extra_root: Option<&Path>,
-    ) -> Result<FileMetadata, AppError>;
+    async fn get_file_metadata(&self, path: &str, extra_root: Option<&Path>) -> Result<FileMetadata, AppError>;
 
     // -- File read/write --
 
     /// Read a file as UTF-8 text. Returns `None` if the file does not exist.
     /// Files larger than 256 MB are rejected.
-    async fn read_file(
-        &self,
-        path: &str,
-        extra_root: Option<&Path>,
-    ) -> Result<Option<String>, AppError>;
+    async fn read_file(&self, path: &str, extra_root: Option<&Path>) -> Result<Option<String>, AppError>;
 
     /// Read a file as raw bytes. Returns `None` if the file does not exist.
     /// Files larger than 256 MB are rejected.
-    async fn read_file_buffer(
-        &self,
-        path: &str,
-        extra_root: Option<&Path>,
-    ) -> Result<Option<Vec<u8>>, AppError>;
+    async fn read_file_buffer(&self, path: &str, extra_root: Option<&Path>) -> Result<Option<Vec<u8>>, AppError>;
 
     /// Write `data` to `path`. On success, emits a
     /// `fileStream.contentUpdate` event with `operation = write`.
@@ -76,11 +64,7 @@ pub trait IFileService: Send + Sync {
 
     /// Read a local image and return a base64 Data URL
     /// (e.g. `data:image/png;base64,...`).
-    async fn get_image_base64(
-        &self,
-        path: &str,
-        extra_root: Option<&Path>,
-    ) -> Result<String, AppError>;
+    async fn get_image_base64(&self, path: &str, extra_root: Option<&Path>) -> Result<String, AppError>;
 
     /// Download a remote image and return a base64 Data URL.
     /// On failure, returns a placeholder SVG Data URL.

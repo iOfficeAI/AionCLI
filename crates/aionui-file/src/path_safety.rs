@@ -126,10 +126,7 @@ mod tests {
         let result = validate_path(file.to_str().unwrap(), &[sandbox.path()]);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(
-            matches!(err, AppError::Forbidden(_)),
-            "unexpected error: {err}"
-        );
+        assert!(matches!(err, AppError::Forbidden(_)), "unexpected error: {err}");
     }
 
     #[test]
@@ -262,11 +259,7 @@ mod tests {
         let file = workspace.path().join("hello.txt");
         fs::write(&file, "hi").unwrap();
 
-        let result = validate_path_with_extra_root(
-            file.to_str().unwrap(),
-            &[sandbox.path()],
-            Some(workspace.path()),
-        );
+        let result = validate_path_with_extra_root(file.to_str().unwrap(), &[sandbox.path()], Some(workspace.path()));
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), fs::canonicalize(file).unwrap());
     }

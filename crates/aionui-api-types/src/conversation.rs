@@ -38,10 +38,11 @@ pub struct CloneConversationRequest {
 }
 
 /// Body for `POST /api/conversations/:id/messages`.
+///
+/// `msg_id` is server-generated — clients must not provide one.
 #[derive(Debug, Deserialize)]
 pub struct SendMessageRequest {
     pub content: String,
-    pub msg_id: String,
     #[serde(default)]
     pub files: Vec<String>,
     #[serde(default)]
@@ -554,14 +555,12 @@ mod tests {
     fn deserialize_send_message_full() {
         let raw = json!({
             "content": "Review this code",
-            "msg_id": "msg-001",
             "files": ["/tmp/a.rs"],
             "inject_skills": ["security-review"],
             "hidden": true
         });
         let req: SendMessageRequest = serde_json::from_value(raw).unwrap();
         assert_eq!(req.content, "Review this code");
-        assert_eq!(req.msg_id, "msg-001");
         assert_eq!(req.files, vec!["/tmp/a.rs"]);
         assert_eq!(req.inject_skills, vec!["security-review"]);
         assert!(req.hidden);
@@ -569,10 +568,9 @@ mod tests {
 
     #[test]
     fn deserialize_send_message_minimal() {
-        let raw = json!({ "content": "Hi", "msg_id": "m1" });
+        let raw = json!({ "content": "Hi" });
         let req: SendMessageRequest = serde_json::from_value(raw).unwrap();
         assert_eq!(req.content, "Hi");
-        assert_eq!(req.msg_id, "m1");
         assert!(req.files.is_empty());
         assert!(req.inject_skills.is_empty());
         assert!(!req.hidden);
@@ -580,14 +578,16 @@ mod tests {
 
     #[test]
     fn deserialize_send_message_missing_content() {
-        let raw = json!({ "msg_id": "m1" });
+        let raw = json!({});
         assert!(serde_json::from_value::<SendMessageRequest>(raw).is_err());
     }
 
     #[test]
-    fn deserialize_send_message_missing_msg_id() {
-        let raw = json!({ "content": "Hello" });
-        assert!(serde_json::from_value::<SendMessageRequest>(raw).is_err());
+    fn deserialize_send_message_ignores_client_msg_id() {
+        // Clients may still send msg_id from stale builds — it must be ignored.
+        let raw = json!({ "content": "Hi", "msg_id": "client-supplied" });
+        let req: SendMessageRequest = serde_json::from_value(raw).unwrap();
+        assert_eq!(req.content, "Hi");
     }
 
     // ── Paginated type aliases ──────────────────────────────────────

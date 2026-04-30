@@ -524,7 +524,7 @@ async fn t2_1_send_message_accepted() {
     let (token, csrf) = setup_and_login(&mut app, &services, "admin", "StrongP@ss1").await;
     let conv_id = create_conversation(&mut app, &token, &csrf, "Send Test").await;
 
-    let body = json!({ "content": "Hello AI", "msg_id": "msg-user-1" });
+    let body = json!({ "content": "Hello AI" });
     let req = common::json_with_token(
         "POST",
         &format!("/api/conversations/{conv_id}/messages"),
@@ -550,7 +550,7 @@ async fn t2_1_send_message_empty_content_bad_request() {
     let (token, csrf) = setup_and_login(&mut app, &services, "admin", "StrongP@ss1").await;
     let conv_id = create_conversation(&mut app, &token, &csrf, "Empty Content").await;
 
-    let body = json!({ "content": "", "msg_id": "msg-user-1" });
+    let body = json!({ "content": "" });
     let req = common::json_with_token(
         "POST",
         &format!("/api/conversations/{conv_id}/messages"),
@@ -567,7 +567,7 @@ async fn t2_1_send_message_conversation_not_found() {
     let (mut app, services) = build_app().await;
     let (token, csrf) = setup_and_login(&mut app, &services, "admin", "StrongP@ss1").await;
 
-    let body = json!({ "content": "Hello", "msg_id": "msg-1" });
+    let body = json!({ "content": "Hello" });
     let req = common::json_with_token("POST", "/api/conversations/non-existent/messages", body, &token, &csrf);
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
@@ -577,7 +577,7 @@ async fn t2_1_send_message_conversation_not_found() {
 async fn t2_1_send_message_requires_auth() {
     let (app, _services) = build_app().await;
 
-    let body = json!({ "content": "Hello", "msg_id": "msg-1" });
+    let body = json!({ "content": "Hello" });
     let req = axum::http::Request::builder()
         .method("POST")
         .uri("/api/conversations/some-id/messages")

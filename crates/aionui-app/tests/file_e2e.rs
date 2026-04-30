@@ -313,12 +313,7 @@ async fn image_base64_with_workspace_field_accepts_non_home_path() {
     assert_eq!(resp.status(), StatusCode::OK);
 
     let json = body_json(resp).await;
-    assert!(
-        json["data"]
-            .as_str()
-            .unwrap()
-            .starts_with("data:image/png;base64,")
-    );
+    assert!(json["data"].as_str().unwrap().starts_with("data:image/png;base64,"));
 }
 
 #[tokio::test]

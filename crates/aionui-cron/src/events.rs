@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use aionui_api_types::{CronJobExecutedEvent, CronJobRemovedPayload, CronJobResponse, WebSocketMessage};
-use aionui_common::generate_id;
+use aionui_conversation::ConversationService;
 use aionui_realtime::EventBroadcaster;
 use serde_json::json;
 use tracing::error;
@@ -47,7 +47,7 @@ impl CronEventEmitter {
     pub fn emit_conversation_tips(&self, conversation_id: &str, content: &str, tip_type: &str) {
         let payload = json!({
             "conversation_id": conversation_id,
-            "msg_id": generate_id(),
+            "msg_id": ConversationService::mint_msg_id(),
             "type": "tips",
             "data": {
                 "content": content,

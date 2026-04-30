@@ -38,10 +38,7 @@ async fn get_image_base64_png() {
     fs::write(&file, &png_bytes).unwrap();
 
     let svc = make_service(dir.path());
-    let result = svc
-        .get_image_base64(file.to_str().unwrap(), None)
-        .await
-        .unwrap();
+    let result = svc.get_image_base64(file.to_str().unwrap(), None).await.unwrap();
 
     assert!(
         result.starts_with("data:image/png;base64,"),
@@ -63,10 +60,7 @@ async fn get_image_base64_jpeg() {
     fs::write(&file, &jpeg_bytes).unwrap();
 
     let svc = make_service(dir.path());
-    let result = svc
-        .get_image_base64(file.to_str().unwrap(), None)
-        .await
-        .unwrap();
+    let result = svc.get_image_base64(file.to_str().unwrap(), None).await.unwrap();
 
     assert!(result.starts_with("data:image/jpeg;base64,"));
 }
@@ -80,10 +74,7 @@ async fn get_image_base64_svg() {
     fs::write(&file, svg_content).unwrap();
 
     let svc = make_service(dir.path());
-    let result = svc
-        .get_image_base64(file.to_str().unwrap(), None)
-        .await
-        .unwrap();
+    let result = svc.get_image_base64(file.to_str().unwrap(), None).await.unwrap();
 
     assert!(result.starts_with("data:image/svg+xml;base64,"));
 
@@ -128,10 +119,7 @@ async fn get_image_base64_gif() {
     fs::write(&file, gif_bytes).unwrap();
 
     let svc = make_service(dir.path());
-    let result = svc
-        .get_image_base64(file.to_str().unwrap(), None)
-        .await
-        .unwrap();
+    let result = svc.get_image_base64(file.to_str().unwrap(), None).await.unwrap();
 
     assert!(result.starts_with("data:image/gif;base64,"));
 }

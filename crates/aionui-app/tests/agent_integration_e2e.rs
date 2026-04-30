@@ -210,7 +210,7 @@ async fn send_message_with_mock_agent_returns_202() {
     let req = json_with_token(
         "POST",
         &format!("/api/conversations/{conv_id}/messages"),
-        json!({ "content": "Hello mock agent", "msg_id": "msg-001" }),
+        json!({ "content": "Hello mock agent" }),
         &token,
         &csrf,
     );

@@ -1,8 +1,12 @@
 use std::sync::Arc;
 
-use aionui_ai_agent::{AgentStreamEvent, ICronService, MessageMiddleware, MiddlewareResult};
+use aionui_ai_agent::{
+    AgentStreamEvent, ICronService, MessageMiddleware, MiddlewareResult, stream_event::ThinkingEventData,
+};
 use aionui_api_types::WebSocketMessage;
-use aionui_common::{generate_id, normalize_keys_to_snake_case, now_ms};
+use aionui_common::{normalize_keys_to_snake_case, now_ms};
+
+use crate::service::ConversationService;
 use aionui_db::IConversationRepository;
 use aionui_db::models::MessageRow;
 use aionui_realtime::EventBroadcaster;
@@ -25,7 +29,7 @@ pub struct RelayOutcome {
 /// background tokio task until the agent finishes or errors out.
 pub struct StreamRelay {
     conversation_id: String,
-    assistant_msg_id: String,
+    msg_id: String,
     user_id: String,
     repo: Arc<dyn IConversationRepository>,
     broadcaster: Arc<dyn EventBroadcaster>,
@@ -36,7 +40,7 @@ pub struct StreamRelay {
 impl StreamRelay {
     pub fn new(
         conversation_id: String,
-        assistant_msg_id: String,
+        msg_id: String,
         user_id: String,
         repo: Arc<dyn IConversationRepository>,
         broadcaster: Arc<dyn EventBroadcaster>,
@@ -44,7 +48,7 @@ impl StreamRelay {
     ) -> Self {
         Self {
             conversation_id,
-            assistant_msg_id,
+            msg_id,
             user_id,
             repo,
             broadcaster,
@@ -59,11 +63,11 @@ impl StreamRelay {
     }
 
     /// Run the relay loop. Consumes `self` and runs until the agent stream ends.
-    pub async fn run(self, mut rx: broadcast::Receiver<AgentStreamEvent>) -> RelayOutcome {
+    pub async fn consume(self, mut rx: broadcast::Receiver<AgentStreamEvent>) -> RelayOutcome {
         let started_at = now_ms();
         info!(
             conversation_id = %self.conversation_id,
-            assistant_msg_id = %self.assistant_msg_id,
+            msg_id = %self.msg_id,
             "StreamRelay started"
         );
 
@@ -77,49 +81,51 @@ impl StreamRelay {
         loop {
             match rx.recv().await {
                 Ok(event) => {
-                    if let AgentStreamEvent::Thinking(ref data) = event {
-                        has_thinking = true;
-                        if data.status.as_deref() != Some("done") {
-                            if thinking_started_at.is_none() {
-                                thinking_started_at = Some(now_ms());
-                            }
-                            thinking_buffer.push_str(&data.content);
-                        }
-                    }
-
                     self.forward_to_websocket(&event);
-                    if let AgentStreamEvent::Text(ref data) = event {
-                        text_buffer.push_str(&data.content);
-                        flush_counter += 1;
-                        if flush_counter >= FLUSH_INTERVAL {
-                            self.flush_text(&text_buffer, &mut record_created).await;
-                            flush_counter = 0;
-                        }
-                    }
 
-                    if self.is_terminal(&event) {
-                        let elapsed_ms = now_ms() - started_at;
-                        let event_type = match &event {
-                            AgentStreamEvent::Finish(_) => "Finish",
-                            AgentStreamEvent::Error(_) => "Error",
-                            _ => "Unknown",
-                        };
-                        info!(
-                            conversation_id = %self.conversation_id,
-                            event_type,
-                            elapsed_ms,
-                            text_len = text_buffer.len(),
-                            "StreamRelay received terminal event"
-                        );
-                        if has_thinking {
-                            self.send_thinking_done();
+                    match &event {
+                        AgentStreamEvent::Thinking(data) => {
+                            has_thinking = true;
+                            if data.status.as_deref() != Some("done") {
+                                if thinking_started_at.is_none() {
+                                    thinking_started_at = Some(now_ms());
+                                }
+                                thinking_buffer.push_str(&data.content);
+                            }
                         }
-                        self.persist_thinking(&thinking_buffer, thinking_started_at).await;
-                        let outcome = self.finalize(&text_buffer, &record_created, &event).await;
-                        if self.complete_turn {
-                            Self::complete_conversation(&self.repo, &self.broadcaster, &self.conversation_id).await;
+                        AgentStreamEvent::Text(data) => {
+                            text_buffer.push_str(&data.content);
+                            flush_counter += 1;
+                            if flush_counter >= FLUSH_INTERVAL {
+                                self.flush_text(&text_buffer, &mut record_created).await;
+                                flush_counter = 0;
+                            }
                         }
-                        break outcome;
+                        AgentStreamEvent::Finish(_) | AgentStreamEvent::Error(_) => {
+                            let elapsed_ms = now_ms() - started_at;
+                            let event_type = if matches!(event, AgentStreamEvent::Finish(_)) {
+                                "Finish"
+                            } else {
+                                "Error"
+                            };
+                            info!(
+                                conversation_id = %self.conversation_id,
+                                event_type,
+                                elapsed_ms,
+                                text_len = text_buffer.len(),
+                                "StreamRelay received terminal event"
+                            );
+                            if has_thinking {
+                                self.send_thinking_done();
+                            }
+                            self.persist_thinking(&thinking_buffer, thinking_started_at).await;
+                            let outcome = self.finalize(&text_buffer, &record_created, &event).await;
+                            if self.complete_turn {
+                                Self::complete_conversation(&self.repo, &self.broadcaster, &self.conversation_id).await;
+                            }
+                            break outcome;
+                        }
+                        _ => {}
                     }
                 }
                 Err(broadcast::error::RecvError::Closed) => {
@@ -174,7 +180,7 @@ impl StreamRelay {
 
         let payload = json!({
             "conversation_id": self.conversation_id,
-            "msg_id": self.assistant_msg_id,
+            "msg_id": self.msg_id,
             "type": event_data.get("type").cloned().unwrap_or(json!("unknown")),
             "data": event_data.get("data").cloned().unwrap_or(json!({})),
             "hidden": false,
@@ -197,14 +203,18 @@ impl StreamRelay {
                 status: Some(Some("work".into())),
                 hidden: None,
             };
-            if let Err(e) = self.repo.update_message(&self.assistant_msg_id, &update).await {
+            if let Err(e) = self.repo.update_message(&self.msg_id, &update).await {
                 error!(error = %e, "Failed to update streaming message");
             }
         } else {
+            // `id` and `msg_id` share the same value: primary key is the
+            // legacy contract, while `msg_id` is what the WebSocket stream
+            // and frontend message index use to correlate chunks to the
+            // persisted row. Keeping them equal avoids a schema migration.
             let row = MessageRow {
-                id: self.assistant_msg_id.clone(),
+                id: self.msg_id.clone(),
                 conversation_id: self.conversation_id.clone(),
-                msg_id: None,
+                msg_id: Some(self.msg_id.clone()),
                 r#type: "text".into(),
                 content,
                 position: Some("left".into()),
@@ -240,14 +250,14 @@ impl StreamRelay {
                         status: Some(Some(status.to_owned())),
                         hidden: Some(hidden),
                     };
-                    if let Err(e) = self.repo.update_message(&self.assistant_msg_id, &update).await {
+                    if let Err(e) = self.repo.update_message(&self.msg_id, &update).await {
                         error!(error = %e, "Failed to finalize streaming message");
                     }
                 } else {
                     let row = MessageRow {
-                        id: self.assistant_msg_id.clone(),
+                        id: self.msg_id.clone(),
                         conversation_id: self.conversation_id.clone(),
-                        msg_id: None,
+                        msg_id: Some(self.msg_id.clone()),
                         r#type: "text".into(),
                         content,
                         position: Some("left".into()),
@@ -271,7 +281,7 @@ impl StreamRelay {
             // No text accumulated but got an error — store error as tips message
             let content = json!({ "content": data.message, "type": "error" }).to_string();
             let row = MessageRow {
-                id: generate_id(),
+                id: ConversationService::mint_msg_id(),
                 conversation_id: self.conversation_id.clone(),
                 msg_id: None,
                 r#type: "tips".into(),
@@ -301,9 +311,9 @@ impl StreamRelay {
         })
         .to_string();
         let row = MessageRow {
-            id: generate_id(),
+            id: ConversationService::mint_msg_id(),
             conversation_id: self.conversation_id.clone(),
-            msg_id: Some(self.assistant_msg_id.clone()),
+            msg_id: Some(self.msg_id.clone()),
             r#type: "thinking".into(),
             content,
             position: Some("left".into()),
@@ -318,7 +328,7 @@ impl StreamRelay {
 
     /// Send a `thinking` event with `status: "done"` to close the thinking UI.
     fn send_thinking_done(&self) {
-        let thinking_done = AgentStreamEvent::Thinking(aionui_ai_agent::stream_event::ThinkingEventData {
+        let thinking_done = AgentStreamEvent::Thinking(ThinkingEventData {
             content: String::new(),
             subject: None,
             duration: None,
@@ -340,7 +350,7 @@ impl StreamRelay {
     fn send_final_text_override(&self, text: &str, hidden: bool) {
         self.broadcast_stream_payload(json!({
             "conversation_id": self.conversation_id,
-            "msg_id": self.assistant_msg_id,
+            "msg_id": self.msg_id,
             "type": "content",
             "data": { "content": text },
             "hidden": hidden,
@@ -352,7 +362,7 @@ impl StreamRelay {
         for response in responses {
             self.broadcast_stream_payload(json!({
                 "conversation_id": self.conversation_id,
-                "msg_id": generate_id(),
+                "msg_id": ConversationService::mint_msg_id(),
                 "type": "system",
                 "data": response,
                 "hidden": true,
@@ -390,10 +400,6 @@ impl StreamRelay {
 
         debug!(conversation_id, status = "finished", "Turn completed");
     }
-
-    fn is_terminal(&self, event: &AgentStreamEvent) -> bool {
-        matches!(event, AgentStreamEvent::Finish(_) | AgentStreamEvent::Error(_))
-    }
 }
 
 struct SharedCronService(Arc<dyn ICronService>);
@@ -430,42 +436,9 @@ impl ICronService for SharedCronService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aionui_ai_agent::stream_event::{ErrorEventData, FinishEventData, StartEventData, TextEventData};
+    use aionui_ai_agent::stream_event::{ErrorEventData, FinishEventData, TextEventData};
     use aionui_db::DbError;
     use std::sync::Mutex;
-
-    // ── is_terminal tests ─────────────────────────────────────────
-
-    #[test]
-    fn is_terminal_finish() {
-        let relay = make_relay();
-        let event = AgentStreamEvent::Finish(FinishEventData::default());
-        assert!(relay.is_terminal(&event));
-    }
-
-    #[test]
-    fn is_terminal_error() {
-        let relay = make_relay();
-        let event = AgentStreamEvent::Error(ErrorEventData {
-            message: "fail".into(),
-            code: None,
-        });
-        assert!(relay.is_terminal(&event));
-    }
-
-    #[test]
-    fn is_terminal_text() {
-        let relay = make_relay();
-        let event = AgentStreamEvent::Text(TextEventData { content: "hi".into() });
-        assert!(!relay.is_terminal(&event));
-    }
-
-    #[test]
-    fn is_terminal_start() {
-        let relay = make_relay();
-        let event = AgentStreamEvent::Start(StartEventData { session_id: None });
-        assert!(!relay.is_terminal(&event));
-    }
 
     // ── run() async tests ─────────────────────────────────────────
 
@@ -497,7 +470,7 @@ mod tests {
         .unwrap();
         tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
 
-        let outcome = relay.run(rx).await;
+        let outcome = relay.consume(rx).await;
         assert!(outcome.system_responses.is_empty());
 
         // Should have inserted a message with accumulated text
@@ -536,7 +509,7 @@ mod tests {
         }))
         .unwrap();
 
-        let outcome = relay.run(rx).await;
+        let outcome = relay.consume(rx).await;
         assert!(outcome.system_responses.is_empty());
 
         let inserts = repo.take_inserts();
@@ -574,7 +547,7 @@ mod tests {
         .unwrap();
         drop(tx);
 
-        let outcome = relay.run(rx).await;
+        let outcome = relay.consume(rx).await;
         assert!(outcome.system_responses.is_empty());
 
         // Should still persist the partial text
@@ -605,7 +578,7 @@ mod tests {
 
         tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
 
-        let outcome = relay.run(rx).await;
+        let outcome = relay.consume(rx).await;
         assert!(outcome.system_responses.is_empty());
 
         // Collect WebSocket events
@@ -646,7 +619,7 @@ mod tests {
         .unwrap();
         tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
 
-        let outcome = relay.run(rx).await;
+        let outcome = relay.consume(rx).await;
         assert_eq!(outcome.system_responses, vec!["[System: listed]".to_string()]);
 
         let inserts = repo.take_inserts();
@@ -670,18 +643,6 @@ mod tests {
     }
 
     // ── Helpers ──────────────────────────────────────────────────
-
-    fn make_relay() -> StreamRelay {
-        let bus = Arc::new(aionui_realtime::BroadcastEventBus::new(16));
-        StreamRelay::new(
-            "conv-1".into(),
-            "msg-1".into(),
-            "user-1".into(),
-            Arc::new(NoopRepo),
-            bus,
-            None,
-        )
-    }
 
     struct MockCronService;
 
@@ -723,102 +684,6 @@ mod tests {
                 success: true,
                 message: "deleted".into(),
             }
-        }
-    }
-
-    /// Noop repo for tests that don't check DB interactions.
-    struct NoopRepo;
-
-    #[async_trait::async_trait]
-    impl IConversationRepository for NoopRepo {
-        async fn get(&self, _id: &str) -> Result<Option<aionui_db::models::ConversationRow>, DbError> {
-            Ok(None)
-        }
-        async fn create(&self, _row: &aionui_db::models::ConversationRow) -> Result<(), DbError> {
-            Ok(())
-        }
-        async fn update(&self, _id: &str, _updates: &aionui_db::ConversationRowUpdate) -> Result<(), DbError> {
-            Ok(())
-        }
-        async fn delete(&self, _id: &str) -> Result<(), DbError> {
-            Ok(())
-        }
-        async fn list_paginated(
-            &self,
-            _user_id: &str,
-            _filters: &aionui_db::ConversationFilters,
-        ) -> Result<aionui_common::PaginatedResult<aionui_db::models::ConversationRow>, DbError> {
-            Ok(aionui_common::PaginatedResult {
-                items: vec![],
-                total: 0,
-                has_more: false,
-            })
-        }
-        async fn find_by_source_and_chat(
-            &self,
-            _user_id: &str,
-            _source: &str,
-            _chat_id: &str,
-            _agent_type: &str,
-        ) -> Result<Option<aionui_db::models::ConversationRow>, DbError> {
-            Ok(None)
-        }
-        async fn list_by_cron_job(
-            &self,
-            _user_id: &str,
-            _cron_job_id: &str,
-        ) -> Result<Vec<aionui_db::models::ConversationRow>, DbError> {
-            Ok(vec![])
-        }
-        async fn list_associated(
-            &self,
-            _user_id: &str,
-            _conversation_id: &str,
-        ) -> Result<Vec<aionui_db::models::ConversationRow>, DbError> {
-            Ok(vec![])
-        }
-        async fn get_messages(
-            &self,
-            _conv_id: &str,
-            _page: u32,
-            _page_size: u32,
-            _order: aionui_db::SortOrder,
-        ) -> Result<aionui_common::PaginatedResult<MessageRow>, DbError> {
-            Ok(aionui_common::PaginatedResult {
-                items: vec![],
-                total: 0,
-                has_more: false,
-            })
-        }
-        async fn insert_message(&self, _row: &MessageRow) -> Result<(), DbError> {
-            Ok(())
-        }
-        async fn update_message(&self, _id: &str, _updates: &aionui_db::MessageRowUpdate) -> Result<(), DbError> {
-            Ok(())
-        }
-        async fn delete_messages_by_conversation(&self, _conv_id: &str) -> Result<(), DbError> {
-            Ok(())
-        }
-        async fn get_message_by_msg_id(
-            &self,
-            _conv_id: &str,
-            _msg_id: &str,
-            _msg_type: &str,
-        ) -> Result<Option<MessageRow>, DbError> {
-            Ok(None)
-        }
-        async fn search_messages(
-            &self,
-            _user_id: &str,
-            _keyword: &str,
-            _page: u32,
-            _page_size: u32,
-        ) -> Result<aionui_common::PaginatedResult<aionui_db::MessageSearchRow>, DbError> {
-            Ok(aionui_common::PaginatedResult {
-                items: vec![],
-                total: 0,
-                has_more: false,
-            })
         }
     }
 

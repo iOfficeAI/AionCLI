@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use aionui_ai_agent::{AgentStreamEvent, IWorkerTaskManager};
 use aionui_api_types::{CreateConversationRequest, SendMessageRequest};
-use aionui_common::{AgentType, ConversationSource, generate_id};
+use aionui_common::{AgentType, ConversationSource};
 use aionui_conversation::ConversationService;
 use aionui_db::models::AssistantSessionRow;
 use tokio::sync::broadcast;
@@ -63,12 +63,12 @@ impl ChannelMessageService {
             None => self.create_conversation_for_session(session, platform).await?,
         };
 
-        let msg_id = generate_id();
-
-        // Send message through ConversationService
+        // Send message through ConversationService. `msg_id` is now
+        // server-generated inside the service; channel plugins that need to
+        // correlate the user message back to the conversation should use
+        // `conversation_id` + stream events instead of a client-provided id.
         let req = SendMessageRequest {
             content: text.to_owned(),
-            msg_id: msg_id.clone(),
             files: vec![],
             inject_skills: vec![],
             hidden: false,
@@ -92,14 +92,12 @@ impl ChannelMessageService {
         info!(
             conversation_id = %conversation_id,
             session_id = %session.id,
-            msg_id = %msg_id,
             has_stream = stream_rx.is_some(),
             "message sent to agent"
         );
 
         Ok(SendResult {
             conversation_id,
-            msg_id,
             stream_rx,
         })
     }
@@ -288,7 +286,6 @@ impl ChannelMessageService {
 #[derive(Debug)]
 pub struct SendResult {
     pub conversation_id: String,
-    pub msg_id: String,
     /// Agent event stream for the ChannelStreamRelay.
     /// `None` when the agent task could not be found after sending
     /// (should not happen in normal flow).

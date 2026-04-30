@@ -2,7 +2,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Weak};
 
 use aionui_ai_agent::{IWorkerTaskManager, SendMessageData};
-use aionui_common::{AgentKillReason, generate_id};
+use aionui_common::AgentKillReason;
+use aionui_conversation::ConversationService;
 use aionui_db::ITeamRepository;
 use aionui_realtime::EventBroadcaster;
 use tracing::{info, warn};
@@ -340,7 +341,7 @@ impl TeamSession {
 
         let data = SendMessageData {
             content: input.first_message,
-            msg_id: generate_id(),
+            msg_id: ConversationService::mint_msg_id(),
             files: files.unwrap_or_default(),
             inject_skills: Vec::new(),
         };
@@ -400,7 +401,7 @@ impl TeamSession {
             } else {
                 msg.content.clone()
             };
-            let msg_id = generate_id();
+            let msg_id = ConversationService::mint_msg_id();
             let content_json = serde_json::json!({
                 "content": display_content,
                 "teammate_message": true,
