@@ -201,23 +201,27 @@ impl IAgentManager for MockAgentManager {
 /// Every conversation gets a `MockAgentManager` wired to whatever
 /// `team_mcp_stdio_config` was persisted for it.
 fn mock_factory() -> AgentFactory {
+    use futures_util::FutureExt;
     Arc::new(|opts: BuildTaskOptions| {
-        let extra: AcpBuildExtra = serde_json::from_value(opts.extra.clone()).unwrap_or_else(|_| AcpBuildExtra {
-            agent_id: None,
-            backend: None,
-            cli_path: None,
-            agent_name: None,
-            custom_agent_id: None,
-            preset_context: None,
-            skills: vec![],
-            preset_assistant_id: None,
-            session_mode: None,
-            cron_job_id: None,
-            team_mcp_stdio_config: None,
-            guide_mcp_config: None,
-        });
-        let agent = MockAgentManager::new(opts.conversation_id, opts.workspace, extra.team_mcp_stdio_config);
-        Ok(Arc::new(agent) as aionui_ai_agent::AgentManagerHandle)
+        async move {
+            let extra: AcpBuildExtra = serde_json::from_value(opts.extra.clone()).unwrap_or_else(|_| AcpBuildExtra {
+                agent_id: None,
+                backend: None,
+                cli_path: None,
+                agent_name: None,
+                custom_agent_id: None,
+                preset_context: None,
+                skills: vec![],
+                preset_assistant_id: None,
+                session_mode: None,
+                cron_job_id: None,
+                team_mcp_stdio_config: None,
+                guide_mcp_config: None,
+            });
+            let agent = MockAgentManager::new(opts.conversation_id, opts.workspace, extra.team_mcp_stdio_config);
+            Ok(Arc::new(agent) as aionui_ai_agent::AgentManagerHandle)
+        }
+        .boxed()
     })
 }
 

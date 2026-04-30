@@ -717,6 +717,7 @@ dependencies = [
  "async-trait",
  "axum",
  "dashmap",
+ "futures-util",
  "regex",
  "serde",
  "serde_json",

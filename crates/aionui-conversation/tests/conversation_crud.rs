@@ -38,11 +38,12 @@ impl EventBroadcaster for TestBroadcaster {
 
 struct NoopTaskManager;
 
+#[async_trait::async_trait]
 impl IWorkerTaskManager for NoopTaskManager {
     fn get_task(&self, _: &str) -> Option<Arc<dyn aionui_ai_agent::agent_manager::IAgentManager>> {
         None
     }
-    fn get_or_build_task(
+    async fn get_or_build_task(
         &self,
         _: &str,
         _: aionui_ai_agent::types::BuildTaskOptions,

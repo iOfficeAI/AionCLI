@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use aionui_common::{AgentKillReason, AgentType, AppError, ConversationStatus, TimestampMs, now_ms};
+use async_trait::async_trait;
 use dashmap::DashMap;
+use futures_util::future::BoxFuture;
+use tokio::sync::OnceCell;
 use tracing::info;
 
 use crate::agent_manager::AgentManagerHandle;
@@ -9,20 +12,30 @@ use crate::types::BuildTaskOptions;
 
 /// Factory function that creates an [`AgentManagerHandle`] from build options.
 ///
-/// This is provided at DI time by the application layer, which knows
-/// how to construct each agent type (ACP, Gemini, etc.).
-pub type AgentFactory = Arc<dyn Fn(BuildTaskOptions) -> Result<AgentManagerHandle, AppError> + Send + Sync>;
+/// Async so the factory can do real I/O (spawn a CLI process, negotiate the
+/// ACP initialize handshake, etc.) without needing to `block_on` inside the
+/// `IWorkerTaskManager` call site. Returning `BoxFuture` keeps the trait
+/// object-safe for DI.
+pub type AgentFactory =
+    Arc<dyn Fn(BuildTaskOptions) -> BoxFuture<'static, Result<AgentManagerHandle, AppError>> + Send + Sync>;
 
 /// Manages the lifecycle of active Agent tasks.
 ///
 /// Each conversation has at most one active task (keyed by conversation ID).
 /// The trait is object-safe for dependency injection.
+#[async_trait]
 pub trait IWorkerTaskManager: Send + Sync {
     /// Get an existing task by conversation ID.
     fn get_task(&self, conversation_id: &str) -> Option<AgentManagerHandle>;
 
     /// Get an existing task or build a new one if none exists.
-    fn get_or_build_task(
+    ///
+    /// Concurrent callers with the same `conversation_id` block on a shared
+    /// [`OnceCell`] so the factory runs at most once per conversation —
+    /// avoiding the race where two concurrent HTTP requests (e.g.
+    /// `/messages` + `/warmup`) would each spawn their own CLI process and
+    /// ACP connection, with one of them leaking.
+    async fn get_or_build_task(
         &self,
         conversation_id: &str,
         options: BuildTaskOptions,
@@ -45,9 +58,15 @@ pub trait IWorkerTaskManager: Send + Sync {
     fn collect_idle(&self, idle_threshold_ms: TimestampMs) -> Vec<String>;
 }
 
+/// Per-conversation slot: an [`OnceCell`] that the first concurrent caller
+/// initialises by running the factory, and that every subsequent caller
+/// awaits. Failed initialisations leave the cell empty so the next caller
+/// may retry; the slot itself is only removed on `kill` / `clear`.
+type TaskSlot = Arc<OnceCell<AgentManagerHandle>>;
+
 /// Default implementation of [`IWorkerTaskManager`] using a concurrent hash map.
 pub struct WorkerTaskManagerImpl {
-    tasks: DashMap<String, AgentManagerHandle>,
+    tasks: DashMap<String, TaskSlot>,
     factory: AgentFactory,
 }
 
@@ -58,36 +77,49 @@ impl WorkerTaskManagerImpl {
             factory,
         }
     }
+
+    /// Look up a fully-initialised handle by conversation id.
+    fn initialised_handle(&self, conversation_id: &str) -> Option<AgentManagerHandle> {
+        self.tasks.get(conversation_id).and_then(|slot| slot.get().cloned())
+    }
 }
 
+#[async_trait]
 impl IWorkerTaskManager for WorkerTaskManagerImpl {
     fn get_task(&self, conversation_id: &str) -> Option<AgentManagerHandle> {
-        self.tasks.get(conversation_id).map(|r| Arc::clone(&r))
+        self.initialised_handle(conversation_id)
     }
 
-    fn get_or_build_task(
+    async fn get_or_build_task(
         &self,
         conversation_id: &str,
         options: BuildTaskOptions,
     ) -> Result<AgentManagerHandle, AppError> {
-        // Fast path: task already exists
-        if let Some(existing) = self.tasks.get(conversation_id) {
-            return Ok(Arc::clone(&existing));
-        }
+        // Atomically obtain the per-conversation slot. `DashMap::entry` is
+        // synchronous and side-effect-free — only an empty OnceCell is
+        // allocated on the miss path, so concurrent callers for the same id
+        // all end up holding the same `Arc<OnceCell>`.
+        let slot: TaskSlot = self
+            .tasks
+            .entry(conversation_id.to_owned())
+            .or_insert_with(|| Arc::new(OnceCell::new()))
+            .clone();
 
-        // Build a new task
-        let handle = (self.factory)(options)?;
-
-        // Use entry API to avoid TOCTOU race — if another thread inserted
-        // between our get and this point, use the existing one.
-        let entry = self.tasks.entry(conversation_id.to_owned()).or_insert(handle);
-        Ok(Arc::clone(&entry))
+        // `OnceCell::get_or_try_init` serialises concurrent initialisers:
+        // the first caller to reach it runs the factory, every other caller
+        // awaits the same future and ends up with the same handle. On
+        // failure the cell stays empty so a later caller can retry.
+        let factory = self.factory.clone();
+        let handle = slot.get_or_try_init(|| async move { factory(options).await }).await?;
+        Ok(Arc::clone(handle))
     }
 
     fn kill(&self, conversation_id: &str, reason: Option<AgentKillReason>) -> Result<(), AppError> {
-        if let Some((id, agent)) = self.tasks.remove(conversation_id) {
+        if let Some((id, slot)) = self.tasks.remove(conversation_id) {
             info!(conversation_id = %id, ?reason, "Killing agent task");
-            agent.kill(reason)?;
+            if let Some(agent) = slot.get() {
+                agent.kill(reason)?;
+            }
         }
         Ok(())
     }
@@ -95,29 +127,31 @@ impl IWorkerTaskManager for WorkerTaskManagerImpl {
     fn clear(&self) {
         let keys: Vec<String> = self.tasks.iter().map(|r| r.key().clone()).collect();
         for key in keys {
-            if let Some((id, agent)) = self.tasks.remove(&key) {
+            if let Some((id, slot)) = self.tasks.remove(&key) {
                 info!(conversation_id = %id, "Clearing agent task");
-                let _ = agent.kill(None);
+                if let Some(agent) = slot.get() {
+                    let _ = agent.kill(None);
+                }
             }
         }
     }
 
     fn active_count(&self) -> usize {
-        self.tasks.len()
+        self.tasks.iter().filter(|entry| entry.value().get().is_some()).count()
     }
 
     fn collect_idle(&self, idle_threshold_ms: TimestampMs) -> Vec<String> {
         let now = now_ms();
         self.tasks
             .iter()
-            .filter(|entry| {
-                let agent = entry.value();
+            .filter_map(|entry| {
+                let agent = entry.value().get()?;
                 // Only ACP agents participate in idle cleanup per API Spec
-                agent.agent_type() == AgentType::Acp
+                (agent.agent_type() == AgentType::Acp
                     && agent.status() == Some(ConversationStatus::Finished)
-                    && (now - agent.last_activity_at()) > idle_threshold_ms
+                    && (now - agent.last_activity_at()) > idle_threshold_ms)
+                    .then(|| entry.key().clone())
             })
-            .map(|entry| entry.key().clone())
             .collect()
     }
 }
@@ -129,6 +163,7 @@ mod tests {
     use crate::stream_event::AgentStreamEvent;
     use crate::types::SendMessageData;
     use aionui_common::{AgentKillReason, AgentType, Confirmation, ConversationStatus, ProviderWithModel};
+    use futures_util::FutureExt;
     use std::sync::atomic::{AtomicI64, Ordering};
     use tokio::sync::broadcast;
 
@@ -231,7 +266,7 @@ mod tests {
 
     fn make_manager() -> WorkerTaskManagerImpl {
         let factory: AgentFactory = Arc::new(|opts: BuildTaskOptions| {
-            Ok(Arc::new(MockAgent::new(&opts.conversation_id, None)) as AgentManagerHandle)
+            async move { Ok(Arc::new(MockAgent::new(&opts.conversation_id, None)) as AgentManagerHandle) }.boxed()
         });
         WorkerTaskManagerImpl::new(factory)
     }
@@ -242,36 +277,102 @@ mod tests {
         assert!(mgr.get_task("nonexistent").is_none());
     }
 
-    #[test]
-    fn get_or_build_creates_task() {
+    #[tokio::test]
+    async fn get_or_build_creates_task() {
         let mgr = make_manager();
-        let handle = mgr.get_or_build_task("conv-1", make_options("conv-1")).unwrap();
+        let handle = mgr.get_or_build_task("conv-1", make_options("conv-1")).await.unwrap();
         assert_eq!(handle.conversation_id(), "conv-1");
         assert_eq!(mgr.active_count(), 1);
     }
 
-    #[test]
-    fn get_or_build_returns_existing() {
+    #[tokio::test]
+    async fn get_or_build_returns_existing() {
         let mgr = make_manager();
-        let h1 = mgr.get_or_build_task("conv-1", make_options("conv-1")).unwrap();
-        let h2 = mgr.get_or_build_task("conv-1", make_options("conv-1")).unwrap();
+        let h1 = mgr.get_or_build_task("conv-1", make_options("conv-1")).await.unwrap();
+        let h2 = mgr.get_or_build_task("conv-1", make_options("conv-1")).await.unwrap();
         assert!(Arc::ptr_eq(&h1, &h2));
         assert_eq!(mgr.active_count(), 1);
     }
 
-    #[test]
-    fn get_task_finds_existing() {
+    #[tokio::test]
+    async fn get_or_build_is_single_flight_under_concurrency() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_for_factory = Arc::clone(&calls);
+        let factory: AgentFactory = Arc::new(move |opts: BuildTaskOptions| {
+            let calls = Arc::clone(&calls_for_factory);
+            async move {
+                // Simulate a slow build (CLI spawn + initialize handshake).
+                tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(Arc::new(MockAgent::new(&opts.conversation_id, None)) as AgentManagerHandle)
+            }
+            .boxed()
+        });
+        let mgr = Arc::new(WorkerTaskManagerImpl::new(factory));
+
+        // Ten concurrent callers all racing on the same conversation id.
+        let mut joins = Vec::new();
+        for _ in 0..10 {
+            let mgr = Arc::clone(&mgr);
+            joins.push(tokio::spawn(async move {
+                mgr.get_or_build_task("conv-race", make_options("conv-race")).await
+            }));
+        }
+        let handles: Vec<_> = futures_util::future::join_all(joins)
+            .await
+            .into_iter()
+            .map(|r| r.unwrap().unwrap())
+            .collect();
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "factory must run only once");
+        assert_eq!(mgr.active_count(), 1);
+        for h in handles.iter().skip(1) {
+            assert!(Arc::ptr_eq(&handles[0], h), "all callers see the same handle");
+        }
+    }
+
+    #[tokio::test]
+    async fn get_or_build_retries_after_failure() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let fail_next = Arc::new(AtomicBool::new(true));
+        let flag = Arc::clone(&fail_next);
+        let factory: AgentFactory = Arc::new(move |opts: BuildTaskOptions| {
+            let flag = Arc::clone(&flag);
+            async move {
+                if flag.swap(false, Ordering::SeqCst) {
+                    Err(AppError::Internal("first call fails".into()))
+                } else {
+                    Ok(Arc::new(MockAgent::new(&opts.conversation_id, None)) as AgentManagerHandle)
+                }
+            }
+            .boxed()
+        });
+        let mgr = WorkerTaskManagerImpl::new(factory);
+
+        // First call fails, slot stays empty.
+        assert!(mgr.get_or_build_task("conv-1", make_options("conv-1")).await.is_err());
+        // Second call retries and succeeds.
+        let h = mgr.get_or_build_task("conv-1", make_options("conv-1")).await.unwrap();
+        assert_eq!(h.conversation_id(), "conv-1");
+        assert_eq!(mgr.active_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn get_task_finds_existing() {
         let mgr = make_manager();
-        mgr.get_or_build_task("conv-1", make_options("conv-1")).unwrap();
+        mgr.get_or_build_task("conv-1", make_options("conv-1")).await.unwrap();
         let handle = mgr.get_task("conv-1");
         assert!(handle.is_some());
         assert_eq!(handle.unwrap().conversation_id(), "conv-1");
     }
 
-    #[test]
-    fn kill_removes_task() {
+    #[tokio::test]
+    async fn kill_removes_task() {
         let mgr = make_manager();
-        mgr.get_or_build_task("conv-1", make_options("conv-1")).unwrap();
+        mgr.get_or_build_task("conv-1", make_options("conv-1")).await.unwrap();
         assert_eq!(mgr.active_count(), 1);
 
         mgr.kill("conv-1", Some(AgentKillReason::IdleTimeout)).unwrap();
@@ -281,15 +382,16 @@ mod tests {
 
     #[test]
     fn kill_nonexistent_is_ok() {
-        let mgr = make_manager();
+        let factory: AgentFactory = Arc::new(|_| async { unreachable!() }.boxed());
+        let mgr = WorkerTaskManagerImpl::new(factory);
         assert!(mgr.kill("nothing", None).is_ok());
     }
 
-    #[test]
-    fn clear_removes_all() {
+    #[tokio::test]
+    async fn clear_removes_all() {
         let mgr = make_manager();
-        mgr.get_or_build_task("conv-1", make_options("conv-1")).unwrap();
-        mgr.get_or_build_task("conv-2", make_options("conv-2")).unwrap();
+        mgr.get_or_build_task("conv-1", make_options("conv-1")).await.unwrap();
+        mgr.get_or_build_task("conv-2", make_options("conv-2")).await.unwrap();
         assert_eq!(mgr.active_count(), 2);
 
         mgr.clear();
@@ -298,27 +400,32 @@ mod tests {
 
     #[test]
     fn collect_idle_finds_finished_and_stale_acp_tasks() {
-        let mgr = WorkerTaskManagerImpl {
-            tasks: DashMap::new(),
-            factory: Arc::new(|_| unreachable!()),
+        let factory: AgentFactory = Arc::new(|_| async { unreachable!() }.boxed());
+        let mgr = WorkerTaskManagerImpl::new(factory);
+
+        // Helper: insert a pre-initialised slot bypassing the async factory path.
+        let insert = |id: &str, agent: Arc<dyn IAgentManager>| {
+            let cell: OnceCell<AgentManagerHandle> = OnceCell::new();
+            cell.set(agent).ok();
+            mgr.tasks.insert(id.into(), Arc::new(cell));
         };
 
         // ACP + Finished + old activity → should be collected
         let stale = Arc::new(
             MockAgent::new("conv-stale", Some(ConversationStatus::Finished)).with_last_activity(now_ms() - 600_000), // 10 min ago
         );
-        mgr.tasks.insert("conv-stale".into(), stale);
+        insert("conv-stale", stale);
 
         // ACP + Finished + recent activity → should NOT be collected
         let recent =
             Arc::new(MockAgent::new("conv-recent", Some(ConversationStatus::Finished)).with_last_activity(now_ms()));
-        mgr.tasks.insert("conv-recent".into(), recent);
+        insert("conv-recent", recent);
 
         // ACP + Running + old activity → should NOT be collected
         let running = Arc::new(
             MockAgent::new("conv-running", Some(ConversationStatus::Running)).with_last_activity(now_ms() - 600_000),
         );
-        mgr.tasks.insert("conv-running".into(), running);
+        insert("conv-running", running);
 
         // Non-ACP (Nanobot) + Finished + old activity → should NOT be collected
         let nanobot = Arc::new(
@@ -326,7 +433,7 @@ mod tests {
                 .with_agent_type(AgentType::Nanobot)
                 .with_last_activity(now_ms() - 600_000),
         );
-        mgr.tasks.insert("conv-nanobot".into(), nanobot);
+        insert("conv-nanobot", nanobot);
 
         let idle = mgr.collect_idle(300_000); // 5-min threshold
         assert_eq!(idle.len(), 1);

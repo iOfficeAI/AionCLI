@@ -239,8 +239,19 @@ struct AcpState {
     status: Option<ConversationStatus>,
     /// Active session ID (set after session/new or session/load).
     session_id: Option<String>,
-    /// Whether this session has sent at least one message.
-    has_messages: bool,
+    /// Whether **this `AcpAgentManager` instance** has opened the session with
+    /// the CLI — either through `session/new` (first turn) or through
+    /// `session/load` / claude-meta-resume (recovering a persisted id). Once
+    /// set, subsequent turns in the same process go through the short-path
+    /// `prompt_existing_session` instead of re-loading.
+    ///
+    /// This is NOT the same as "the conversation has prior messages in the
+    /// DB" — a task rebuild (idle cleanup, crash recovery, etc.) starts
+    /// with `session_opened = false` even when a persisted `session_id`
+    /// has already been restored, because the CLI child process is brand
+    /// new and still needs the load/resume handshake on its very first
+    /// prompt after rebuild.
+    session_opened: bool,
 }
 
 /// Serialize an external value (typically an ACP SDK struct that emits
@@ -622,7 +633,7 @@ impl AcpAgentManager {
             state: RwLock::new(AcpState {
                 status: None,
                 session_id: None,
-                has_messages: false,
+                session_opened: false,
             }),
             last_activity: AtomicI64::new(now_ms()),
             session_lock: Mutex::new(()),
@@ -725,28 +736,44 @@ impl AcpAgentManager {
     }
 
     /// Initialize or resume a session, then send the user message.
+    ///
+    /// Three paths:
+    /// 1. **No session_id at all** → `session/new` + first prompt.
+    /// 2. **Have session_id but this instance has not yet opened it with the
+    ///    CLI** → `session/load` (or claude-meta-resume) + prompt. This
+    ///    happens on the first turn after a task rebuild or after
+    ///    `restore_session_id` seeded the id from the DB.
+    /// 3. **Session already opened by this instance** → plain `prompt`. No
+    ///    `session/load` — the CLI child process still owns the session in
+    ///    memory, re-loading every turn would both waste a round-trip and
+    ///    (on some backends) reset config options.
     async fn ensure_session_and_send(&self, data: &SendMessageData) -> Result<(), AppError> {
         let _lock = self.session_lock.lock().await;
 
         let state = self.state.read().await;
-        let has_session = state.session_id.is_some();
         let session_id = state.session_id.clone();
-        let has_messages = state.has_messages;
+        let session_opened = state.session_opened;
         drop(state);
 
-        if !has_session && !has_messages {
-            // First message — create new session then prompt
-            self.session_new_and_prompt(data).await?;
-        } else if has_session && has_messages {
-            // Existing session — resume strategy depends on backend
-            self.session_resume_and_send(data, session_id.as_deref()).await?;
-        } else {
-            // Session exists but no previous messages — just prompt
-            self.prompt_existing_session(data, session_id.as_deref()).await?;
+        match (session_id.as_deref(), session_opened) {
+            (None, _) => {
+                // Path 1: first turn in a brand-new conversation.
+                self.session_new_and_prompt(data).await?;
+            }
+            (Some(sid), false) => {
+                // Path 2: we have a persisted id but this process has not
+                // opened it with the CLI yet. Needs backend-appropriate
+                // resume handshake before the prompt.
+                self.session_resume_and_send(data, Some(sid)).await?;
+            }
+            (Some(sid), true) => {
+                // Path 3: session is live with the CLI; just prompt.
+                self.prompt_existing_session(data, Some(sid)).await?;
+            }
         }
 
         let mut state = self.state.write().await;
-        state.has_messages = true;
+        state.session_opened = true;
         state.status = Some(ConversationStatus::Running);
 
         Ok(())
@@ -1068,10 +1095,15 @@ impl AcpAgentManager {
 
     /// Restore a previously persisted session_id (e.g. from DB on task rebuild).
     /// Enables resume path on next send_message instead of creating a fresh session.
+    ///
+    /// Deliberately leaves `session_opened = false`: the CLI child process is
+    /// brand new and still needs `session/load` (or claude-meta-resume) to
+    /// re-attach to the persisted session before the next prompt. Subsequent
+    /// turns — once the resume handshake has run — take the short path.
     pub async fn restore_session_id(&self, sid: String) {
         let mut state = self.state.write().await;
         state.session_id = Some(sid);
-        state.has_messages = true;
+        state.session_opened = false;
     }
 
     /// Vendor label this session was spawned as (e.g. "claude"), if any.

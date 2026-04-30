@@ -410,17 +410,18 @@ impl CountingTaskManager {
     }
 }
 
+#[async_trait::async_trait]
 impl IWorkerTaskManager for CountingTaskManager {
     fn get_task(&self, conversation_id: &str) -> Option<aionui_ai_agent::AgentManagerHandle> {
         self.inner.get_task(conversation_id)
     }
-    fn get_or_build_task(
+    async fn get_or_build_task(
         &self,
         conversation_id: &str,
         options: BuildTaskOptions,
     ) -> Result<aionui_ai_agent::AgentManagerHandle, AppError> {
         self.calls.lock().unwrap().build.push(conversation_id.to_owned());
-        self.inner.get_or_build_task(conversation_id, options)
+        self.inner.get_or_build_task(conversation_id, options).await
     }
     fn kill(&self, conversation_id: &str, reason: Option<AgentKillReason>) -> Result<(), AppError> {
         self.calls
@@ -519,11 +520,15 @@ mod mock_agent {
 }
 
 fn success_factory() -> AgentFactory {
+    use futures_util::FutureExt;
     Arc::new(|opts: BuildTaskOptions| {
-        Ok(
-            Arc::new(mock_agent::MockAgent::new(opts.conversation_id, opts.workspace))
-                as aionui_ai_agent::AgentManagerHandle,
-        )
+        async move {
+            Ok(
+                Arc::new(mock_agent::MockAgent::new(opts.conversation_id, opts.workspace))
+                    as aionui_ai_agent::AgentManagerHandle,
+            )
+        }
+        .boxed()
     })
 }
 
@@ -1268,21 +1273,25 @@ async fn d9_ensure_session_persists_team_mcp_stdio_config() {
     // Each agent's conversation.extra must carry a `team_mcp_stdio_config`
     // object by the time the factory is called — that is what the rebuilt
     // ACP process will read to reach the MCP server.
+    use futures_util::FutureExt;
     let (svc, _tm) = setup_with_factory(Arc::new(|opts: BuildTaskOptions| {
-        let extra_has_cfg = opts
-            .extra
-            .get("team_mcp_stdio_config")
-            .and_then(|v| v.as_object())
-            .is_some_and(|o| o.contains_key("port") && o.contains_key("slot_id"));
-        assert!(
-            extra_has_cfg,
-            "factory called without team_mcp_stdio_config in extra: {:?}",
-            opts.extra
-        );
-        Ok(
-            Arc::new(mock_agent::MockAgent::new(opts.conversation_id, opts.workspace))
-                as aionui_ai_agent::AgentManagerHandle,
-        )
+        async move {
+            let extra_has_cfg = opts
+                .extra
+                .get("team_mcp_stdio_config")
+                .and_then(|v| v.as_object())
+                .is_some_and(|o| o.contains_key("port") && o.contains_key("slot_id"));
+            assert!(
+                extra_has_cfg,
+                "factory called without team_mcp_stdio_config in extra: {:?}",
+                opts.extra
+            );
+            Ok(
+                Arc::new(mock_agent::MockAgent::new(opts.conversation_id, opts.workspace))
+                    as aionui_ai_agent::AgentManagerHandle,
+            )
+        }
+        .boxed()
     }));
 
     let created = svc
@@ -1326,8 +1335,10 @@ async fn d9_ensure_session_is_idempotent() {
 async fn d9_ensure_session_rollbacks_when_build_fails() {
     // Factory always fails → ensure_session must propagate error and not
     // insert into sessions, so send_message afterwards still errors.
-    let failing_factory: AgentFactory =
-        Arc::new(|_opts: BuildTaskOptions| Err(AppError::Internal("simulated build failure".into())));
+    use futures_util::FutureExt;
+    let failing_factory: AgentFactory = Arc::new(|_opts: BuildTaskOptions| {
+        async move { Err(AppError::Internal("simulated build failure".into())) }.boxed()
+    });
     let (svc, tm) = setup_with_factory(failing_factory);
     let created = svc
         .create_team(
