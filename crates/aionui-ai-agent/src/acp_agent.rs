@@ -940,6 +940,19 @@ impl AcpAgentManager {
                 state.session_id = Some(new_sid.clone());
                 drop(state);
 
+                // Re-apply the user's preferred mode: the CLI resets
+                // `currentModeId` to its own default on every resume
+                // handshake (Claude meta-resume rebuilds the session), so
+                // without this the mode the user had set (e.g.
+                // `bypassPermissions`) silently downgrades to `default`
+                // and the CLI starts prompting for permissions again.
+                if let Err(e) = self.apply_preferred_mode(&new_sid).await {
+                    tracing::error!(
+                        conversation_id = %self.conversation_id,
+                        error = %e,
+                        "failed to re-apply preferred mode after meta-resume"
+                    );
+                }
                 self.apply_preferred_config_selections(&new_sid).await;
                 return self.prompt_existing_session(data, Some(&new_sid)).await;
             }
@@ -982,6 +995,17 @@ impl AcpAgentManager {
         self.emit_snapshot_events().await;
 
         if let Some(sid) = session_id {
+            // Same reasoning as the Claude meta-resume branch above:
+            // `session/load` returns the CLI's own `currentModeId`
+            // (usually `default`), so re-apply the user's preferred
+            // mode before prompting.
+            if let Err(e) = self.apply_preferred_mode(sid).await {
+                tracing::error!(
+                    conversation_id = %self.conversation_id,
+                    error = %e,
+                    "failed to re-apply preferred mode after session/load"
+                );
+            }
             self.apply_preferred_config_selections(sid).await;
         }
 
