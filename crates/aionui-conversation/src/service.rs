@@ -1077,8 +1077,8 @@ impl ConversationService {
         self.repo.insert_message(row).await?;
 
         let msg_id = row.msg_id.clone().unwrap_or_else(|| row.id.clone());
-        let content_value: serde_json::Value = serde_json::from_str(&row.content)
-            .unwrap_or_else(|_| serde_json::Value::String(row.content.clone()));
+        let content_value: serde_json::Value =
+            serde_json::from_str(&row.content).unwrap_or_else(|_| serde_json::Value::String(row.content.clone()));
         let payload = serde_json::json!({
             "conversation_id": row.conversation_id,
             "msg_id": msg_id,

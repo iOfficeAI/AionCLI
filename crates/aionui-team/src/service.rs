@@ -530,7 +530,9 @@ impl TeamSessionService {
                 return Err(TeamError::InvalidRequest(msg));
             }
 
-            let _ = self.task_manager.kill(&agent.conversation_id, Some(AgentKillReason::TeamMcpRebuild));
+            let _ = self
+                .task_manager
+                .kill(&agent.conversation_id, Some(AgentKillReason::TeamMcpRebuild));
 
             if let Err(e) = self
                 .conversation_service
@@ -638,7 +640,11 @@ impl TeamSessionService {
             .sessions
             .get(team_id)
             .ok_or_else(|| TeamError::SessionNotFound(team_id.into()))?;
-        entry.session.scheduler().set_status(slot_id, crate::types::TeammateStatus::Working).await?;
+        entry
+            .session
+            .scheduler()
+            .set_status(slot_id, crate::types::TeammateStatus::Working)
+            .await?;
         let input = entry.session.compute_wake_input(slot_id).await;
 
         if let Ok(Some(ref i)) = input
@@ -673,7 +679,9 @@ impl TeamSessionService {
                 Ok(Some(i)) if i.should_send => i,
                 _ => return,
             };
-            let Some(handle) = task_mgr.get_task(&input.conversation_id) else { return };
+            let Some(handle) = task_mgr.get_task(&input.conversation_id) else {
+                return;
+            };
             let data = aionui_ai_agent::SendMessageData {
                 content: input.first_message,
                 msg_id: aionui_common::generate_id(),

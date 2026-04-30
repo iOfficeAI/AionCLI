@@ -465,7 +465,25 @@ async fn dispatch_client_command(connection: &ConnectionTo<Agent>, cmd: AcpClien
             let _ = event_tx.send(send_and_log(connection, req, AGENT_METHOD_NAMES.session_close).await);
         }
         AcpClientCommand::Prompt { req, event_tx } => {
-            let _ = event_tx.send(send_and_log(connection, req, AGENT_METHOD_NAMES.session_prompt).await);
+            // Run the prompt on a dedicated SDK task so the dispatch loop can
+            // keep processing commands (most importantly `Cancel`) while the
+            // CLI is still streaming the turn. Awaiting `send_and_log` here
+            // directly would block every other command until the turn ends,
+            // which is exactly what made `stop` not interrupt live turns —
+            // the `session/cancel` notification was only dispatched after
+            // the prompt response arrived.
+            let connection_for_task = connection.clone();
+            if let Err(err) = connection.spawn(async move {
+                let result = send_and_log(&connection_for_task, req, AGENT_METHOD_NAMES.session_prompt).await;
+                let _ = event_tx.send(result);
+                Ok(())
+            }) {
+                // Spawn can only fail when the SDK is shutting down. In that
+                // case `event_tx` was consumed by the closure, so the caller
+                // will observe `AcpError::NotConnected` via the dropped
+                // oneshot — which is the correct signal.
+                warn!(error = %err, "Failed to spawn ACP prompt task");
+            }
         }
         AcpClientCommand::SetMode { req, event_tx } => {
             let _ = event_tx.send(send_and_log(connection, req, AGENT_METHOD_NAMES.session_set_mode).await);

@@ -395,7 +395,9 @@ async fn handle_tools_call(
 
     match &result {
         Ok(_) => info!(team_id = %team_id, tool = %tool_name, caller = %caller_slot_id, "MCP tool call succeeded"),
-        Err(e) => warn!(team_id = %team_id, tool = %tool_name, caller = %caller_slot_id, error = %e, "MCP tool call failed"),
+        Err(e) => {
+            warn!(team_id = %team_id, tool = %tool_name, caller = %caller_slot_id, error = %e, "MCP tool call failed")
+        }
     }
 
     match result {
@@ -494,7 +496,10 @@ async fn exec_send_message(
     // Wake target agent(s) so they process the new mailbox message.
     if let Some(svc) = service.upgrade() {
         let targets = if input.to == "*" {
-            scheduler.list_agents().await.iter()
+            scheduler
+                .list_agents()
+                .await
+                .iter()
                 .filter(|a| a.slot_id != caller_slot_id)
                 .map(|a| a.slot_id.clone())
                 .collect::<Vec<_>>()

@@ -200,10 +200,10 @@ impl AcpAgentService {
                 acp.preload_snapshot(state).await;
             }
             // Restore session_id from DB so resume path works after restart
-            if let Ok(Some(row)) = self.repo.get(&conversation_id).await {
-                if let Some(sid) = row.session_id {
-                    acp.restore_session_id(sid).await;
-                }
+            if let Ok(Some(row)) = self.repo.get(&conversation_id).await
+                && let Some(sid) = row.session_id
+            {
+                acp.restore_session_id(sid).await;
             }
         }
 

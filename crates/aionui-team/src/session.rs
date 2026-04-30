@@ -420,7 +420,9 @@ impl TeamSession {
                 continue;
             }
             let sender = agents.iter().find(|a| a.slot_id == msg.from_agent_id);
-            let sender_name = sender.map(|a| a.name.clone()).unwrap_or_else(|| msg.from_agent_id.clone());
+            let sender_name = sender
+                .map(|a| a.name.clone())
+                .unwrap_or_else(|| msg.from_agent_id.clone());
             let sender_backend = sender.map(|a| a.backend.clone());
             let sender_conv_id = sender.map(|a| a.conversation_id.clone());
             let display_content = if total > 1 {
@@ -1239,7 +1241,14 @@ mod tests {
         let session = start_session().await;
         session
             .mailbox
-            .write("t1", "worker-1", "lead-1", MailboxMessageType::Message, "from lead", None)
+            .write(
+                "t1",
+                "worker-1",
+                "lead-1",
+                MailboxMessageType::Message,
+                "from lead",
+                None,
+            )
             .await
             .unwrap();
         session
@@ -1282,7 +1291,14 @@ mod tests {
         let session = start_session().await;
         session
             .mailbox
-            .write("t1", "lead-1", "worker-1", MailboxMessageType::Message, "lead-gets-this", None)
+            .write(
+                "t1",
+                "lead-1",
+                "worker-1",
+                MailboxMessageType::Message,
+                "lead-gets-this",
+                None,
+            )
             .await
             .unwrap();
 
