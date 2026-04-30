@@ -81,8 +81,6 @@ impl StreamRelay {
         loop {
             match rx.recv().await {
                 Ok(event) => {
-                    self.forward_to_websocket(&event);
-
                     match &event {
                         AgentStreamEvent::Thinking(data) => {
                             has_thinking = true;
@@ -92,8 +90,10 @@ impl StreamRelay {
                                 }
                                 thinking_buffer.push_str(&data.content);
                             }
+                            self.forward_to_websocket(&event);
                         }
                         AgentStreamEvent::Text(data) => {
+                            self.forward_to_websocket(&event);
                             text_buffer.push_str(&data.content);
                             flush_counter += 1;
                             if flush_counter >= FLUSH_INTERVAL {
@@ -115,9 +115,14 @@ impl StreamRelay {
                                 text_len = text_buffer.len(),
                                 "StreamRelay received terminal event"
                             );
+                            // Send thinking_done BEFORE the terminal event so the
+                            // frontend receives it while still in "running" state.
+                            // Otherwise the thinking_done arriving after finish
+                            // re-activates the processing indicator.
                             if has_thinking {
                                 self.send_thinking_done();
                             }
+                            self.forward_to_websocket(&event);
                             self.persist_thinking(&thinking_buffer, thinking_started_at).await;
                             let outcome = self.finalize(&text_buffer, &record_created, &event).await;
                             if self.complete_turn {
@@ -125,7 +130,9 @@ impl StreamRelay {
                             }
                             break outcome;
                         }
-                        _ => {}
+                        _ => {
+                            self.forward_to_websocket(&event);
+                        }
                     }
                 }
                 Err(broadcast::error::RecvError::Closed) => {
