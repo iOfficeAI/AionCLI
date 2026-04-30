@@ -13,12 +13,12 @@ use crate::stream_event::{
 use crate::team_guide_prompt;
 use crate::types::{AcpBuildExtra, AgentStreamChunk, SendMessageData, SlashCommandItem};
 use agent_client_protocol::schema::{
-    AgentCapabilities, AvailableCommand, CancelNotification, ContentBlock, HttpHeader, LoadSessionRequest, McpServer,
-    McpServerHttp, NewSessionRequest, PromptRequest, SessionConfigKind, SessionConfigOption, SessionId,
-    SessionModeState, SessionModelState, SetSessionConfigOptionRequest, SetSessionModeRequest, SetSessionModelRequest,
-    UsageUpdate,
+    AgentCapabilities, AvailableCommand, CancelNotification, ContentBlock, EnvVariable,
+    LoadSessionRequest, McpServer, McpServerStdio, NewSessionRequest, PromptRequest,
+    SessionConfigKind, SessionConfigOption, SessionId, SessionModeState, SessionModelState,
+    SetSessionConfigOptionRequest, SetSessionModeRequest, SetSessionModelRequest, UsageUpdate,
 };
-use aionui_api_types::TeamMcpStdioConfig;
+use aionui_api_types::{GuideMcpConfig, TeamMcpStdioConfig};
 use aionui_api_types::{AgentHandshake, AgentMetadata};
 use aionui_common::{
     AgentKillReason, AgentType, AppError, CommandSpec, Confirmation, ConversationStatus, TimestampMs,
@@ -188,14 +188,11 @@ fn build_new_session_request(workspace: &str, config: &AcpBuildExtra) -> NewSess
     if let Some(cfg) = config.team_mcp_stdio_config.as_ref() {
         return req.mcp_servers(vec![team_mcp_server(cfg)]);
     }
-    // Solo session: inject Guide only when the backend is team-capable.
-    if let Some(backend) = config.backend.as_deref()
-        && TEAM_CAPABLE_BACKENDS.contains(&backend)
+    // Solo: inject Guide MCP stdio server for team-capable backends
+    if let Some(guide_cfg) = config.guide_mcp_config.as_ref()
+        && config.backend.as_deref().map_or(false, |b| TEAM_CAPABLE_BACKENDS.contains(&b))
     {
-        // TODO(D26a): push `McpServer::Http` for the Guide server here,
-        // using the `GuideMcpConfig` (port + auth token) sourced from
-        // `AcpBuildExtra` once the Guide server lands.
-        return req;
+        return req.mcp_servers(vec![guide_mcp_server(guide_cfg, config)]);
     }
     req
 }
@@ -209,15 +206,31 @@ fn build_new_session_request(workspace: &str, config: &AcpBuildExtra) -> NewSess
 /// depends on this crate, so importing the spec would cycle. Both sides
 /// derive `name` from `cfg.team_id` (phase1 interface-contracts §3).
 fn team_mcp_server(cfg: &TeamMcpStdioConfig) -> McpServer {
-    // Use HTTP transport — claude-agent-acp supports http and actively
-    // connects to it (unlike stdio which has spawn/init timing issues).
-    let url = format!("http://127.0.0.1:{}", cfg.port);
-    let headers = vec![
-        HttpHeader::new("Authorization".to_owned(), format!("Bearer {}", cfg.token)),
-        HttpHeader::new("X-Slot-Id".to_owned(), cfg.slot_id.clone()),
+    let env = vec![
+        EnvVariable::new(TeamMcpStdioConfig::ENV_PORT.to_owned(), cfg.port.to_string()),
+        EnvVariable::new(TeamMcpStdioConfig::ENV_TOKEN.to_owned(), cfg.token.clone()),
+        EnvVariable::new(TeamMcpStdioConfig::ENV_SLOT_ID.to_owned(), cfg.slot_id.clone()),
     ];
-    let http = McpServerHttp::new(format!("aionui-team-{}", cfg.team_id), url).headers(headers);
-    McpServer::Http(http)
+    let stdio = McpServerStdio::new(format!("aionui-team-{}", cfg.team_id), &cfg.binary_path)
+        .args(vec!["mcp-team-stdio".to_owned()])
+        .env(env);
+    McpServer::Stdio(stdio)
+}
+
+/// Build a stdio `McpServer` for the Guide MCP server in solo team-capable sessions.
+fn guide_mcp_server(cfg: &GuideMcpConfig, extra: &AcpBuildExtra) -> McpServer {
+    let env = vec![
+        EnvVariable::new("AION_MCP_PORT".to_owned(), cfg.port.to_string()),
+        EnvVariable::new("AION_MCP_TOKEN".to_owned(), cfg.token.clone()),
+        EnvVariable::new(
+            "AION_MCP_BACKEND".to_owned(),
+            extra.backend.clone().unwrap_or_default(),
+        ),
+    ];
+    let stdio = McpServerStdio::new("aionui-team-guide", &cfg.binary_path)
+        .args(vec!["mcp-guide-stdio".to_owned()])
+        .env(env);
+    McpServer::Stdio(stdio)
 }
 
 /// Internal state that changes at runtime.
@@ -749,6 +762,8 @@ impl AcpAgentManager {
         let req = build_new_session_request(&self.workspace, &self.config);
         tracing::info!(
             has_team_mcp = self.config.team_mcp_stdio_config.is_some(),
+            has_guide_mcp = self.config.guide_mcp_config.is_some(),
+            guide_mcp_port = self.config.guide_mcp_config.as_ref().map(|c| c.port),
             mcp_servers_count = req.mcp_servers.len(),
             "session_new_and_prompt: sending session/new"
         );
@@ -871,6 +886,8 @@ impl AcpAgentManager {
                 info!(
                     session_id = %sid,
                     has_team_mcp = self.config.team_mcp_stdio_config.is_some(),
+                    has_guide_mcp = self.config.guide_mcp_config.is_some(),
+                    guide_mcp_port = self.config.guide_mcp_config.as_ref().map(|c| c.port),
                     mcp_servers_count = req.mcp_servers.len(),
                     "session_resume: using session/new with claudeCode.options.resume"
                 );

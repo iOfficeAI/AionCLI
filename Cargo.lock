@@ -373,6 +373,7 @@ dependencies = [
  "git2",
  "http-body-util",
  "reqwest",
+ "rmcp",
  "rust_xlsxwriter",
  "serde",
  "serde_json",

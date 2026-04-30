@@ -79,6 +79,7 @@ mod tests {
             port: 12345,
             token: "tok-abc".into(),
             slot_id: "slot-1".into(),
+            binary_path: "/usr/bin/aionui-backend".into(),
         }
     }
 

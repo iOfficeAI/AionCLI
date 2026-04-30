@@ -6,6 +6,18 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Connection config for the Guide MCP stdio server in solo conversations.
+///
+/// Passed through `AcpBuildExtra::guide_mcp_config` by the factory so that
+/// `build_new_session_request` can inject the Guide as a stdio MCP server
+/// when the backend is team-capable and this is not a team session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GuideMcpConfig {
+    pub port: u16,
+    pub token: String,
+    pub binary_path: String,
+}
+
 /// Stdio connection config for the team session MCP server.
 ///
 /// `team_id` is persisted alongside the connection triple so every
@@ -18,6 +30,7 @@ pub struct TeamMcpStdioConfig {
     pub port: u16,
     pub token: String,
     pub slot_id: String,
+    pub binary_path: String,
 }
 
 impl TeamMcpStdioConfig {
@@ -40,6 +53,7 @@ mod tests {
             port: 54321,
             token: "tok-abc".into(),
             slot_id: "slot-1".into(),
+            binary_path: "/usr/bin/aionui-backend".into(),
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let parsed: TeamMcpStdioConfig = serde_json::from_str(&json).unwrap();

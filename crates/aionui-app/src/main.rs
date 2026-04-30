@@ -8,7 +8,7 @@ use tokio::net::TcpListener;
 use tracing::info;
 use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
-use aionui_app::{AppConfig, AppServices, bridge, create_router};
+use aionui_app::{AppConfig, AppServices, bridge, create_router, guide_stdio, team_stdio};
 
 #[derive(Parser)]
 #[command(name = "aionui-backend", about = "AionUi Backend Server")]
@@ -75,13 +75,15 @@ fn init_tracing(log_dir: &Path, log_level: Option<&str>) -> tracing_appender::no
 
 #[tokio::main]
 async fn main() -> Result<ExitCode> {
-    // mcp-bridge subcommand: lives entirely outside the main HTTP server and
-    // must not touch the database, logging setup, or `AppServices`. Spawned by
-    // ACP agent CLIs as a short-lived stdio ↔ TCP bridge process.
+    // mcp-bridge / mcp-guide-stdio subcommands: live entirely outside the main
+    // HTTP server and must not touch the database, logging setup, or `AppServices`.
     let mut argv = std::env::args();
     let _prog = argv.next();
-    if argv.next().as_deref() == Some("mcp-bridge") {
-        return Ok(bridge::run_mcp_bridge().await);
+    match argv.next().as_deref() {
+        Some("mcp-bridge") => return Ok(bridge::run_mcp_bridge().await),
+        Some("mcp-guide-stdio") => return Ok(guide_stdio::run_guide_stdio().await),
+        Some("mcp-team-stdio") => return Ok(team_stdio::run_team_stdio().await),
+        _ => {}
     }
 
     let cli = Cli::parse();

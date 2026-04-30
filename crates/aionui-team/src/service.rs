@@ -511,7 +511,7 @@ impl TeamSessionService {
         &self,
         team_id: &str,
         session: &TeamSession,
-        _user_id: &str,
+        user_id: &str,
         agents: &[TeamAgent],
     ) -> Result<(), TeamError> {
         for agent in agents {
@@ -530,11 +530,21 @@ impl TeamSessionService {
                 return Err(TeamError::InvalidRequest(msg));
             }
 
-            // Kill cached task so next get_or_build_task reads fresh config from DB.
-            // Don't warmup — let the next user message trigger rebuild naturally.
-            // Claude CLI persists session history to disk; session/new+resume
-            // restores it, so conversation context is NOT lost across restarts.
             let _ = self.task_manager.kill(&agent.conversation_id, Some(AgentKillReason::TeamMcpRebuild));
+
+            if let Err(e) = self
+                .conversation_service
+                .warmup(user_id, &agent.conversation_id, &self.task_manager)
+                .await
+            {
+                warn!(
+                    team_id,
+                    slot_id = %agent.slot_id,
+                    conversation_id = %agent.conversation_id,
+                    error = %e,
+                    "warmup failed during rebuild; agent will not be wakeable until next user message"
+                );
+            }
         }
         Ok(())
     }
@@ -569,8 +579,14 @@ impl TeamSessionService {
                     let Some(entry) = sessions.get(&team_id) else {
                         break;
                     };
-                    if let Err(e) = entry.session.on_agent_finish(&conv_id, is_error).await {
-                        warn!(conversation_id = %conv_id, error = %e, "on_agent_finish failed");
+                    match entry.session.on_agent_finish(&conv_id, is_error).await {
+                        Ok(Some(wake_target)) => {
+                            entry.session.try_wake(&wake_target, None).await;
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            warn!(conversation_id = %conv_id, error = %e, "on_agent_finish failed");
+                        }
                     }
                 }
             });
@@ -617,28 +633,41 @@ impl TeamSessionService {
 
     /// Wake a specific agent in a team session (trigger it to read mailbox).
     /// Called by MCP dispatch after `team_send_message` writes to mailbox.
-    /// Fire-and-forget: spawns wake as background task, does not block MCP response.
     pub async fn wake_agent_in_session(&self, team_id: &str, slot_id: &str) -> Result<(), TeamError> {
         let entry = self
             .sessions
             .get(team_id)
             .ok_or_else(|| TeamError::SessionNotFound(team_id.into()))?;
         entry.session.scheduler().set_status(slot_id, crate::types::TeammateStatus::Working).await?;
-        // Compute wake input while we hold the entry ref
         let input = entry.session.compute_wake_input(slot_id).await;
 
-        // Mirror non-user mailbox rows into the target conversation before
-        // we drop `entry` (the session borrow is still live here). Skipped
-        // for leader wakes inside `mirror_unread_to_conversation`.
         if let Ok(Some(ref i)) = input
             && i.should_send
         {
             entry.session.mirror_unread_to_conversation(i).await;
         }
-        let task_mgr = self.task_manager.clone();
+
+        let user_id = entry.session.user_id().to_owned();
         drop(entry);
 
-        // Spawn actual send as background task (send_message blocks until agent finishes)
+        let conv_id = match &input {
+            Ok(Some(i)) if i.should_send => i.conversation_id.clone(),
+            _ => return Ok(()),
+        };
+
+        // Ensure the agent task exists (mirrors AionUi's getOrBuildTask).
+        if self.task_manager.get_task(&conv_id).is_none() {
+            if let Err(e) = self
+                .conversation_service
+                .warmup(&user_id, &conv_id, &self.task_manager)
+                .await
+            {
+                warn!(team_id, slot_id, conversation_id = %conv_id, error = %e, "warmup in wake failed");
+                return Ok(());
+            }
+        }
+
+        let task_mgr = self.task_manager.clone();
         tokio::spawn(async move {
             let input = match input {
                 Ok(Some(i)) if i.should_send => i,

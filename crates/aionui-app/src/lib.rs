@@ -1,5 +1,7 @@
 //! Application entry point: assembles all crates into an Axum server with DI and middleware.
 pub mod bridge;
+pub mod guide_stdio;
+pub mod team_stdio;
 mod state_builders;
 
 use std::sync::Arc;
@@ -41,7 +43,8 @@ use aionui_office::{OfficeRouterState, office_proxy_routes, office_routes};
 use aionui_realtime::{BroadcastEventBus, WebSocketManager, WsHandlerState, ws_upgrade_handler};
 use aionui_shell::{ShellRouterState, shell_routes};
 use aionui_system::{SystemRouterState, system_routes};
-use aionui_team::{TeamRouterState, team_routes};
+use aionui_team::{GuideMcpServer, TeamRouterState, team_routes};
+use aionui_api_types::GuideMcpConfig;
 
 pub use state_builders::{
     ChannelOrchestratorComponents, build_assistant_state, build_extension_states, build_module_states, build_ws_state,
@@ -99,6 +102,11 @@ pub struct AppServices {
     /// Resolved skill paths. Shared with the `ConversationService` for
     /// snapshot resolution at create time.
     pub skill_paths: Arc<aionui_extension::SkillPaths>,
+    /// Guide MCP server config (port, token, binary_path).
+    /// `None` when the server failed to start (graceful degradation).
+    pub guide_mcp_config: Option<GuideMcpConfig>,
+    /// Guide MCP server instance kept alive for the app lifetime.
+    _guide_server: Option<GuideMcpServer>,
 }
 
 impl AppServices {
@@ -108,6 +116,15 @@ impl AppServices {
     pub fn with_worker_task_manager(mut self, wtm: Arc<dyn IWorkerTaskManager>) -> Self {
         self.worker_task_manager = wtm;
         self
+    }
+
+    /// Wire the TeamSessionService into the Guide MCP server so
+    /// `aion_create_team` requests can call `service.create_team(...)`.
+    /// Called from `create_router` after `build_module_states`.
+    async fn inject_guide_service(&self, service: std::sync::Weak<aionui_team::TeamSessionService>) {
+        if let Some(server) = &self._guide_server {
+            server.set_service(service).await;
+        }
     }
 
     /// Build application services from an initialized database.
@@ -184,6 +201,24 @@ impl AppServices {
         let backend_binary_path =
             Arc::new(std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("aionui-backend")));
 
+        // Start Guide MCP server. Failure is non-fatal: solo agents simply
+        // won't get the `aion_create_team` tool.
+        let (guide_server, guide_mcp_config) = match GuideMcpServer::start().await {
+            Ok(srv) => {
+                let config = GuideMcpConfig {
+                    port: srv.http_port(),
+                    token: srv.auth_token().to_owned(),
+                    binary_path: backend_binary_path.to_string_lossy().to_string(),
+                };
+                tracing::info!(port = config.port, "Guide MCP server started");
+                (Some(srv), Some(config))
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Guide MCP server failed to start; solo create-team disabled");
+                (None, None)
+            }
+        };
+
         let factory = build_agent_factory(AgentFactoryDeps {
             skill_manager: AcpSkillManager::new(skill_paths.clone()),
             remote_agent_repo,
@@ -193,6 +228,7 @@ impl AppServices {
             acp_agent_service: acp_agent_service.clone(),
             data_dir: std::path::PathBuf::from(&data_dir),
             backend_binary_path: backend_binary_path.clone(),
+            guide_mcp_config: guide_mcp_config.clone(),
         });
 
         // Agent factory is now wired. Future extension/custom agents
@@ -214,6 +250,8 @@ impl AppServices {
             data_dir,
             local,
             skill_paths,
+            guide_mcp_config: guide_mcp_config.clone(),
+            _guide_server: guide_server,
         })
     }
 }
@@ -230,6 +268,30 @@ async fn health_check() -> Json<HealthResponse> {
         status: "ok",
         version: env!("CARGO_PKG_VERSION"),
         build_time: env!("BUILD_TIME"),
+    })
+}
+
+#[derive(Serialize)]
+struct GuideMcpStatusResponse {
+    running: bool,
+    port: Option<u16>,
+    binary_path: Option<String>,
+}
+
+async fn guide_mcp_status(
+    axum::extract::State(cfg): axum::extract::State<Option<GuideMcpConfig>>,
+) -> Json<GuideMcpStatusResponse> {
+    Json(match cfg {
+        Some(c) => GuideMcpStatusResponse {
+            running: true,
+            port: Some(c.port),
+            binary_path: Some(c.binary_path),
+        },
+        None => GuideMcpStatusResponse {
+            running: false,
+            port: None,
+            binary_path: None,
+        },
     })
 }
 
@@ -284,6 +346,9 @@ pub async fn create_router(services: &AppServices) -> Router {
     });
 
     let (states, channel_components) = build_module_states(services).await;
+
+    // Wire TeamSessionService into Guide MCP server now that both are available.
+    services.inject_guide_service(Arc::downgrade(&states.team.service)).await;
 
     // Start channel orchestrator (message loop)
     tokio::spawn(
@@ -448,7 +513,13 @@ pub fn create_router_with_all_state(services: &AppServices, states: ModuleStates
     // Assistant routes protected by auth middleware (T1a skeleton: all
     // handlers return 500 "not implemented"; T1b wires real service)
     let assistant_authenticated =
-        assistant_routes(states.assistant).route_layer(from_fn_with_state(auth_mw_state, auth_middleware));
+        assistant_routes(states.assistant).route_layer(from_fn_with_state(auth_mw_state.clone(), auth_middleware));
+
+    // Guide MCP diagnostic endpoint protected by auth middleware
+    let guide_mcp_authenticated = Router::new()
+        .route("/api/system/guide-mcp", get(guide_mcp_status))
+        .with_state(services.guide_mcp_config.clone())
+        .route_layer(from_fn_with_state(auth_mw_state, auth_middleware));
 
     // Office proxy routes — exempt from auth (serve iframe content)
     let office_proxy = office_proxy_routes(states.office);
@@ -477,7 +548,8 @@ pub fn create_router_with_all_state(services: &AppServices, states: ModuleStates
         .merge(cron_authenticated)
         .merge(office_authenticated)
         .merge(shell_authenticated)
-        .merge(assistant_authenticated);
+        .merge(assistant_authenticated)
+        .merge(guide_mcp_authenticated);
 
     // Conditionally merge WeChat login SSE route (feature-gated)
     #[cfg(feature = "weixin")]
