@@ -1981,6 +1981,18 @@ mod tests {
         assert!(mgr.acquire_wake_lock("worker-2"), "different slot must not be blocked");
     }
 
+    #[tokio::test]
+    async fn is_wake_active_reflects_lock_state() {
+        let agents = make_team_agents();
+        let (mgr, _) = make_manager(&agents);
+
+        assert!(!mgr.is_wake_active("worker-1"), "lock not held initially");
+        assert!(mgr.acquire_wake_lock("worker-1"));
+        assert!(mgr.is_wake_active("worker-1"), "lock is held after acquire");
+        mgr.release_wake_lock("worker-1");
+        assert!(!mgr.is_wake_active("worker-1"), "lock released after release");
+    }
+
     // -- W4-D19a: finalize-turn dedup ----------------------------------------
 
     #[tokio::test]
