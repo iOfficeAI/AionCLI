@@ -1287,12 +1287,13 @@ impl MockTaskManager {
     }
 }
 
+#[async_trait::async_trait]
 impl IWorkerTaskManager for MockTaskManager {
     fn get_task(&self, conversation_id: &str) -> Option<AgentManagerHandle> {
         self.agents.lock().unwrap().get(conversation_id).cloned()
     }
 
-    fn get_or_build_task(
+    async fn get_or_build_task(
         &self,
         conversation_id: &str,
         _options: BuildTaskOptions,
@@ -1339,12 +1340,13 @@ impl MockTaskManagerWithWorkspace {
     }
 }
 
+#[async_trait::async_trait]
 impl IWorkerTaskManager for MockTaskManagerWithWorkspace {
     fn get_task(&self, conversation_id: &str) -> Option<AgentManagerHandle> {
         self.agents.lock().unwrap().get(conversation_id).cloned()
     }
 
-    fn get_or_build_task(
+    async fn get_or_build_task(
         &self,
         conversation_id: &str,
         _options: BuildTaskOptions,

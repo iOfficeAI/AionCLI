@@ -489,7 +489,7 @@ impl JobExecutor {
             extra: build_extra,
         };
 
-        let agent = match self.task_manager.get_or_build_task(conversation_id, options) {
+        let agent = match self.task_manager.get_or_build_task(conversation_id, options).await {
             Ok(handle) => handle,
             Err(e) => {
                 error!(
@@ -1850,11 +1850,12 @@ mod tests {
 
     fn make_executor_for_busy_tests(guard: Arc<CronBusyGuard>) -> JobExecutor {
         struct StubTaskManager;
+        #[async_trait::async_trait]
         impl IWorkerTaskManager for StubTaskManager {
             fn get_task(&self, _: &str) -> Option<AgentManagerHandle> {
                 None
             }
-            fn get_or_build_task(
+            async fn get_or_build_task(
                 &self,
                 _: &str,
                 _: BuildTaskOptions,
@@ -2147,12 +2148,13 @@ mod tests {
         agent: AgentManagerHandle,
     }
 
+    #[async_trait::async_trait]
     impl IWorkerTaskManager for FixedTaskManager {
         fn get_task(&self, _conversation_id: &str) -> Option<AgentManagerHandle> {
             Some(Arc::clone(&self.agent))
         }
 
-        fn get_or_build_task(
+        async fn get_or_build_task(
             &self,
             _conversation_id: &str,
             _options: BuildTaskOptions,
@@ -2201,12 +2203,13 @@ mod tests {
         }
     }
 
+    #[async_trait::async_trait]
     impl IWorkerTaskManager for RecordingTaskManager {
         fn get_task(&self, _conversation_id: &str) -> Option<AgentManagerHandle> {
             Some(Arc::clone(&self.agent))
         }
 
-        fn get_or_build_task(
+        async fn get_or_build_task(
             &self,
             _conversation_id: &str,
             options: BuildTaskOptions,

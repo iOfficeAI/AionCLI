@@ -152,19 +152,23 @@ async fn aionrs_agent_metadata() {
 // Idle scanner: collect_idle only finds ACP tasks
 // ---------------------------------------------------------------------------
 
-#[test]
-fn collect_idle_ignores_non_acp_agent_types() {
+#[tokio::test]
+async fn collect_idle_ignores_non_acp_agent_types() {
+    use futures_util::FutureExt;
     let old_ts = now_ms() - 600_000; // 10 min ago
 
     // Build a factory that creates typed mocks (all finished + old)
     let factory: AgentFactory = Arc::new(move |opts: BuildTaskOptions| {
-        let mock = TypedMockAgent::new(
-            opts.agent_type,
-            &opts.conversation_id,
-            Some(ConversationStatus::Finished),
-        )
-        .with_last_activity(old_ts);
-        Ok(Arc::new(mock) as AgentManagerHandle)
+        async move {
+            let mock = TypedMockAgent::new(
+                opts.agent_type,
+                &opts.conversation_id,
+                Some(ConversationStatus::Finished),
+            )
+            .with_last_activity(old_ts);
+            Ok(Arc::new(mock) as AgentManagerHandle)
+        }
+        .boxed()
     });
     let mgr = WorkerTaskManagerImpl::new(factory);
 
@@ -181,12 +185,16 @@ fn collect_idle_ignores_non_acp_agent_types() {
     };
 
     mgr.get_or_build_task("nanobot-1", make_opts(AgentType::Nanobot, "nanobot-1"))
+        .await
         .unwrap();
     mgr.get_or_build_task("openclaw-1", make_opts(AgentType::OpenclawGateway, "openclaw-1"))
+        .await
         .unwrap();
     mgr.get_or_build_task("acp-1", make_opts(AgentType::Acp, "acp-1"))
+        .await
         .unwrap();
     mgr.get_or_build_task("remote-1", make_opts(AgentType::Remote, "remote-1"))
+        .await
         .unwrap();
 
     assert_eq!(mgr.active_count(), 4);

@@ -94,7 +94,7 @@ async fn aionrs_factory_returns_error_for_missing_provider() {
         extra: serde_json::json!({}),
     };
 
-    let result = factory(options);
+    let result = factory(options).await;
     match result {
         Ok(_) => panic!("Expected error for missing provider, got Ok"),
         Err(e) => {
@@ -125,7 +125,7 @@ async fn aionrs_factory_resolves_provider_from_db() {
         extra: serde_json::json!({ "max_tokens": 2048 }),
     };
 
-    let result = factory(options);
+    let result = factory(options).await;
     assert!(result.is_ok(), "Expected Ok, got: {:?}", result.err());
 }
 
@@ -147,6 +147,6 @@ async fn aionrs_factory_respects_use_model_override() {
         extra: serde_json::json!({}),
     };
 
-    let result = factory(options);
+    let result = factory(options).await;
     assert!(result.is_ok(), "Expected Ok, got: {:?}", result.err());
 }

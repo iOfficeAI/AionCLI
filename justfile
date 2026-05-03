@@ -4,7 +4,7 @@ default:
 
 # Build in release mode and install to ~/.cargo/bin
 # Use `just build --force` to skip cache check
-build *FLAGS: lint fmt
+build *FLAGS: lint-fix fmt
     #!/usr/bin/env bash
     set -euo pipefail
     cargo build --release
@@ -59,6 +59,9 @@ test:
 # Lint (warnings = errors)
 lint:
     cargo clippy --workspace -- -D warnings
+
+lint-fix:
+    cargo clippy --workspace --fix --allow-dirty --allow-staged
 
 # Format code
 fmt:

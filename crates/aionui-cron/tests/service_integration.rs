@@ -62,11 +62,16 @@ impl EventBroadcaster for MockBroadcaster {
 
 struct StubTaskManager;
 
+#[async_trait::async_trait]
 impl aionui_ai_agent::task_manager::IWorkerTaskManager for StubTaskManager {
     fn get_task(&self, _: &str) -> Option<AgentManagerHandle> {
         None
     }
-    fn get_or_build_task(&self, _: &str, _: BuildTaskOptions) -> Result<AgentManagerHandle, aionui_common::AppError> {
+    async fn get_or_build_task(
+        &self,
+        _: &str,
+        _: BuildTaskOptions,
+    ) -> Result<AgentManagerHandle, aionui_common::AppError> {
         Err(aionui_common::AppError::Internal("stub".into()))
     }
     fn kill(&self, _: &str, _: Option<aionui_common::AgentKillReason>) -> Result<(), aionui_common::AppError> {

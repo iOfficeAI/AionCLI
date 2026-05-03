@@ -2,6 +2,7 @@ use aion_agent::session::SessionManager;
 use aionui_api_types::GuideMcpConfig;
 use aionui_common::{AgentType, AppError, CommandSpec};
 use aionui_db::{IProviderRepository, IRemoteAgentRepository};
+use futures_util::FutureExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
@@ -39,21 +40,17 @@ pub struct AgentFactoryDeps {
 
 /// Build a production agent factory that dispatches to concrete agent types.
 ///
-/// The factory bridges the synchronous `AgentFactory` signature to async agent
-/// constructors. Uses a scoped thread + `Handle::block_on` so it works on both
-/// multi-threaded and single-threaded (test) tokio runtimes.
+/// [`AgentFactory`] is async: the returned `BoxFuture` is driven by
+/// [`crate::task_manager::IWorkerTaskManager::get_or_build_task`] on whatever
+/// runtime is currently polling it. This lets us spawn CLI processes and
+/// await ACP handshakes directly, without the scoped-thread + `block_on`
+/// bridge the old sync-factory version needed.
 pub fn build_agent_factory(deps: AgentFactoryDeps) -> AgentFactory {
     let deps = Arc::new(deps);
 
     Arc::new(move |options: BuildTaskOptions| {
         let deps = deps.clone();
-        let handle = tokio::runtime::Handle::current();
-
-        std::thread::scope(|s| {
-            s.spawn(|| handle.block_on(build_agent(deps, options)))
-                .join()
-                .map_err(|_| AppError::Internal("Agent construction panicked".into()))?
-        })
+        async move { build_agent(deps, options).await }.boxed()
     })
 }
 
@@ -115,7 +112,10 @@ async fn build_agent(deps: Arc<AgentFactoryDeps>, options: BuildTaskOptions) -> 
             if config.team_mcp_stdio_config.is_some() {
                 debug!(conversation_id, "guide_mcp: skipped: has team_mcp");
             } else if config.guide_mcp_config.is_some() {
-                debug!(conversation_id, "guide_mcp: skipped: caller already set guide_mcp_config");
+                debug!(
+                    conversation_id,
+                    "guide_mcp: skipped: caller already set guide_mcp_config"
+                );
             } else if deps.guide_mcp_config.is_none() {
                 debug!(conversation_id, "guide_mcp: skipped: guide server not running");
             } else {

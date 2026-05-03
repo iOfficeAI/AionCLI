@@ -962,7 +962,7 @@ impl ConversationService {
         // Build task options from conversation row
         let build_opts = self.build_task_options(&row)?;
         let stored_workspace = build_opts.workspace.clone();
-        let agent = task_manager.get_or_build_task(conversation_id, build_opts)?;
+        let agent = task_manager.get_or_build_task(conversation_id, build_opts).await?;
 
         // If the factory resolved a different workspace (e.g. auto-created temp
         // dir for a legacy conversation with empty workspace), persist it back.
@@ -1077,8 +1077,8 @@ impl ConversationService {
         self.repo.insert_message(row).await?;
 
         let msg_id = row.msg_id.clone().unwrap_or_else(|| row.id.clone());
-        let content_value: serde_json::Value = serde_json::from_str(&row.content)
-            .unwrap_or_else(|_| serde_json::Value::String(row.content.clone()));
+        let content_value: serde_json::Value =
+            serde_json::from_str(&row.content).unwrap_or_else(|_| serde_json::Value::String(row.content.clone()));
         let payload = serde_json::json!({
             "conversation_id": row.conversation_id,
             "msg_id": msg_id,
@@ -1137,7 +1137,7 @@ impl ConversationService {
 
         let build_opts = self.build_task_options(&row)?;
         let stored_workspace = build_opts.workspace.clone();
-        let agent = task_manager.get_or_build_task(conversation_id, build_opts)?;
+        let agent = task_manager.get_or_build_task(conversation_id, build_opts).await?;
 
         // Persist auto-resolved workspace if factory picked a different path.
         self.maybe_persist_workspace(conversation_id, &stored_workspace, agent.workspace())

@@ -1,12 +1,26 @@
 //! ACP protocol layer: SDK integration for JSON-RPC communication.
 //!
 //! This module owns the `agent-client-protocol` SDK connection. It provides
-//! typed async methods for all ACP operations and routes incoming agent
-//! notifications/requests to the appropriate channels.
+//! typed async methods for all ACP operations (wrappers around the SDK's
+//! `send_request` / `send_notification`) plus dedicated handlers for the
+//! notifications and permission requests the CLI sends back.
 //!
-//! All requests are dispatched through a command channel to the SDK event loop
-//! running inside `connect_with`. This is required because `block_task()` only
-//! works within the `connect_with` closure's execution context.
+//! # Concurrency model
+//!
+//! We follow the SDK's documented best practice (see
+//! `jsonrpc::Builder` "Event Loop and Concurrency" and
+//! `jsonrpc::SentRequest::block_task` doc comments): `connect_with` runs the
+//! SDK background actors on a dedicated tokio task; its `main_fn` completes
+//! the `initialize` handshake, hands the resulting [`ConnectionTo<Agent>`] out
+//! to this struct, and then parks on a shutdown oneshot until
+//! [`AcpProtocol`] is dropped. The connection handle is `Clone + Send` and
+//! is used directly by every method — outgoing requests / notifications go
+//! through the SDK's own outgoing actor, so they are naturally concurrent.
+//! No hand-rolled command channel is involved.
+//!
+//! This is what makes `session/cancel` preempt an in-flight `session/prompt`:
+//! both requests are just `send_request` / `send_notification` calls on the
+//! shared connection, each awaited in its own caller task.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
@@ -18,10 +32,11 @@ use agent_client_protocol::schema::{
     SelectedPermissionOutcome, SessionNotification, SetSessionConfigOptionResponse, SetSessionModeResponse,
     SetSessionModelResponse,
 };
-use agent_client_protocol::{Agent, ByteStreams, Client, ConnectionTo, on_receive_notification, on_receive_request};
+use agent_client_protocol::{
+    Agent, ByteStreams, Client, ConnectionTo, Responder, on_receive_notification, on_receive_request,
+};
 use tokio::process::{ChildStdin, ChildStdout};
 use tokio::sync::{broadcast, mpsc, oneshot};
-use tokio::task::JoinHandle;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use tracing::{debug, warn};
 
@@ -35,8 +50,6 @@ use agent_client_protocol::schema::{
     NewSessionRequest, NewSessionResponse, PromptRequest, ResumeSessionRequest, SetSessionConfigOptionRequest,
     SetSessionModeRequest, SetSessionModelRequest,
 };
-
-type PermissionResponder = agent_client_protocol::Responder<RequestPermissionResponse>;
 
 /// Timeout for the ACP initialize handshake (seconds).
 const INIT_TIMEOUT_SECS: u64 = 30;
@@ -57,95 +70,21 @@ pub enum PermissionDecision {
     Cancelled,
 }
 
-/// Commands constructed by SDK callbacks and dispatched to handle agent→client messages.
-///
-/// Mirrors [`AcpClientCommand`] for the reverse direction. Each callback
-/// builds the appropriate variant and calls [`dispatch_agent_command`].
-enum AcpAgentCommand {
-    /// Agent sent a session update notification (streaming chunks, tool calls, etc.).
-    SessionUpdate {
-        notification: SessionNotification,
-        event_tx: broadcast::Sender<AgentStreamEvent>,
-        stream_tx: broadcast::Sender<AgentStreamChunk>,
-    },
-    /// Agent requests permission from the user before performing an action.
-    RequestPermission {
-        request: RequestPermissionRequest,
-        responder: PermissionResponder,
-        event_tx: mpsc::Sender<PermissionRequest>,
-    },
-}
-
-// ── Internal command protocol ────────────────────────────────────────────
-
-/// Commands sent from `AcpProtocol` methods to the SDK event loop.
-enum AcpClientCommand {
-    NewSession {
-        req: NewSessionRequest,
-        event_tx: oneshot::Sender<Result<NewSessionResponse, AcpError>>,
-    },
-    LoadSession {
-        req: LoadSessionRequest,
-        event_tx: oneshot::Sender<Result<LoadSessionResponse, AcpError>>,
-    },
-    ForkSession {
-        req: ForkSessionRequest,
-        event_tx: oneshot::Sender<Result<ForkSessionResponse, AcpError>>,
-    },
-    ResumeSession {
-        req: ResumeSessionRequest,
-        event_tx: oneshot::Sender<Result<ResumeSessionResponse, AcpError>>,
-    },
-    CloseSession {
-        req: CloseSessionRequest,
-        event_tx: oneshot::Sender<Result<CloseSessionResponse, AcpError>>,
-    },
-    Prompt {
-        req: PromptRequest,
-        event_tx: oneshot::Sender<Result<PromptResponse, AcpError>>,
-    },
-    Cancel {
-        notification: CancelNotification,
-    },
-    SetMode {
-        req: SetSessionModeRequest,
-        event_tx: oneshot::Sender<Result<SetSessionModeResponse, AcpError>>,
-    },
-    SetModel {
-        req: SetSessionModelRequest,
-        event_tx: oneshot::Sender<Result<SetSessionModelResponse, AcpError>>,
-    },
-    SetConfigOption {
-        req: SetSessionConfigOptionRequest,
-        event_tx: oneshot::Sender<Result<SetSessionConfigOptionResponse, AcpError>>,
-    },
-    ListSessions {
-        req: ListSessionsRequest,
-        event_tx: oneshot::Sender<Result<ListSessionsResponse, AcpError>>,
-    },
-    Authenticate {
-        req: AuthenticateRequest,
-        event_tx: oneshot::Sender<Result<AuthenticateResponse, AcpError>>,
-    },
-    ExtMethod {
-        req: ExtRequest,
-        event_tx: oneshot::Sender<Result<ExtResponse, AcpError>>,
-    },
-    ExtNotify {
-        notification: ExtNotification,
-    },
-}
-
 /// ACP protocol handle: wraps the SDK connection and provides typed operations.
 ///
-/// All methods send commands to the SDK event loop via a channel. The event
-/// loop runs inside `connect_with` where `block_task()` is safe to use.
+/// All request methods are thin wrappers over `connection.send_request(...)
+/// .block_task().await` — safe because each caller runs in its own tokio
+/// task, separate from the SDK background actors spawned by `connect_with`.
 pub struct AcpProtocol {
-    /// Background task handle (SDK transport + routing).
-    _bg_task: JoinHandle<()>,
-    /// Command sender to the SDK event loop.
-    cmd_tx: mpsc::Sender<AcpClientCommand>,
-    /// Whether the SDK connection is still alive.
+    /// SDK connection handle. Cheap to clone (channel senders only) and
+    /// shared by every method. Kept alive by the background task parked
+    /// on `shutdown_rx` in `connect_with`'s `main_fn`.
+    connection: ConnectionTo<Agent>,
+    /// Signal dropped on `Drop` to make `main_fn` return, which in turn
+    /// lets the SDK background actors shut down cleanly.
+    shutdown_tx: Option<oneshot::Sender<()>>,
+    /// Flipped to `false` when the background task exits. Used by
+    /// [`Self::is_connected`] as a fast synchronous check.
     alive: Arc<AtomicBool>,
     /// Cached initialize response from the ACP handshake.
     initialize_response: Arc<RwLock<Option<InitializeResponse>>>,
@@ -165,28 +104,32 @@ impl AcpProtocol {
         permission_tx: mpsc::Sender<PermissionRequest>,
     ) -> Result<Self, AcpError> {
         let alive = Arc::new(AtomicBool::new(true));
-        let alive_clone = Arc::clone(&alive);
-        let initialize_response = Arc::new(RwLock::new(None));
 
-        // Command channel: external methods → SDK event loop
-        let (clicmd_tx, clicmd_rx) = mpsc::channel::<AcpClientCommand>(32);
-
-        // Signal that init completed successfully
+        // Signals from the background task:
+        // - `init_tx`: initialize handshake result (with possible SDK error)
+        // - `ready_tx`: connection handle once init succeeded; if init fails
+        //   this oneshot is dropped and the caller observes `NotConnected`
         let (init_tx, init_rx) = oneshot::channel::<Result<InitializeResponse, AcpError>>();
+        let (ready_tx, ready_rx) = oneshot::channel::<ConnectionTo<Agent>>();
 
-        let _bg_task = tokio::spawn(run_sdk_event_loop(
+        // Signal from us → background task telling `main_fn` to return,
+        // which triggers a clean SDK shutdown.
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+
+        tokio::spawn(run_sdk_background(
             stdin,
             stdout,
             event_tx,
             stream_tx,
             permission_tx,
             init_tx,
-            clicmd_rx,
-            alive_clone,
+            ready_tx,
+            shutdown_rx,
+            Arc::clone(&alive),
         ));
 
-        // Wait for init to complete with timeout
-        let init_result = tokio::time::timeout(std::time::Duration::from_secs(INIT_TIMEOUT_SECS), init_rx)
+        // Wait for init to complete with timeout.
+        let init_response = tokio::time::timeout(std::time::Duration::from_secs(INIT_TIMEOUT_SECS), init_rx)
             .await
             .map_err(|_| AcpError::InitTimeout {
                 timeout_secs: INIT_TIMEOUT_SECS,
@@ -195,16 +138,16 @@ impl AcpProtocol {
                 exit_code: None,
                 signal: None,
                 stderr: "Init channel dropped".into(),
-            })?;
+            })??;
 
-        let init_response = init_result?;
-        *initialize_response.write().unwrap() = Some(init_response);
+        // `ready_rx` should resolve almost immediately after init_tx fires.
+        let connection = ready_rx.await.map_err(|_| AcpError::NotConnected)?;
 
         Ok(Self {
-            cmd_tx: clicmd_tx,
-            _bg_task,
+            connection,
+            shutdown_tx: Some(shutdown_tx),
             alive,
-            initialize_response,
+            initialize_response: Arc::new(RwLock::new(Some(init_response))),
         })
     }
 
@@ -222,32 +165,27 @@ impl AcpProtocol {
 
     /// Create a new ACP session.
     pub async fn new_session(&self, req: NewSessionRequest) -> Result<NewSessionResponse, AcpError> {
-        self.send_cmd(|event_tx| AcpClientCommand::NewSession { req, event_tx })
-            .await
+        self.send_request(req, AGENT_METHOD_NAMES.session_new).await
     }
 
     /// Load (resume) an existing ACP session.
     pub async fn load_session(&self, req: LoadSessionRequest) -> Result<LoadSessionResponse, AcpError> {
-        self.send_cmd(|event_tx| AcpClientCommand::LoadSession { req, event_tx })
-            .await
+        self.send_request(req, AGENT_METHOD_NAMES.session_load).await
     }
 
     /// Fork an existing ACP session into a new session.
     pub async fn fork_session(&self, req: ForkSessionRequest) -> Result<ForkSessionResponse, AcpError> {
-        self.send_cmd(|event_tx| AcpClientCommand::ForkSession { req, event_tx })
-            .await
+        self.send_request(req, AGENT_METHOD_NAMES.session_fork).await
     }
 
     /// Resume an existing ACP session.
     pub async fn resume_session(&self, req: ResumeSessionRequest) -> Result<ResumeSessionResponse, AcpError> {
-        self.send_cmd(|event_tx| AcpClientCommand::ResumeSession { req, event_tx })
-            .await
+        self.send_request(req, AGENT_METHOD_NAMES.session_resume).await
     }
 
     /// Close an ACP session.
     pub async fn close_session(&self, req: CloseSessionRequest) -> Result<CloseSessionResponse, AcpError> {
-        self.send_cmd(|event_tx| AcpClientCommand::CloseSession { req, event_tx })
-            .await
+        self.send_request(req, AGENT_METHOD_NAMES.session_close).await
     }
 
     /// Send a prompt to the agent in an active session.
@@ -255,8 +193,7 @@ impl AcpProtocol {
     /// Blocks until the agent returns a `PromptResponse` (turn completed).
     /// Streaming events arrive via the `event_tx` broadcast channel.
     pub async fn prompt(&self, req: PromptRequest) -> Result<PromptResponse, AcpError> {
-        self.send_cmd(|event_tx| AcpClientCommand::Prompt { req, event_tx })
-            .await
+        self.send_request(req, AGENT_METHOD_NAMES.session_prompt).await
     }
 
     /// Cancel the current prompt in a session (fire-and-forget notification).
@@ -264,19 +201,18 @@ impl AcpProtocol {
         if !self.is_connected() {
             return;
         }
-        let _ = self.cmd_tx.try_send(AcpClientCommand::Cancel { notification });
+        log_notify(AGENT_METHOD_NAMES.session_cancel, &json_str(&notification));
+        let _ = self.connection.send_notification(notification);
     }
 
     /// Set the session mode.
     pub async fn set_mode(&self, req: SetSessionModeRequest) -> Result<SetSessionModeResponse, AcpError> {
-        self.send_cmd(|event_tx| AcpClientCommand::SetMode { req, event_tx })
-            .await
+        self.send_request(req, AGENT_METHOD_NAMES.session_set_mode).await
     }
 
     /// Set the session model.
     pub async fn set_model(&self, req: SetSessionModelRequest) -> Result<SetSessionModelResponse, AcpError> {
-        self.send_cmd(|event_tx| AcpClientCommand::SetModel { req, event_tx })
-            .await
+        self.send_request(req, AGENT_METHOD_NAMES.session_set_model).await
     }
 
     /// Set a session config option.
@@ -284,28 +220,33 @@ impl AcpProtocol {
         &self,
         req: SetSessionConfigOptionRequest,
     ) -> Result<SetSessionConfigOptionResponse, AcpError> {
-        self.send_cmd(|event_tx| AcpClientCommand::SetConfigOption { req, event_tx })
+        self.send_request(req, AGENT_METHOD_NAMES.session_set_config_option)
             .await
     }
 
     /// List sessions, optionally filtered by working directory.
     pub async fn list_sessions(&self, req: ListSessionsRequest) -> Result<ListSessionsResponse, AcpError> {
-        self.send_cmd(|event_tx| AcpClientCommand::ListSessions { req, event_tx })
-            .await
+        self.send_request(req, AGENT_METHOD_NAMES.session_list).await
     }
 
     /// Authenticate with the agent using a previously advertised auth method.
     pub async fn authenticate(&self, req: AuthenticateRequest) -> Result<AuthenticateResponse, AcpError> {
-        self.send_cmd(|event_tx| AcpClientCommand::Authenticate { req, event_tx })
-            .await
+        self.send_request(req, AGENT_METHOD_NAMES.authenticate).await
     }
 
     /// Send an extension request (method name must start with `_`).
     ///
     /// Returns the raw JSON response value from the agent.
     pub async fn ext_request(&self, req: ExtRequest) -> Result<ExtResponse, AcpError> {
-        self.send_cmd(|event_tx| AcpClientCommand::ExtMethod { req, event_tx })
-            .await
+        self.ensure_connected()?;
+        let method = format!("_{}", req.method);
+        let wrapped = ClientRequest::ExtMethodRequest(req);
+        let value = self.send_request(wrapped, &method).await?;
+        let raw = serde_json::value::to_raw_value(&value).map_err(|e| AcpError::AgentInternal {
+            message: format!("Failed to convert ext response: {e}"),
+            code: -32603,
+        })?;
+        Ok(ExtResponse::new(raw.into()))
     }
 
     /// Send an extension notification (fire-and-forget, method name must start with `_`).
@@ -313,7 +254,10 @@ impl AcpProtocol {
         if !self.is_connected() {
             return;
         }
-        let _ = self.cmd_tx.try_send(AcpClientCommand::ExtNotify { notification });
+        let method = format!("_{}", notification.method);
+        log_notify(&method, &json_str(&notification));
+        let wrapped = ClientNotification::ExtNotification(notification);
+        let _ = self.connection.send_notification(wrapped);
     }
 
     /// Check whether the SDK connection is still alive.
@@ -323,15 +267,17 @@ impl AcpProtocol {
 
     // ── Private helpers ──────────────────────────────────────────────────
 
-    /// Send a command to the SDK event loop and wait for the reply.
-    async fn send_cmd<T>(
-        &self,
-        build: impl FnOnce(oneshot::Sender<Result<T, AcpError>>) -> AcpClientCommand,
-    ) -> Result<T, AcpError> {
+    /// Shared request path: connectivity check, structured logging, SDK call.
+    async fn send_request<Req>(&self, req: Req, method: &str) -> Result<Req::Response, AcpError>
+    where
+        Req: agent_client_protocol::JsonRpcRequest + serde::Serialize + std::fmt::Debug,
+        Req::Response: serde::Serialize + std::fmt::Debug + Send,
+    {
         self.ensure_connected()?;
-        let (tx, rx) = oneshot::channel();
-        self.cmd_tx.send(build(tx)).await.map_err(|_| AcpError::NotConnected)?;
-        rx.await.map_err(|_| AcpError::NotConnected)?
+        log_request(method, &json_str(&req));
+        let rsp = self.connection.send_request(req).block_task().await;
+        log_response(method, &json_or_err(&rsp));
+        rsp.map_err(|e| AcpError::from_sdk(e, method))
     }
 
     /// Return `Err(NotConnected)` if the connection is dead.
@@ -344,58 +290,47 @@ impl AcpProtocol {
     }
 }
 
-/// Execute the ACP initialize handshake over the given connection.
-///
-/// Sends `InitializeRequest` and signals success/failure via `init_tx`.
-/// Returns `Err(())` when the handshake failed (the caller should bail out).
-async fn execute_initialize(
-    connection: &ConnectionTo<Agent>,
-    init_tx: oneshot::Sender<Result<InitializeResponse, AcpError>>,
-) -> Result<(), ()> {
-    let req = InitializeRequest::new(ProtocolVersion::LATEST);
-    log_request("initialize", &json_str(&req));
-
-    let raw = connection.send_request(req).block_task().await;
-    log_response("initialize", &json_or_err(&raw));
-
-    if let Err(e) = raw {
-        let _ = init_tx.send(Err(AcpError::from_sdk(e, "initialize")));
-        return Err(());
+impl Drop for AcpProtocol {
+    fn drop(&mut self) {
+        // Releasing the oneshot wakes `main_fn` in the background task, which
+        // returns, which drives SDK shutdown. The bg_task joins naturally
+        // (we don't await it here — Drop can't be async; the task is
+        // `tokio::spawn`ed, so it gets cleaned up by the runtime).
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(());
+        }
     }
-    let _ = init_tx.send(raw.map_err(|e| AcpError::from_sdk(e, "initialize")));
-    Ok(())
 }
 
-/// Run the SDK event loop: build the client, connect transport, handle
-/// notifications/requests, execute the initialize handshake, then process
-/// commands until the channel closes.
-///
-/// This is the top-level future spawned as the background task in
-/// [`AcpProtocol::connect`].
+/// Run the SDK `connect_with` future: register notification/request
+/// handlers, execute the initialize handshake, publish the connection
+/// handle, then park on the shutdown signal until [`AcpProtocol`] is dropped.
 #[allow(clippy::too_many_arguments)]
-async fn run_sdk_event_loop(
+async fn run_sdk_background(
     stdin: ChildStdin,
     stdout: ChildStdout,
     event_tx: broadcast::Sender<AgentStreamEvent>,
     stream_tx: broadcast::Sender<AgentStreamChunk>,
     permission_tx: mpsc::Sender<PermissionRequest>,
     init_tx: oneshot::Sender<Result<InitializeResponse, AcpError>>,
-    clicmd_rx: mpsc::Receiver<AcpClientCommand>,
+    ready_tx: oneshot::Sender<ConnectionTo<Agent>>,
+    shutdown_rx: oneshot::Receiver<()>,
     alive: Arc<AtomicBool>,
 ) {
     let transport = ByteStreams::new(stdin.compat_write(), stdout.compat());
+
+    // `init_tx` / `ready_tx` are consumed inside the main_fn closure; wrap
+    // them in Option so we can .take() without moving out of captured state.
+    let mut init_tx = Some(init_tx);
+    let mut ready_tx = Some(ready_tx);
+    let mut shutdown_rx = Some(shutdown_rx);
 
     let result = Client
         .builder()
         .on_receive_notification(
             {
                 async move |notification: SessionNotification, _cx: ConnectionTo<Agent>| {
-                    let cmd = AcpAgentCommand::SessionUpdate {
-                        notification,
-                        event_tx: event_tx.clone(),
-                        stream_tx: stream_tx.clone(),
-                    };
-                    dispatch_agent_command(cmd).await;
+                    handle_session_notification(notification, &event_tx, &stream_tx).await;
                     Ok(())
                 }
             },
@@ -403,39 +338,56 @@ async fn run_sdk_event_loop(
         )
         .on_receive_request(
             {
-                async move |request: RequestPermissionRequest,
-                            responder: PermissionResponder,
-                            _cx: ConnectionTo<Agent>| {
-                    let cmd = AcpAgentCommand::RequestPermission {
-                        request,
-                        responder,
-                        event_tx: permission_tx.clone(),
-                    };
-                    dispatch_agent_command(cmd).await;
+                async move |request: RequestPermissionRequest, responder, _cx| {
+                    handle_permission_request(request, responder, &permission_tx).await;
                     Ok(())
                 }
             },
             on_receive_request!(),
         )
-        .connect_with(transport, {
-            let mut cmd_rx = clicmd_rx;
-            move |connection: ConnectionTo<Agent>| async move {
-                if let Err(()) = execute_initialize(&connection, init_tx).await {
+        .connect_with(transport, async move |connection: ConnectionTo<Agent>| {
+            // Step 1 — initialize handshake. main_fn is the canonical place
+            // to call `block_task` (see SDK `connect_with` doc example).
+            let init_result = {
+                let req = InitializeRequest::new(ProtocolVersion::LATEST);
+                log_request("initialize", &json_str(&req));
+                let raw = connection.send_request(req).block_task().await;
+                log_response("initialize", &json_or_err(&raw));
+                raw.map_err(|e| AcpError::from_sdk(e, "initialize"))
+            };
+
+            let Some(tx) = init_tx.take() else {
+                return Ok(());
+            };
+            match init_result {
+                Ok(resp) => {
+                    let _ = tx.send(Ok(resp));
+                }
+                Err(err) => {
+                    let _ = tx.send(Err(err));
+                    // init failure: let main_fn return so SDK cleans up.
                     return Ok(());
                 }
-
-                // Command loop: process requests from AcpProtocol methods
-                while let Some(cmd) = cmd_rx.recv().await {
-                    dispatch_client_command(&connection, cmd).await;
-                }
-
-                debug!("ACP command channel closed, connection ending");
-                Ok(())
             }
+
+            // Step 2 — publish the connection handle so the outer
+            // AcpProtocol can start issuing requests.
+            if let Some(tx) = ready_tx.take()
+                && tx.send(connection).is_err()
+            {
+                // Owner dropped before we became ready — nothing more to do.
+                return Ok(());
+            }
+
+            // Step 3 — keep the connection alive until AcpProtocol::drop
+            // releases the shutdown oneshot.
+            if let Some(rx) = shutdown_rx.take() {
+                let _ = rx.await;
+            }
+            Ok(())
         })
         .await;
 
-    // Mark connection as dead
     alive.store(false, Ordering::Release);
 
     match result {
@@ -444,143 +396,57 @@ async fn run_sdk_event_loop(
     }
 }
 
-/// Dispatch a single [`AcpClientCommand`] over the connection.
-///
-/// Mirrored by [`dispatch_agent_command`] for the reverse direction.
-async fn dispatch_client_command(connection: &ConnectionTo<Agent>, cmd: AcpClientCommand) {
-    match cmd {
-        AcpClientCommand::NewSession { req, event_tx } => {
-            let _ = event_tx.send(send_and_log(connection, req, AGENT_METHOD_NAMES.session_new).await);
-        }
-        AcpClientCommand::ForkSession { req, event_tx } => {
-            let _ = event_tx.send(send_and_log(connection, req, AGENT_METHOD_NAMES.session_fork).await);
-        }
-        AcpClientCommand::LoadSession { req, event_tx } => {
-            let _ = event_tx.send(send_and_log(connection, req, AGENT_METHOD_NAMES.session_load).await);
-        }
-        AcpClientCommand::ResumeSession { req, event_tx } => {
-            let _ = event_tx.send(send_and_log(connection, req, AGENT_METHOD_NAMES.session_resume).await);
-        }
-        AcpClientCommand::CloseSession { req, event_tx } => {
-            let _ = event_tx.send(send_and_log(connection, req, AGENT_METHOD_NAMES.session_close).await);
-        }
-        AcpClientCommand::Prompt { req, event_tx } => {
-            let _ = event_tx.send(send_and_log(connection, req, AGENT_METHOD_NAMES.session_prompt).await);
-        }
-        AcpClientCommand::SetMode { req, event_tx } => {
-            let _ = event_tx.send(send_and_log(connection, req, AGENT_METHOD_NAMES.session_set_mode).await);
-        }
-        AcpClientCommand::SetModel { req, event_tx } => {
-            let _ = event_tx.send(send_and_log(connection, req, AGENT_METHOD_NAMES.session_set_model).await);
-        }
-        AcpClientCommand::SetConfigOption { req, event_tx } => {
-            let _ = event_tx.send(send_and_log(connection, req, AGENT_METHOD_NAMES.session_set_config_option).await);
-        }
-        AcpClientCommand::Cancel { notification } => {
-            log_notify(AGENT_METHOD_NAMES.session_cancel, &json_str(&notification));
-            let _ = connection.send_notification(notification);
-        }
-        AcpClientCommand::ListSessions { req, event_tx } => {
-            let _ = event_tx.send(send_and_log(connection, req, AGENT_METHOD_NAMES.session_list).await);
-        }
-        AcpClientCommand::Authenticate { req, event_tx } => {
-            let _ = event_tx.send(send_and_log(connection, req, AGENT_METHOD_NAMES.authenticate).await);
-        }
-        AcpClientCommand::ExtMethod { req, event_tx } => {
-            let method = format!("_{}", req.method);
-            let wrapped = ClientRequest::ExtMethodRequest(req);
-            let result = send_and_log(connection, wrapped, &method).await;
-            let _ = event_tx.send(result.and_then(|v| {
-                let raw = serde_json::value::to_raw_value(&v).map_err(|e| AcpError::AgentInternal {
-                    message: format!("Failed to convert ext response: {e}"),
-                    code: -32603,
-                })?;
-                Ok(ExtResponse::new(raw.into()))
-            }));
-        }
-        AcpClientCommand::ExtNotify { notification } => {
-            let method = format!("_{}", notification.method);
-            log_notify(&method, &json_str(&notification));
-            let wrapped = ClientNotification::ExtNotification(notification);
-            let _ = connection.send_notification(wrapped);
-        }
+/// Fan out a CLI session notification to the event/stream broadcast channels.
+async fn handle_session_notification(
+    notification: SessionNotification,
+    event_tx: &broadcast::Sender<AgentStreamEvent>,
+    stream_tx: &broadcast::Sender<AgentStreamChunk>,
+) {
+    log_incoming("session/update", &json_str(&notification));
+
+    let events = stream_event::session_notification_to_events(&notification);
+    for event in events {
+        let _ = event_tx.send(event);
+    }
+
+    // Parallel projection onto the AgentStreamChunk broadcast channel.
+    // Subscribers (wake timeout watchdog, crash detector) only care about
+    // message / thought / tool-call chunks; handshake-like updates are
+    // filtered out inside `session_notification_to_chunks`.
+    let chunks = stream_event::session_notification_to_chunks(&notification);
+    for chunk in chunks {
+        let _ = stream_tx.send(chunk);
     }
 }
 
-/// Dispatch a single [`AcpAgentCommand`] (agent → client direction).
-///
-/// Mirrors [`dispatch_client_command`] for the client → agent direction.
-async fn dispatch_agent_command(cmd: AcpAgentCommand) {
-    match cmd {
-        AcpAgentCommand::SessionUpdate {
-            notification,
-            event_tx,
-            stream_tx,
-        } => {
-            log_incoming("session/update", &json_str(&notification));
+/// Relay a CLI permission request to the pending-permission channel and
+/// forward the user's decision back to the SDK responder.
+async fn handle_permission_request(
+    request: RequestPermissionRequest,
+    responder: Responder<RequestPermissionResponse>,
+    event_tx: &mpsc::Sender<PermissionRequest>,
+) {
+    log_incoming("session/request_permission", &json_str(&request));
 
-            let events = stream_event::session_notification_to_events(&notification);
-            for event in events {
-                let _ = event_tx.send(event);
-            }
+    let (response_tx, response_rx) = oneshot::channel();
 
-            // Parallel projection onto the AgentStreamChunk broadcast channel.
-            // Subscribers (wake timeout watchdog, crash detector) only care
-            // about message/thought/tool-call chunks; handshake-like updates
-            // are filtered out inside `session_notification_to_chunks`.
-            let chunks = stream_event::session_notification_to_chunks(&notification);
-            for chunk in chunks {
-                let _ = stream_tx.send(chunk);
-            }
-        }
-        AcpAgentCommand::RequestPermission {
-            request,
-            responder,
-            event_tx,
-        } => {
-            log_incoming("session/request_permission", &json_str(&request));
-
-            let (resp_tx, resp_rx) = oneshot::channel();
-
-            let perm_req = PermissionRequest {
-                request,
-                response_tx: resp_tx,
-            };
-
-            if event_tx.send(perm_req).await.is_err() {
-                warn!("Permission channel closed, cancelling request");
-                let _ = responder.respond(RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled));
-                return;
-            }
-
-            let response = match resp_rx.await {
-                Ok(PermissionDecision::Selected { option_id }) => RequestPermissionResponse::new(
-                    RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option_id)),
-                ),
-                Ok(PermissionDecision::Cancelled) | Err(_) => {
-                    RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled)
-                }
-            };
-
-            log_outgoing("session/request_permission", &json_str(&response));
-            let _ = responder.respond(response);
-        }
+    if event_tx.send(PermissionRequest { request, response_tx }).await.is_err() {
+        warn!("Permission channel closed, cancelling request");
+        let _ = responder.respond(RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled));
+        return;
     }
-}
 
-/// Send an SDK request over the connection, logging the request and response JSON.
-///
-/// The `method` string is used for log labels and as error context for
-/// [`AcpError::from_sdk`].
-async fn send_and_log<Req>(connection: &ConnectionTo<Agent>, req: Req, method: &str) -> Result<Req::Response, AcpError>
-where
-    Req: agent_client_protocol::JsonRpcRequest + serde::Serialize + std::fmt::Debug,
-    Req::Response: serde::Serialize + std::fmt::Debug,
-{
-    log_request(method, &json_str(&req));
-    let rsp = connection.send_request(req).block_task().await;
-    log_response(method, &json_or_err(&rsp));
-    rsp.map_err(|e| AcpError::from_sdk(e, method))
+    let response = match response_rx.await {
+        Ok(PermissionDecision::Selected { option_id }) => RequestPermissionResponse::new(
+            RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option_id)),
+        ),
+        Ok(PermissionDecision::Cancelled) | Err(_) => {
+            RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled)
+        }
+    };
+
+    log_outgoing("session/request_permission", &json_str(&response));
+    let _ = responder.respond(response);
 }
 
 /// Serialize a value to a compact JSON string, falling back to Debug on failure.
@@ -598,27 +464,27 @@ fn json_or_err<T: serde::Serialize + std::fmt::Debug, E: std::fmt::Debug>(result
 
 /// Log an outgoing ACP request (`→`).
 fn log_request(method: &str, body: &str) {
-    debug!("[ACP] {method}\n → {body}");
+    debug!("[ACP] {method} ->\n -> {body}");
 }
 
 /// Log an incoming ACP response (`←`).
 fn log_response(method: &str, body: &str) {
-    debug!("[ACP] {method}\n ← {body}");
+    debug!("[ACP] {method} <-\n <- {body}");
 }
 
 /// Log a fire-and-forget notification (`⚡`).
 fn log_notify(method: &str, body: &str) {
-    debug!("[ACP] {method}\n ⚡ {body}");
+    debug!("[ACP] {method} ⚡⚡\n ⚡⚡ {body}");
 }
 
 /// Log an incoming agent notification/request (`←`).
 fn log_incoming(method: &str, body: &str) {
-    debug!("[ACP] {method}\n ← {body}");
+    debug!("[ACP] {method} <-\n <- {body}");
 }
 
 /// Log an outgoing agent notification/request (`→`).
 fn log_outgoing(method: &str, body: &str) {
-    debug!("[ACP] {method}\n → {body}");
+    debug!("[ACP] {method} ->\n -> {body}");
 }
 
 impl std::fmt::Debug for AcpProtocol {

@@ -1,8 +1,8 @@
 //! Application entry point: assembles all crates into an Axum server with DI and middleware.
 pub mod bridge;
 pub mod guide_stdio;
-pub mod team_stdio;
 mod state_builders;
+pub mod team_stdio;
 
 use std::sync::Arc;
 
@@ -20,6 +20,7 @@ use aionui_ai_agent::{
     AuxiliaryRouterState, ConnectionTestRouterState, IWorkerTaskManager, RemoteAgentRouterState, WorkerTaskManagerImpl,
     acp_routes, agent_routes, auxiliary_routes, build_agent_factory, connection_test_routes, remote_agent_routes,
 };
+use aionui_api_types::GuideMcpConfig;
 use aionui_assistant::{AssistantRouterState, assistant_routes};
 use aionui_auth::{
     AuthRouterState, AuthState, CookieConfig, JwtService, QrTokenStore, auth_middleware, auth_routes, csrf_middleware,
@@ -44,7 +45,6 @@ use aionui_realtime::{BroadcastEventBus, WebSocketManager, WsHandlerState, ws_up
 use aionui_shell::{ShellRouterState, shell_routes};
 use aionui_system::{SystemRouterState, system_routes};
 use aionui_team::{GuideMcpServer, TeamRouterState, team_routes};
-use aionui_api_types::GuideMcpConfig;
 
 pub use state_builders::{
     ChannelOrchestratorComponents, build_assistant_state, build_extension_states, build_module_states, build_ws_state,
@@ -373,7 +373,9 @@ pub async fn create_router(services: &AppServices) -> Router {
     let (states, channel_components) = build_module_states(services).await;
 
     // Wire TeamSessionService into Guide MCP server now that both are available.
-    services.inject_guide_service(Arc::downgrade(&states.team.service)).await;
+    services
+        .inject_guide_service(Arc::downgrade(&states.team.service))
+        .await;
 
     // Start channel orchestrator (message loop)
     tokio::spawn(

@@ -547,7 +547,9 @@ impl TeamSessionService {
                 return Err(TeamError::InvalidRequest(msg));
             }
 
-            let _ = self.task_manager.kill(&agent.conversation_id, Some(AgentKillReason::TeamMcpRebuild));
+            let _ = self
+                .task_manager
+                .kill(&agent.conversation_id, Some(AgentKillReason::TeamMcpRebuild));
 
             if let Err(e) = self
                 .conversation_service
