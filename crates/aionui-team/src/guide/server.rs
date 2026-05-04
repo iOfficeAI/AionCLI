@@ -115,7 +115,11 @@ async fn handle_tool_request(
 
     if provided_token != state.auth_token {
         warn!("Guide HTTP: unauthorized request");
-        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "unauthorized"}))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error": "unauthorized"})),
+        )
+            .into_response();
     }
 
     let tool = body.get("tool").and_then(serde_json::Value::as_str).unwrap_or("");
@@ -138,10 +142,8 @@ async fn handle_tool_request(
     };
 
     let mut resp = Json(response_body).into_response();
-    resp.headers_mut().insert(
-        header::CONNECTION,
-        HeaderValue::from_static("close"),
-    );
+    resp.headers_mut()
+        .insert(header::CONNECTION, HeaderValue::from_static("close"));
     resp
 }
 
@@ -304,10 +306,7 @@ async fn exec_team_tool(
 /// Reads the conversation row's `extra` JSON to extract `teamId`, then finds
 /// the agent slot whose `conversation_id` matches. Returns an error string if
 /// no active team is found for this conversation.
-async fn resolve_team_context(
-    service: &TeamSessionService,
-    conversation_id: &str,
-) -> Result<(String, String), String> {
+async fn resolve_team_context(service: &TeamSessionService, conversation_id: &str) -> Result<(String, String), String> {
     // Extract teamId from conversation.extra via the conversation service repo.
     let repo = service.conversation_service_ref().repo().clone();
     let row = repo
@@ -321,9 +320,7 @@ async fn resolve_team_context(
         .get("teamId")
         .and_then(serde_json::Value::as_str)
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| {
-            "No active team for this conversation. Create a team first with aion_create_team.".to_owned()
-        })?
+        .ok_or_else(|| "No active team for this conversation. Create a team first with aion_create_team.".to_owned())?
         .to_owned();
 
     // Find the slot_id by matching conversation_id in the session scheduler.
@@ -375,7 +372,8 @@ mod tests {
             .unwrap();
         let result = timeout(
             Duration::from_millis(500),
-            client.post(format!("http://127.0.0.1:{port}/tool"))
+            client
+                .post(format!("http://127.0.0.1:{port}/tool"))
                 .json(&serde_json::json!({}))
                 .send(),
         )

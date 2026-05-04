@@ -591,7 +591,14 @@ fn setup_with_recording_broadcaster() -> (Arc<TeamSessionService>, Arc<Recording
     );
     let backend_binary_path = Arc::new(std::path::PathBuf::from("/tmp/aionui-backend-test"));
     let task_manager: Arc<dyn IWorkerTaskManager> = Arc::new(CountingTaskManager::new(success_factory()));
-    let svc = TeamSessionService::new(team_repo, conv_service, broadcaster, task_manager, backend_binary_path, None);
+    let svc = TeamSessionService::new(
+        team_repo,
+        conv_service,
+        broadcaster,
+        task_manager,
+        backend_binary_path,
+        None,
+    );
     (svc, recorder)
 }
 

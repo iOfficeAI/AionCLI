@@ -225,18 +225,9 @@ fn guide_mcp_server(cfg: &GuideMcpConfig, extra: &AcpBuildExtra, conversation_id
     let env = vec![
         EnvVariable::new("AION_MCP_PORT".to_owned(), cfg.port.to_string()),
         EnvVariable::new("AION_MCP_TOKEN".to_owned(), cfg.token.clone()),
-        EnvVariable::new(
-            "AION_MCP_BACKEND".to_owned(),
-            extra.backend.clone().unwrap_or_default(),
-        ),
-        EnvVariable::new(
-            "AION_MCP_CONVERSATION_ID".to_owned(),
-            conversation_id.to_owned(),
-        ),
-        EnvVariable::new(
-            "AION_MCP_USER_ID".to_owned(),
-            extra.user_id.clone().unwrap_or_default(),
-        ),
+        EnvVariable::new("AION_MCP_BACKEND".to_owned(), extra.backend.clone().unwrap_or_default()),
+        EnvVariable::new("AION_MCP_CONVERSATION_ID".to_owned(), conversation_id.to_owned()),
+        EnvVariable::new("AION_MCP_USER_ID".to_owned(), extra.user_id.clone().unwrap_or_default()),
     ];
     let stdio = McpServerStdio::new("aionui-team-guide", &cfg.binary_path)
         .args(vec!["mcp-guide-stdio".to_owned()])
@@ -703,14 +694,13 @@ impl AcpAgentManager {
     }
 
     /// MCP tool prefixes that are auto-approved without user permission.
-    const AUTO_APPROVE_PREFIXES: &[&str] = &[
-        "mcp__aionui-team-",
-        "mcp__aionui-team-guide__",
-    ];
+    const AUTO_APPROVE_PREFIXES: &[&str] = &["mcp__aionui-team-", "mcp__aionui-team-guide__"];
 
     fn is_auto_approve_tool(request: &agent_client_protocol::schema::RequestPermissionRequest) -> bool {
         let title = request.tool_call.fields.title.as_deref().unwrap_or("");
-        Self::AUTO_APPROVE_PREFIXES.iter().any(|prefix| title.starts_with(prefix))
+        Self::AUTO_APPROVE_PREFIXES
+            .iter()
+            .any(|prefix| title.starts_with(prefix))
     }
 
     /// Start the runtime snapshot tracker loop.
@@ -1002,11 +992,7 @@ impl AcpAgentManager {
             if let Some(cfg) = self.config.team_mcp_stdio_config.as_ref() {
                 load_req = load_req.mcp_servers(vec![team_mcp_server(cfg)]);
             }
-            let resp = self
-                .protocol
-                .load_session(load_req)
-                .await
-                .map_err(AppError::from)?;
+            let resp = self.protocol.load_session(load_req).await.map_err(AppError::from)?;
 
             let mut snapshot = self.runtime_snapshot.write().await;
             if let Some(mut models) = resp.models {

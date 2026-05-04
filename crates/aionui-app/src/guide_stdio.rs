@@ -242,10 +242,7 @@ impl GuideServer {
         name = "team_send_message",
         description = "Send a message to a teammate or broadcast to all (to=\"*\")."
     )]
-    async fn team_send_message(
-        &self,
-        Parameters(params): Parameters<SendMessageParams>,
-    ) -> String {
+    async fn team_send_message(&self, Parameters(params): Parameters<SendMessageParams>) -> String {
         eprintln!("[mcp-guide-stdio] tools/call: team_send_message");
         self.forward_tool(
             "team_send_message",
@@ -261,10 +258,7 @@ impl GuideServer {
         name = "team_spawn_agent",
         description = "Create a new teammate agent to join the team. Leader only."
     )]
-    async fn team_spawn_agent(
-        &self,
-        Parameters(params): Parameters<SpawnAgentParams>,
-    ) -> String {
+    async fn team_spawn_agent(&self, Parameters(params): Parameters<SpawnAgentParams>) -> String {
         eprintln!("[mcp-guide-stdio] tools/call: team_spawn_agent");
         self.forward_tool(
             "team_spawn_agent",
@@ -278,14 +272,8 @@ impl GuideServer {
         .await
     }
 
-    #[tool(
-        name = "team_task_create",
-        description = "Create a new task on the team task board."
-    )]
-    async fn team_task_create(
-        &self,
-        Parameters(params): Parameters<TaskCreateParams>,
-    ) -> String {
+    #[tool(name = "team_task_create", description = "Create a new task on the team task board.")]
+    async fn team_task_create(&self, Parameters(params): Parameters<TaskCreateParams>) -> String {
         eprintln!("[mcp-guide-stdio] tools/call: team_task_create");
         self.forward_tool(
             "team_task_create",
@@ -303,10 +291,7 @@ impl GuideServer {
         name = "team_task_update",
         description = "Update an existing task on the team task board."
     )]
-    async fn team_task_update(
-        &self,
-        Parameters(params): Parameters<TaskUpdateParams>,
-    ) -> String {
+    async fn team_task_update(&self, Parameters(params): Parameters<TaskUpdateParams>) -> String {
         eprintln!("[mcp-guide-stdio] tools/call: team_task_update");
         self.forward_tool(
             "team_task_update",
@@ -321,10 +306,7 @@ impl GuideServer {
         .await
     }
 
-    #[tool(
-        name = "team_task_list",
-        description = "List all tasks on the team task board."
-    )]
+    #[tool(name = "team_task_list", description = "List all tasks on the team task board.")]
     async fn team_task_list(&self, Parameters(_params): Parameters<TaskListParams>) -> String {
         eprintln!("[mcp-guide-stdio] tools/call: team_task_list");
         self.forward_tool("team_task_list", &serde_json::json!({})).await
@@ -339,14 +321,8 @@ impl GuideServer {
         self.forward_tool("team_members", &serde_json::json!({})).await
     }
 
-    #[tool(
-        name = "team_rename_agent",
-        description = "Rename a team member."
-    )]
-    async fn team_rename_agent(
-        &self,
-        Parameters(params): Parameters<RenameAgentParams>,
-    ) -> String {
+    #[tool(name = "team_rename_agent", description = "Rename a team member.")]
+    async fn team_rename_agent(&self, Parameters(params): Parameters<RenameAgentParams>) -> String {
         eprintln!("[mcp-guide-stdio] tools/call: team_rename_agent");
         self.forward_tool(
             "team_rename_agent",
@@ -362,10 +338,7 @@ impl GuideServer {
         name = "team_shutdown_agent",
         description = "Initiate graceful shutdown of a teammate. Leader only."
     )]
-    async fn team_shutdown_agent(
-        &self,
-        Parameters(params): Parameters<ShutdownAgentParams>,
-    ) -> String {
+    async fn team_shutdown_agent(&self, Parameters(params): Parameters<ShutdownAgentParams>) -> String {
         eprintln!("[mcp-guide-stdio] tools/call: team_shutdown_agent");
         self.forward_tool(
             "team_shutdown_agent",
@@ -381,10 +354,7 @@ impl GuideServer {
         name = "team_list_models",
         description = "Query available models for team agent types."
     )]
-    async fn team_list_models(
-        &self,
-        Parameters(params): Parameters<TeamListModelsParams>,
-    ) -> String {
+    async fn team_list_models(&self, Parameters(params): Parameters<TeamListModelsParams>) -> String {
         eprintln!("[mcp-guide-stdio] tools/call: team_list_models");
         self.forward_tool(
             "team_list_models",
@@ -399,10 +369,7 @@ impl GuideServer {
         name = "team_describe_assistant",
         description = "Get detailed information about a preset assistant before spawning."
     )]
-    async fn team_describe_assistant(
-        &self,
-        Parameters(params): Parameters<DescribeAssistantParams>,
-    ) -> String {
+    async fn team_describe_assistant(&self, Parameters(params): Parameters<DescribeAssistantParams>) -> String {
         eprintln!("[mcp-guide-stdio] tools/call: team_describe_assistant");
         self.forward_tool(
             "team_describe_assistant",

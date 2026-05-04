@@ -9,7 +9,7 @@ use aionui_api_types::{AgentMetadata, ApiResponse, TestCustomAgentRequest, TestC
 use aionui_auth::CurrentUser;
 use aionui_common::AppError;
 
-use crate::acp_service;
+use crate::acp_agent_service;
 use crate::agent_registry::AgentRegistry;
 
 #[derive(Clone)]
@@ -47,6 +47,6 @@ async fn test_custom_agent(
     body: Result<Json<TestCustomAgentRequest>, JsonRejection>,
 ) -> Result<Json<ApiResponse<TestCustomAgentResponse>>, AppError> {
     let Json(req) = body.map_err(|e| AppError::BadRequest(e.to_string()))?;
-    let result = acp_service::test_custom_agent(&req.command, &req.acp_args, &req.env)?;
+    let result = acp_agent_service::test_custom_agent(&req.command, &req.acp_args, &req.env)?;
     Ok(Json(ApiResponse::ok(result)))
 }

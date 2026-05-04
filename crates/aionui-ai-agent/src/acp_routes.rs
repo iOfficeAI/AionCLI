@@ -12,7 +12,7 @@ use aionui_api_types::{
 use aionui_auth::CurrentUser;
 use aionui_common::AppError;
 
-use crate::acp_service;
+use crate::acp_agent_service;
 use crate::agent_registry::AgentRegistry;
 use crate::task_manager::IWorkerTaskManager;
 use crate::types::AcpModelInfo;
@@ -46,7 +46,7 @@ async fn detect_cli(
     body: Result<Json<DetectCliRequest>, JsonRejection>,
 ) -> Result<Json<ApiResponse<DetectCliResponse>>, AppError> {
     let Json(req) = body.map_err(|e| AppError::BadRequest(e.to_string()))?;
-    let result = acp_service::detect_cli(&state.agent_registry, &req.backend).await;
+    let result = acp_agent_service::detect_cli(&state.agent_registry, &req.backend).await;
     Ok(Json(ApiResponse::ok(result)))
 }
 
@@ -56,7 +56,7 @@ async fn health_check(
     body: Result<Json<AcpHealthCheckRequest>, JsonRejection>,
 ) -> Result<Json<ApiResponse<AcpHealthCheckResponse>>, AppError> {
     let Json(req) = body.map_err(|e| AppError::BadRequest(e.to_string()))?;
-    let result = acp_service::health_check(&state.agent_registry, &req.backend).await;
+    let result = acp_agent_service::health_check(&state.agent_registry, &req.backend).await;
     Ok(Json(ApiResponse::ok(result)))
 }
 
@@ -64,7 +64,7 @@ async fn get_env(
     State(_state): State<AcpRouterState>,
     Extension(_user): Extension<CurrentUser>,
 ) -> Result<Json<ApiResponse<AcpEnvResponse>>, AppError> {
-    let result = acp_service::get_env();
+    let result = acp_agent_service::get_env();
     Ok(Json(ApiResponse::ok(result)))
 }
 
@@ -75,7 +75,7 @@ async fn probe_model(
 ) -> Result<Json<ApiResponse<Option<AcpModelInfo>>>, AppError> {
     let Json(req) = body.map_err(|e| AppError::BadRequest(e.to_string()))?;
     // Probe model requires a running ACP session; for now verify CLI availability
-    let detection = acp_service::detect_cli(&state.agent_registry, &req.backend).await;
+    let detection = acp_agent_service::detect_cli(&state.agent_registry, &req.backend).await;
     if detection.path.is_none() {
         return Err(AppError::BadRequest(format!(
             "Backend '{}' CLI not found, cannot probe model",

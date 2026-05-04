@@ -206,7 +206,9 @@ impl aionui_ai_agent::IWorkerTaskManager for StubTaskManager {
         self.tasks.lock().unwrap().get(conversation_id).cloned()
     }
     fn get_or_build_task(&self, _: &str, _: BuildTaskOptions) -> Result<AgentManagerHandle, AppError> {
-        Err(AppError::Internal("StubTaskManager does not support get_or_build_task".into()))
+        Err(AppError::Internal(
+            "StubTaskManager does not support get_or_build_task".into(),
+        ))
     }
     fn kill(&self, conversation_id: &str, reason: Option<AgentKillReason>) -> Result<(), AppError> {
         self.kill_calls
@@ -475,7 +477,10 @@ async fn s2a_mcp_team_send_message_writes_mailbox() {
     .await;
 
     assert!(!is_mcp_error(&resp), "team_send_message returned error: {resp}");
-    assert!(mcp_text(&resp).contains("Message sent"), "response text must confirm delivery");
+    assert!(
+        mcp_text(&resp).contains("Message sent"),
+        "response text must confirm delivery"
+    );
 
     // Mailbox must have the message (persisted by the MCP handler's execute_action)
     let state = repo.state.lock().unwrap();
@@ -678,12 +683,11 @@ async fn s3c_finish_triggers_lead_wake_with_idle_notification() {
     // when the lead is re-woken by spawn_finish_subscribers in the real service).
     {
         let state = repo.state.lock().unwrap();
-        let lead_msgs: Vec<_> = state
-            .messages
-            .iter()
-            .filter(|m| m.to_agent_id == "lead-1")
-            .collect();
-        assert!(!lead_msgs.is_empty(), "lead mailbox must have content (idle_notification) after worker finish");
+        let lead_msgs: Vec<_> = state.messages.iter().filter(|m| m.to_agent_id == "lead-1").collect();
+        assert!(
+            !lead_msgs.is_empty(),
+            "lead mailbox must have content (idle_notification) after worker finish"
+        );
     }
 
     // Trigger lead wake via the public send_message_to_agent API:
@@ -817,7 +821,11 @@ async fn s5_consecutive_finish_events_after_dedup_clear() {
         .await
         .unwrap();
     let first_result = session.on_agent_finish("conv-worker", false).await.unwrap();
-    assert_eq!(first_result.as_deref(), Some("lead-1"), "first finish must return wake target");
+    assert_eq!(
+        first_result.as_deref(),
+        Some("lead-1"),
+        "first finish must return wake target"
+    );
 
     // Simulate what the service's finish_subscribers do: clear the dedup window
     // after a successful wake so the next legitimate finish can proceed.
@@ -845,8 +853,7 @@ async fn s5_consecutive_finish_events_after_dedup_clear() {
         .filter(|m| m.to_agent_id == "lead-1" && m.msg_type == "idle_notification")
         .count();
     assert_eq!(
-        idle_count,
-        2,
+        idle_count, 2,
         "both finish events must produce IdleNotification; got {idle_count}"
     );
 
@@ -901,7 +908,10 @@ async fn s5b_dedup_window_blocks_rapid_duplicate_finish() {
         .iter()
         .filter(|m| m.msg_type == "idle_notification")
         .count();
-    assert_eq!(idle_count, 1, "dedup must prevent double idle_notification; got {idle_count}");
+    assert_eq!(
+        idle_count, 1,
+        "dedup must prevent double idle_notification; got {idle_count}"
+    );
 
     session.stop();
 }
@@ -968,8 +978,7 @@ async fn s7_team_members_reflects_dynamic_roster() {
     // Initially 2 members
     let resp = mcp_call_tool(&mut stream, 30, "team_members", json!({})).await;
     assert!(!is_mcp_error(&resp), "team_members failed");
-    let members: Vec<Value> =
-        serde_json::from_str(mcp_text(&resp)).expect("team_members must return JSON array");
+    let members: Vec<Value> = serde_json::from_str(mcp_text(&resp)).expect("team_members must return JSON array");
     assert_eq!(members.len(), 2, "should start with 2 members");
 
     // Add a third agent
@@ -990,8 +999,7 @@ async fn s7_team_members_reflects_dynamic_roster() {
     // Now team_members should return 3
     let resp2 = mcp_call_tool(&mut stream, 31, "team_members", json!({})).await;
     assert!(!is_mcp_error(&resp2), "team_members (after add) failed");
-    let members2: Vec<Value> =
-        serde_json::from_str(mcp_text(&resp2)).expect("team_members must return JSON array");
+    let members2: Vec<Value> = serde_json::from_str(mcp_text(&resp2)).expect("team_members must return JSON array");
     assert_eq!(members2.len(), 3, "roster must include dynamically added agent");
     assert!(
         members2.iter().any(|m| m["name"] == "ExtraAgent"),
@@ -1056,10 +1064,7 @@ async fn s8b_worker_cannot_call_spawn_agent() {
     .await;
     assert!(is_mcp_error(&resp), "worker must not be allowed to call spawn_agent");
     let text = mcp_text(&resp);
-    assert!(
-        text.contains("Only Lead"),
-        "error must mention 'Only Lead'; got {text}"
-    );
+    assert!(text.contains("Only Lead"), "error must mention 'Only Lead'; got {text}");
 
     session.stop();
 }
@@ -1133,7 +1138,8 @@ async fn s10_error_finish_sets_agent_status_to_error() {
         "error finish must preserve Error status (not be overwritten by mark_idle)"
     );
 
-    session.stop();}
+    session.stop();
+}
 
 // ===========================================================================
 // Scenario 11: shutdown_approved sentinel interception
@@ -1160,8 +1166,7 @@ async fn s11_shutdown_approved_interception() {
     let text = mcp_text(&resp);
     let payload: Value = serde_json::from_str(text).expect("shutdown_approved response must be JSON");
     assert_eq!(
-        payload["status"],
-        "shutdown_approved_received",
+        payload["status"], "shutdown_approved_received",
         "must return shutdown_approved_received status; got {text}"
     );
 
@@ -1208,10 +1213,7 @@ async fn s12a_cold_start_lead_gets_role_prompt() {
         .unwrap()
         .expect("WakeInput must be Some");
 
-    assert!(
-        input.should_send,
-        "should_send must be true when mailbox has messages"
-    );
+    assert!(input.should_send, "should_send must be true when mailbox has messages");
     assert!(
         input.first_message.contains("You are the Team Leader"),
         "cold-start lead must get role prompt; got: {}",

@@ -99,7 +99,12 @@ pub async fn build_module_states(services: &AppServices) -> (ModuleStates, Chann
         hub: hub_state,
         skill: skill_state,
         channel: channel_state,
-        team: build_team_state(services, Some(cron.cron_service.clone()), backend_binary_path.clone(), services.guide_mcp_config.clone()),
+        team: build_team_state(
+            services,
+            Some(cron.cron_service.clone()),
+            backend_binary_path.clone(),
+            services.guide_mcp_config.clone(),
+        ),
         cron,
         office: build_office_state(services),
         shell: build_shell_state(services),

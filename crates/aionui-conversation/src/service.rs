@@ -1177,7 +1177,8 @@ impl ConversationService {
         // Inject user_id into extra so the Guide MCP bridge can pass it to
         // aion_create_team without a separate lookup. Harmless for non-ACP types.
         if let Some(obj) = extra.as_object_mut() {
-            obj.entry("user_id").or_insert_with(|| serde_json::Value::String(row.user_id.clone()));
+            obj.entry("user_id")
+                .or_insert_with(|| serde_json::Value::String(row.user_id.clone()));
         }
 
         // Extract workspace from extra (common across agent types)

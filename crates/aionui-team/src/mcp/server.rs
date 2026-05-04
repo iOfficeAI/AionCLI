@@ -438,7 +438,9 @@ pub(crate) async fn dispatch_tool(
         "team_task_list" => exec_task_list(scheduler).await,
         "team_members" => exec_members(scheduler).await,
         "team_rename_agent" => exec_rename_agent(arguments, scheduler).await,
-        "team_shutdown_agent" => exec_shutdown_agent(arguments, scheduler, service, team_id, caller_slot_id, caller_role).await,
+        "team_shutdown_agent" => {
+            exec_shutdown_agent(arguments, scheduler, service, team_id, caller_slot_id, caller_role).await
+        }
         "team_list_models" => exec_list_models(arguments).await,
         "team_describe_assistant" => exec_describe_assistant(arguments).await,
         _ => Err(format!("Unknown tool: {tool_name}")),

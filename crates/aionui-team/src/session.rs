@@ -621,10 +621,7 @@ impl TeamSession {
                 "teammate_message": true,
                 "sender_backend": sender_backend,
             });
-            let event = aionui_api_types::WebSocketMessage::new(
-                "team.teammate.message",
-                ws_payload,
-            );
+            let event = aionui_api_types::WebSocketMessage::new("team.teammate.message", ws_payload);
             self.broadcaster.broadcast(event);
         }
     }

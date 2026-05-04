@@ -1,27 +1,38 @@
-//! Facade for ACP-specific per-session state.
+//! ACP agent service: CLI detection helpers and per-session state facade.
 //!
-//! Reads and writes live in the service; `AcpAgentManager` is a pure
-//! producer that exposes `subscribe()` and `preload_snapshot(...)`. On
-//! every new `AcpAgentManager`, the service subscribes to its broadcast
-//! and spawns a per-conversation consumer task that:
+//! This module has two concerns:
 //!
-//! - filters the events that carry persistable user choices
-//!   (`AcpModeInfo` / `AcpModelInfo` / `AcpConfigOption` /
-//!   `AcpContextUsage`);
-//! - merges them inside a 500 ms debounce window — `AcpContextUsage`
-//!   can fire many times per LLM turn, and coalescing avoids a DB
-//!   write for every tick;
-//! - commits each coalesced partial to
-//!   `acp_session.session_config.runtime` through `IAcpSessionRepository`.
+//! 1. **CLI detection helpers** — `detect_cli`, `health_check`, `get_env`,
+//!    `test_custom_agent`: stateless utilities for probing ACP backend
+//!    binaries on `$PATH` and reporting environment info.
 //!
-//! When the manager is dropped or killed, its broadcast channel closes,
-//! `recv()` returns `Closed`, the consumer flushes and exits. No
-//! explicit detach needed from callers.
+//! 2. **`AcpAgentService`** — per-session state facade. Reads and writes
+//!    live in the service; `AcpAgentManager` is a pure producer that
+//!    exposes `subscribe()` and `preload_snapshot(...)`. On every new
+//!    `AcpAgentManager`, the service subscribes to its broadcast and
+//!    spawns a per-conversation consumer task that:
+//!
+//!    - filters the events that carry persistable user choices
+//!      (`AcpModeInfo` / `AcpModelInfo` / `AcpConfigOption` /
+//!      `AcpContextUsage`);
+//!    - merges them inside a 500 ms debounce window — `AcpContextUsage`
+//!      can fire many times per LLM turn, and coalescing avoids a DB
+//!      write for every tick;
+//!    - commits each coalesced partial to
+//!      `acp_session.session_config.runtime` through `IAcpSessionRepository`.
+//!
+//!    When the manager is dropped or killed, its broadcast channel closes,
+//!    `recv()` returns `Closed`, the consumer flushes and exits. No
+//!    explicit detach needed from callers.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use aionui_api_types::{
+    AcpEnvResponse, AcpHealthCheckResponse, AgentMetadata, DetectCliResponse, TestCustomAgentResponse,
+};
+use aionui_common::AppError;
 use aionui_db::{IAcpSessionRepository, PersistedSessionState, SaveRuntimeStateParams};
 use serde_json::Value;
 use tokio::sync::{RwLock, broadcast};
@@ -32,7 +43,10 @@ use tracing::{debug, warn};
 use crate::acp_agent::AcpAgentManager;
 use crate::acp_runtime_snapshot::PersistedSessionState as SnapshotPersistedState;
 use crate::agent_manager::AgentManagerHandle;
+use crate::agent_registry::AgentRegistry;
 use crate::stream_event::AgentStreamEvent;
+
+// ── Per-session state facade ────────────────────────────────────────
 
 /// Debounce window per conversation. Short enough to feel live, long
 /// enough to coalesce a typical LLM turn's stream of `AcpContextUsage`
@@ -352,6 +366,80 @@ async fn flush(repo: &Arc<dyn IAcpSessionRepository>, conversation_id: &str, pen
     *pending = PendingUpdate::default();
 }
 
+// ── CLI detection helpers ───────────────────────────────────────────
+
+/// Detect the CLI path for a given ACP backend using PATH lookup.
+///
+/// Resolves the vendor label to the first `builtin` row in the metadata
+/// catalog, then checks that the row's spawn command is on `$PATH`.
+pub async fn detect_cli(registry: &Arc<AgentRegistry>, backend: &str) -> DetectCliResponse {
+    let Some(meta) = registry.find_builtin_by_backend(backend).await else {
+        return DetectCliResponse { path: None };
+    };
+
+    let path = probe_command(&meta);
+    debug!(backend, ?path, "CLI detection result");
+    DetectCliResponse { path }
+}
+
+/// Perform a health check for an ACP backend.
+///
+/// Checks CLI availability and measures detection latency.
+pub async fn health_check(registry: &Arc<AgentRegistry>, backend: &str) -> AcpHealthCheckResponse {
+    let start = Instant::now();
+
+    let Some(meta) = registry.find_builtin_by_backend(backend).await else {
+        return AcpHealthCheckResponse {
+            available: false,
+            latency: None,
+            error: Some(format!("No agent_metadata row for backend '{backend}'")),
+        };
+    };
+
+    let path = probe_command(&meta);
+    let latency_ms = start.elapsed().as_millis() as u64;
+    let available = path.is_some();
+
+    AcpHealthCheckResponse {
+        available,
+        latency: Some(latency_ms),
+        error: if available {
+            None
+        } else {
+            Some(format!("Spawn command for backend '{backend}' not found in PATH"))
+        },
+    }
+}
+
+fn probe_command(meta: &AgentMetadata) -> Option<String> {
+    let cmd = meta.command.as_deref()?;
+    which::which(cmd).ok().map(|p| p.to_string_lossy().into_owned())
+}
+
+/// Get relevant environment variables for ACP operations.
+pub fn get_env() -> AcpEnvResponse {
+    let keys = ["PATH", "HOME", "USER", "SHELL", "LANG", "TERM"];
+    let env: HashMap<String, String> = keys
+        .iter()
+        .filter_map(|&key| std::env::var(key).ok().map(|val| (key.into(), val)))
+        .collect();
+
+    AcpEnvResponse { env }
+}
+
+/// Test a custom ACP agent by verifying the command exists.
+pub fn test_custom_agent(
+    command: &str,
+    _acp_args: &[String],
+    _env: &HashMap<String, String>,
+) -> Result<TestCustomAgentResponse, AppError> {
+    which::which(command).map_err(|_| AppError::BadRequest(format!("Command '{command}' not found in PATH")))?;
+
+    Ok(TestCustomAgentResponse {
+        step: "completed".into(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -515,6 +603,18 @@ mod tests {
 
         let state = repo.load_runtime_state("conv-1").await.unwrap().unwrap();
         assert!(state.current_mode_id.is_none());
+    }
+
+    #[test]
+    fn get_env_returns_at_least_path() {
+        let resp = get_env();
+        assert!(resp.env.contains_key("PATH") || resp.env.contains_key("HOME"));
+    }
+
+    #[test]
+    fn test_custom_agent_nonexistent_command() {
+        let result = test_custom_agent("/nonexistent/path/to/agent", &[], &HashMap::new());
+        assert!(result.is_err());
     }
 
     /// When the manager drops (sender dropped), the consumer flushes

@@ -814,7 +814,11 @@ impl TeamSessionService {
             return Ok(());
         }
 
-        entry.session.scheduler().set_status(slot_id, crate::types::TeammateStatus::Working).await?;
+        entry
+            .session
+            .scheduler()
+            .set_status(slot_id, crate::types::TeammateStatus::Working)
+            .await?;
         let input = entry.session.compute_wake_input(slot_id).await;
 
         if let Ok(Some(ref i)) = input
@@ -892,7 +896,8 @@ impl TeamSessionService {
 
             let send_result = handle.send_message(data).await;
 
-            if send_result.is_ok() && !msg_ids.is_empty()
+            if send_result.is_ok()
+                && !msg_ids.is_empty()
                 && let Some(entry) = sessions.get(&team_id_owned)
                 && let Err(e) = entry.session.mailbox().mark_read_batch(&msg_ids).await
             {
