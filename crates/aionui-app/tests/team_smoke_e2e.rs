@@ -217,6 +217,7 @@ fn mock_factory() -> AgentFactory {
                 cron_job_id: None,
                 team_mcp_stdio_config: None,
                 guide_mcp_config: None,
+                user_id: None,
             });
             let agent = MockAgentManager::new(opts.conversation_id, opts.workspace, extra.team_mcp_stdio_config);
             Ok(Arc::new(agent) as aionui_ai_agent::AgentManagerHandle)
