@@ -66,6 +66,7 @@ async fn make_mock_agent(script: &str, backend: &str) -> (Arc<AcpAgentManager>, 
         cron_job_id: None,
         team_mcp_stdio_config: None,
         guide_mcp_config: None,
+        user_id: None,
     };
 
     let tmp_skills = tempfile::TempDir::new().unwrap();
