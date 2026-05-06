@@ -4,8 +4,8 @@
 //! Real AWS calls are tested only with fake credentials to verify
 //! proper error handling (no real accounts needed).
 
-use aionui_ai_agent::ConnectionTestService;
 use aionui_api_types::{BedrockAuthMethod, BedrockConfig};
+use aionui_system::ConnectionTestService;
 
 fn make_service() -> ConnectionTestService {
     ConnectionTestService::new(reqwest::Client::new())

@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+aionui-auth.workspace = true
 aionui-common.workspace = true
 aionui-db.workspace = true
 aionui-api-types.workspace = true
@@ -23,4 +24,5 @@ dirs.workspace = true
 [dev-dependencies]
 tower = { workspace = true }
 http-body-util.workspace = true
+reqwest.workspace = true
 wiremock = "0.6"

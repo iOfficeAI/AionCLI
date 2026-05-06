@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
 use aionui_ai_agent::{
-    AcpRouterState, AgentRouterState, AuxiliaryRouterState, ConnectionTestRouterState, ConnectionTestService,
-    RemoteAgentRouterState, RemoteAgentService,
+    AcpRouterState, AgentRouterState, AuxiliaryRouterState, RemoteAgentRouterState, RemoteAgentService,
 };
 use aionui_assistant::{AssistantRouterState, AssistantService, BuiltinAssistantRegistry};
 use aionui_auth::extract_token_from_ws_headers;
@@ -32,8 +31,8 @@ use aionui_office::{
 use aionui_realtime::{NoopMessageRouter, WsHandlerState};
 use aionui_shell::ShellRouterState;
 use aionui_system::{
-    ClientPrefService, ModelFetchService, ProtocolDetectionService, ProviderService, SettingsService,
-    SystemRouterState, VersionCheckService,
+    ClientPrefService, ConnectionTestRouterState, ConnectionTestService, ModelFetchService, ProtocolDetectionService,
+    ProviderService, SettingsService, SystemRouterState, VersionCheckService,
 };
 use aionui_team::{TeamRouterState, TeamSessionService};
 

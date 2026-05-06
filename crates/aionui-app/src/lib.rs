@@ -17,8 +17,8 @@ use tower_http::trace::TraceLayer;
 
 use aionui_ai_agent::{
     AcpAgentService, AcpRouterState, AcpSkillManager, AgentFactoryDeps, AgentRegistry, AgentRouterState,
-    AuxiliaryRouterState, ConnectionTestRouterState, IWorkerTaskManager, RemoteAgentRouterState, WorkerTaskManagerImpl,
-    acp_routes, agent_routes, auxiliary_routes, build_agent_factory, connection_test_routes, remote_agent_routes,
+    AuxiliaryRouterState, IWorkerTaskManager, RemoteAgentRouterState, WorkerTaskManagerImpl, acp_routes, agent_routes,
+    auxiliary_routes, build_agent_factory, remote_agent_routes,
 };
 use aionui_api_types::GuideMcpConfig;
 use aionui_assistant::{AssistantRouterState, assistant_routes};
@@ -43,7 +43,7 @@ use aionui_mcp::{McpRouterState, mcp_routes};
 use aionui_office::{OfficeRouterState, office_proxy_routes, office_routes};
 use aionui_realtime::{BroadcastEventBus, WebSocketManager, WsHandlerState, ws_upgrade_handler};
 use aionui_shell::{ShellRouterState, shell_routes};
-use aionui_system::{SystemRouterState, system_routes};
+use aionui_system::{ConnectionTestRouterState, SystemRouterState, connection_test_routes, system_routes};
 use aionui_team::{GuideMcpServer, TeamRouterState, team_routes};
 
 pub use state_builders::{

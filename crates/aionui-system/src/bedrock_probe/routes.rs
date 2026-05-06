@@ -7,7 +7,7 @@ use aionui_api_types::{ApiResponse, TestBedrockConnectionRequest};
 use aionui_auth::CurrentUser;
 use aionui_common::AppError;
 
-use crate::connection_test_service::ConnectionTestService;
+use super::service::ConnectionTestService;
 
 /// Router state for connection test routes.
 #[derive(Clone)]
