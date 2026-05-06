@@ -267,11 +267,14 @@ mod tests {
 
     #[tokio::test]
     async fn forward_stdin_injects_only_on_initialize() {
-        let input = concat!(
-            r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#,
-            "\n",
-            r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
-            "\n",
+        let initialize = br#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#;
+        let tools_list = br#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
+        let input = format!(
+            "Content-Length: {}\r\n\r\n{}Content-Length: {}\r\n\r\n{}",
+            initialize.len(),
+            std::str::from_utf8(initialize).unwrap(),
+            tools_list.len(),
+            std::str::from_utf8(tools_list).unwrap(),
         );
         let mut out = Vec::<u8>::new();
         forward_stdin_to_tcp(input.as_bytes(), &mut out, env()).await.unwrap();
@@ -288,7 +291,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn forward_tcp_writes_ndjson() {
+    async fn forward_tcp_writes_content_length_framed_stdout() {
         let payload = br#"{"jsonrpc":"2.0","id":1,"result":{}}"#;
         let mut framed = Vec::new();
         write_frame(&mut framed, payload).await.unwrap();
@@ -296,10 +299,9 @@ mod tests {
         let mut out = Vec::<u8>::new();
         forward_tcp_to_stdout(&framed[..], &mut out).await.unwrap();
 
-        let text = String::from_utf8(out).unwrap();
-        assert!(text.ends_with('\n'));
-        let line = text.trim_end();
-        let parsed: Value = serde_json::from_str(line).unwrap();
+        let mut cursor = std::io::Cursor::new(out);
+        let body = read_mcp_stdio_message(&mut cursor).await.unwrap().unwrap();
+        let parsed: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(parsed["id"], 1);
     }
 }

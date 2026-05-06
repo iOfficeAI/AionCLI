@@ -28,7 +28,13 @@ async fn get_plugins_empty() {
     let json = body_json(resp).await;
     assert!(json["success"].as_bool().unwrap());
     let data = json["data"].as_array().unwrap();
-    assert!(data.is_empty());
+    assert_eq!(data.len(), 7);
+    let types: std::collections::HashSet<_> = data.iter().filter_map(|item| item["type"].as_str()).collect();
+    assert_eq!(
+        types,
+        std::collections::HashSet::from(["telegram", "lark", "dingtalk", "slack", "discord", "weixin", "wecom",])
+    );
+    assert!(data.iter().all(|item| item["enabled"] == false));
 }
 
 // PS-3: Unauthenticated request returns 403
@@ -540,10 +546,14 @@ async fn enable_disable_plugin_lifecycle() {
     assert_eq!(resp.status(), StatusCode::OK);
     let json = body_json(resp).await;
     let plugins = json["data"].as_array().unwrap();
-    assert_eq!(plugins.len(), 1);
-    assert_eq!(plugins[0]["plugin_id"], "telegram");
-    assert_eq!(plugins[0]["type"], "telegram");
-    assert_eq!(plugins[0]["name"], "Telegram Bot");
+    assert_eq!(plugins.len(), 7);
+    let telegram = plugins
+        .iter()
+        .find(|plugin| plugin["plugin_id"] == "telegram")
+        .expect("telegram plugin should be present");
+    assert_eq!(telegram["type"], "telegram");
+    assert_eq!(telegram["name"], "Telegram Bot");
+    assert_eq!(telegram["enabled"], true);
 
     // Disable the plugin
     let req = json_with_token(
@@ -563,6 +573,10 @@ async fn enable_disable_plugin_lifecycle() {
     let resp = app.oneshot(req).await.unwrap();
     let json = body_json(resp).await;
     let plugins = json["data"].as_array().unwrap();
-    assert_eq!(plugins.len(), 1);
-    assert!(!plugins[0]["enabled"].as_bool().unwrap());
+    assert_eq!(plugins.len(), 7);
+    let telegram = plugins
+        .iter()
+        .find(|plugin| plugin["plugin_id"] == "telegram")
+        .expect("telegram plugin should remain listed after disable");
+    assert!(!telegram["enabled"].as_bool().unwrap());
 }

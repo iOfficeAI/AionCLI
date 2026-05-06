@@ -1,5 +1,6 @@
 mod common;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -315,25 +316,52 @@ impl aionui_conversation::skill_resolver::SkillResolver for StubSkillResolver {
     }
 }
 
-struct StubAgentMetadataRepo;
+#[derive(Default)]
+struct StubAgentMetadataRepo {
+    rows_by_id: HashMap<String, AgentMetadataRow>,
+    builtin_by_backend: HashMap<String, AgentMetadataRow>,
+}
+
+impl StubAgentMetadataRepo {
+    fn empty() -> Self {
+        Self::default()
+    }
+
+    fn with_rows(rows: Vec<AgentMetadataRow>) -> Self {
+        let mut repo = Self::default();
+        for row in rows {
+            if row.agent_source == "builtin"
+                && let Some(backend) = row.backend.as_deref()
+            {
+                repo.builtin_by_backend.insert(backend.to_owned(), row.clone());
+            }
+            repo.rows_by_id.insert(row.id.clone(), row);
+        }
+        repo
+    }
+}
 
 #[async_trait::async_trait]
 impl IAgentMetadataRepository for StubAgentMetadataRepo {
     async fn list_all(&self) -> Result<Vec<AgentMetadataRow>, DbError> {
-        Ok(Vec::new())
+        Ok(self.rows_by_id.values().cloned().collect())
     }
-    async fn get(&self, _id: &str) -> Result<Option<AgentMetadataRow>, DbError> {
-        Ok(None)
+    async fn get(&self, id: &str) -> Result<Option<AgentMetadataRow>, DbError> {
+        Ok(self.rows_by_id.get(id).cloned())
     }
     async fn find_by_source_and_name(
         &self,
-        _agent_source: &str,
-        _name: &str,
+        agent_source: &str,
+        name: &str,
     ) -> Result<Option<AgentMetadataRow>, DbError> {
-        Ok(None)
+        Ok(self
+            .rows_by_id
+            .values()
+            .find(|row| row.agent_source == agent_source && row.name == name)
+            .cloned())
     }
-    async fn find_builtin_by_backend(&self, _backend: &str) -> Result<Option<AgentMetadataRow>, DbError> {
-        Ok(None)
+    async fn find_builtin_by_backend(&self, backend: &str) -> Result<Option<AgentMetadataRow>, DbError> {
+        Ok(self.builtin_by_backend.get(backend).cloned())
     }
     async fn upsert(&self, _params: &UpsertAgentMetadataParams<'_>) -> Result<AgentMetadataRow, DbError> {
         Err(DbError::Init("stub".into()))
@@ -413,6 +441,11 @@ impl CountingTaskManager {
             inner: WorkerTaskManagerImpl::new(factory),
             calls: Mutex::new(TaskManagerCalls::default()),
         }
+    }
+
+    fn reset(&self) {
+        self.inner.clear();
+        *self.calls.lock().unwrap() = TaskManagerCalls::default();
     }
 
     fn snapshot(&self) -> TaskManagerCalls {
@@ -543,17 +576,23 @@ fn success_factory() -> AgentFactory {
 }
 
 fn setup_with_factory(factory: AgentFactory) -> (Arc<TeamSessionService>, Arc<CountingTaskManager>) {
+    setup_with_factory_and_metadata(factory, Arc::new(StubAgentMetadataRepo::empty()))
+}
+
+fn setup_with_factory_and_metadata(
+    factory: AgentFactory,
+    agent_metadata_repo: Arc<dyn IAgentMetadataRepository>,
+) -> (Arc<TeamSessionService>, Arc<CountingTaskManager>) {
     let team_repo: Arc<dyn ITeamRepository> = Arc::new(FullMockTeamRepo::new());
     let conv_repo: Arc<dyn IConversationRepository> = Arc::new(MockConversationRepo::new());
     let broadcaster: Arc<dyn EventBroadcaster> = Arc::new(NullBroadcaster);
-    let agent_metadata_repo: Arc<dyn IAgentMetadataRepository> = Arc::new(StubAgentMetadataRepo);
     let acp_session_repo: Arc<dyn IAcpSessionRepository> = Arc::new(StubAcpSessionRepo);
     let conv_service = ConversationService::new_with_workspace_root(
         conv_repo,
         broadcaster.clone(),
         std::env::temp_dir(),
         Arc::new(StubSkillResolver),
-        agent_metadata_repo,
+        agent_metadata_repo.clone(),
         acp_session_repo,
     );
     let backend_binary_path = Arc::new(std::path::PathBuf::from("/tmp/aionui-backend-test"));
@@ -561,6 +600,7 @@ fn setup_with_factory(factory: AgentFactory) -> (Arc<TeamSessionService>, Arc<Co
     let task_manager_dyn: Arc<dyn IWorkerTaskManager> = task_manager.clone();
     let svc = TeamSessionService::new(
         team_repo,
+        agent_metadata_repo,
         conv_service,
         broadcaster,
         task_manager_dyn,
@@ -579,20 +619,21 @@ fn setup_with_recording_broadcaster() -> (Arc<TeamSessionService>, Arc<Recording
     let conv_repo: Arc<dyn IConversationRepository> = Arc::new(MockConversationRepo::new());
     let recorder = Arc::new(RecordingBroadcaster::new());
     let broadcaster: Arc<dyn EventBroadcaster> = recorder.clone();
-    let agent_metadata_repo: Arc<dyn IAgentMetadataRepository> = Arc::new(StubAgentMetadataRepo);
+    let agent_metadata_repo: Arc<dyn IAgentMetadataRepository> = Arc::new(StubAgentMetadataRepo::empty());
     let acp_session_repo: Arc<dyn IAcpSessionRepository> = Arc::new(StubAcpSessionRepo);
     let conv_service = ConversationService::new_with_workspace_root(
         conv_repo,
         broadcaster.clone(),
         std::env::temp_dir(),
         Arc::new(StubSkillResolver),
-        agent_metadata_repo,
+        agent_metadata_repo.clone(),
         acp_session_repo,
     );
     let backend_binary_path = Arc::new(std::path::PathBuf::from("/tmp/aionui-backend-test"));
     let task_manager: Arc<dyn IWorkerTaskManager> = Arc::new(CountingTaskManager::new(success_factory()));
     let svc = TeamSessionService::new(
         team_repo,
+        agent_metadata_repo,
         conv_service,
         broadcaster,
         task_manager,
@@ -600,6 +641,42 @@ fn setup_with_recording_broadcaster() -> (Arc<TeamSessionService>, Arc<Recording
         None,
     );
     (svc, recorder)
+}
+
+fn make_agent_metadata_row(id: &str, backend: &str, icon: &str) -> AgentMetadataRow {
+    AgentMetadataRow {
+        id: id.to_owned(),
+        icon: Some(icon.to_owned()),
+        name: backend.to_owned(),
+        name_i18n: None,
+        description: None,
+        description_i18n: None,
+        backend: Some(backend.to_owned()),
+        agent_type: "acp".to_owned(),
+        agent_source: "builtin".to_owned(),
+        agent_source_info: None,
+        enabled: true,
+        command: None,
+        args: None,
+        env: None,
+        native_skills_dirs: None,
+        behavior_policy: None,
+        yolo_id: None,
+        agent_capabilities: None,
+        auth_methods: None,
+        config_options: None,
+        available_modes: None,
+        available_models: None,
+        available_commands: None,
+        sort_order: 0,
+        created_at: 0,
+        updated_at: 0,
+    }
+}
+
+fn setup_with_metadata_rows(rows: Vec<AgentMetadataRow>) -> Arc<TeamSessionService> {
+    let agent_metadata_repo: Arc<dyn IAgentMetadataRepository> = Arc::new(StubAgentMetadataRepo::with_rows(rows));
+    setup_with_factory_and_metadata(success_factory(), agent_metadata_repo).0
 }
 
 fn two_agent_input() -> Vec<TeamAgentInput> {
@@ -621,6 +698,11 @@ fn two_agent_input() -> Vec<TeamAgentInput> {
             conversation_id: None,
         },
     ]
+}
+
+fn reset_auto_started_session(svc: &Arc<TeamSessionService>, tm: &Arc<CountingTaskManager>, team_id: &str) {
+    svc.stop_session(team_id);
+    tm.reset();
 }
 
 // ===========================================================================
@@ -647,6 +729,82 @@ async fn tc1_create_team_with_multiple_agents() {
     assert_eq!(resp.agents[1].role, "teammate");
     assert!(resp.lead_agent_id.is_some());
     assert_eq!(resp.lead_agent_id, Some(resp.agents[0].slot_id.clone()));
+}
+
+#[tokio::test]
+async fn tc_create_team_uses_custom_agent_id_icon_lookup() {
+    let svc = setup_with_metadata_rows(vec![make_agent_metadata_row(
+        "2d23ff1c",
+        "claude",
+        "/api/assets/logos/ai-major/claude.svg",
+    )]);
+
+    let resp = svc
+        .create_team(
+            "user1",
+            CreateTeamRequest {
+                name: "Alpha".into(),
+                agents: vec![TeamAgentInput {
+                    name: "Lead".into(),
+                    role: "lead".into(),
+                    backend: "acp".into(),
+                    model: "claude".into(),
+                    custom_agent_id: Some("2d23ff1c".into()),
+                    conversation_id: None,
+                }],
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        resp.agents[0].icon.as_deref(),
+        Some("/api/assets/logos/ai-major/claude.svg")
+    );
+}
+
+#[tokio::test]
+async fn ta_add_agent_uses_model_fallback_for_acp_backend() {
+    let svc = setup_with_metadata_rows(vec![make_agent_metadata_row(
+        "8e1acf31",
+        "codex",
+        "/api/assets/logos/tools/coding/codex.svg",
+    )]);
+
+    let team = svc
+        .create_team(
+            "user1",
+            CreateTeamRequest {
+                name: "Alpha".into(),
+                agents: vec![TeamAgentInput {
+                    name: "Lead".into(),
+                    role: "lead".into(),
+                    backend: "acp".into(),
+                    model: "claude".into(),
+                    custom_agent_id: None,
+                    conversation_id: None,
+                }],
+            },
+        )
+        .await
+        .unwrap();
+
+    let added = svc
+        .add_agent(
+            "user1",
+            &team.id,
+            AddAgentRequest {
+                name: "Coder".into(),
+                role: "teammate".into(),
+                backend: "acp".into(),
+                model: "codex".into(),
+                custom_agent_id: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(added.icon.as_deref(), Some("/api/assets/logos/tools/coding/codex.svg"));
 }
 
 #[tokio::test]
@@ -1278,6 +1436,7 @@ async fn d9_ensure_session_kills_and_rebuilds_every_agent() {
         .await
         .unwrap();
 
+    reset_auto_started_session(&svc, &tm, &created.id);
     svc.ensure_session(&created.id).await.unwrap();
 
     // Two agents → kill called 2x and get_or_build_task called 2x, each with
@@ -1346,6 +1505,7 @@ async fn d9_ensure_session_is_idempotent() {
         .await
         .unwrap();
 
+    reset_auto_started_session(&svc, &tm, &created.id);
     svc.ensure_session(&created.id).await.unwrap();
     svc.ensure_session(&created.id).await.unwrap();
 
@@ -1375,14 +1535,15 @@ async fn d9_ensure_session_rollbacks_when_build_fails() {
         .await
         .unwrap();
 
+    reset_auto_started_session(&svc, &tm, &created.id);
     let result = svc.ensure_session(&created.id).await;
     assert!(result.is_err(), "ensure_session should propagate build error");
 
-    // Kill ran for the first agent (before warmup failed), build ran once
-    // and errored. No session inserted, so send_message errors.
+    // Rebuild aborts on the first warmup failure, so only the first agent
+    // is killed/built. No session is inserted, so send_message still errors.
     let calls = tm.snapshot();
-    assert_eq!(calls.kill.len(), 2);
-    assert_eq!(calls.build.len(), 2);
+    assert_eq!(calls.kill.len(), 1);
+    assert_eq!(calls.build.len(), 1);
 
     let send_result = svc.send_message(&created.id, "Hello", None).await;
     assert!(
@@ -1490,6 +1651,7 @@ async fn d115_remove_team_kills_every_agent_process() {
         .await
         .unwrap();
 
+    reset_auto_started_session(&svc, &tm, &created.id);
     // Bring two agents online — after ensure_session, active_count == 2.
     svc.ensure_session(&created.id).await.unwrap();
     assert_eq!(tm.active_count(), 2, "ensure_session must register 2 live agents");

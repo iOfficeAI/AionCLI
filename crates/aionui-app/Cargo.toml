@@ -16,6 +16,7 @@ weixin = ["aionui-channel/weixin"]
 
 [dependencies]
 aionui-common.workspace = true
+aionui-assets.workspace = true
 aionui-db.workspace = true
 aionui-api-types.workspace = true
 aionui-realtime.workspace = true

@@ -677,13 +677,6 @@ fn build_extension_config(
         .filter_map(field_key)
         .map(ToOwned::to_owned)
         .collect();
-    let config_keys: std::collections::HashSet<String> = plugin
-        .config_fields
-        .iter()
-        .filter_map(field_key)
-        .map(ToOwned::to_owned)
-        .collect();
-
     for field in &plugin.config_fields {
         if let Some((key, value)) = field_default_entry(field) {
             config_extra.entry(key.to_string()).or_insert(value);
@@ -693,8 +686,6 @@ fn build_extension_config(
     for (key, value) in object {
         if credential_keys.contains(key) {
             credentials.extra.insert(key.clone(), value.clone());
-        } else if config_keys.contains(key) {
-            config_extra.insert(key.clone(), value.clone());
         } else {
             config_extra.insert(key.clone(), value.clone());
         }

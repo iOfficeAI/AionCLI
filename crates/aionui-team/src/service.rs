@@ -1,3 +1,6 @@
+mod response_builder;
+mod spawn_support;
+
 use std::path::PathBuf;
 use std::sync::{Arc, Weak};
 
@@ -6,15 +9,16 @@ use aionui_api_types::{
     AddAgentRequest, CreateConversationRequest, CreateTeamRequest, GuideMcpConfig, TeamAgentResponse, TeamMcpPhase,
     TeamMcpStatusPayload, TeamResponse, WebSocketMessage,
 };
-use aionui_common::{AgentKillReason, AgentType, ProviderWithModel, generate_id, now_ms};
+use aionui_common::{AgentKillReason, ProviderWithModel, generate_id, now_ms};
 use aionui_conversation::ConversationService;
 use aionui_db::models::TeamRow;
-use aionui_db::{ITeamRepository, UpdateTeamParams};
+use aionui_db::{IAgentMetadataRepository, ITeamRepository, UpdateTeamParams};
 use aionui_realtime::EventBroadcaster;
 use dashmap::DashMap;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
+use self::spawn_support::parse_agent_type;
 use crate::error::TeamError;
 use crate::session::TeamSession;
 use crate::types::{Team, TeamAgent, TeammateRole};
@@ -28,6 +32,7 @@ struct SessionEntry {
 
 pub struct TeamSessionService {
     repo: Arc<dyn ITeamRepository>,
+    agent_metadata_repo: Arc<dyn IAgentMetadataRepository>,
     conversation_service: ConversationService,
     broadcaster: Arc<dyn EventBroadcaster>,
     task_manager: Arc<dyn IWorkerTaskManager>,
@@ -56,6 +61,7 @@ pub struct TeamSessionService {
 impl TeamSessionService {
     pub fn new(
         repo: Arc<dyn ITeamRepository>,
+        agent_metadata_repo: Arc<dyn IAgentMetadataRepository>,
         conversation_service: ConversationService,
         broadcaster: Arc<dyn EventBroadcaster>,
         task_manager: Arc<dyn IWorkerTaskManager>,
@@ -64,6 +70,7 @@ impl TeamSessionService {
     ) -> Arc<Self> {
         Arc::new_cyclic(|weak| Self {
             repo,
+            agent_metadata_repo,
             conversation_service,
             broadcaster,
             task_manager,
@@ -244,7 +251,7 @@ impl TeamSessionService {
             warn!(team_id = %team.id, error = %e, "auto ensure_session after create_team failed");
         }
 
-        Ok(team.to_response())
+        self.build_team_response(&team).await
     }
 
     pub async fn list_teams(&self) -> Result<Vec<TeamResponse>, TeamError> {
@@ -252,7 +259,7 @@ impl TeamSessionService {
         let mut teams = Vec::with_capacity(rows.len());
         for row in &rows {
             let team = Team::from_row(row)?;
-            teams.push(team.to_response());
+            teams.push(self.build_team_response(&team).await?);
         }
         Ok(teams)
     }
@@ -264,7 +271,7 @@ impl TeamSessionService {
             .await?
             .ok_or_else(|| TeamError::TeamNotFound(team_id.into()))?;
         let team = Team::from_row(&row)?;
-        Ok(team.to_response())
+        self.build_team_response(&team).await
     }
 
     pub async fn remove_team(&self, user_id: &str, team_id: &str) -> Result<(), TeamError> {
@@ -397,8 +404,7 @@ impl TeamSessionService {
             entry.session.add_agent(&agent).await;
         }
 
-        let response = agent.to_response();
-        Ok(response)
+        self.build_agent_response(&agent).await
     }
 
     pub async fn remove_agent(&self, user_id: &str, team_id: &str, slot_id: &str) -> Result<(), TeamError> {
@@ -638,13 +644,18 @@ impl TeamSessionService {
                 .warmup(user_id, &agent.conversation_id, &self.task_manager)
                 .await
             {
+                let msg = format!("failed to warm up rebuilt agent {}: {e}", agent.slot_id);
+                self.broadcast_mcp_phase(team_id, &agent.slot_id, TeamMcpPhase::SessionError, None, |p| {
+                    p.error = Some(msg.clone());
+                });
                 warn!(
                     team_id,
                     slot_id = %agent.slot_id,
                     conversation_id = %agent.conversation_id,
                     error = %e,
-                    "warmup failed during rebuild; agent will not be wakeable until next user message"
+                    "warmup failed during rebuild"
                 );
+                return Err(TeamError::InvalidRequest(msg));
             }
         }
         Ok(())
@@ -931,187 +942,5 @@ impl TeamSessionService {
             }
         });
         Ok(())
-    }
-
-    /// Route an MCP `team_spawn_agent` call into the live [`TeamSession`].
-    ///
-    /// Looks up the session for `team_id` (errors with [`TeamError::SessionNotFound`]
-    /// when absent) and delegates to [`TeamSession::spawn_agent`]. The MCP
-    /// dispatch layer holds a [`Weak<TeamSessionService>`] and calls this to
-    /// avoid wiring a direct `Arc<TeamSession>` into the MCP server — the
-    /// session is owned by the service's `sessions` map.
-    pub async fn spawn_agent_in_session(
-        &self,
-        team_id: &str,
-        caller_slot_id: &str,
-        req: crate::session::SpawnAgentRequest,
-    ) -> Result<TeamAgent, TeamError> {
-        let entry = self
-            .sessions
-            .get(team_id)
-            .ok_or_else(|| TeamError::SessionNotFound(team_id.into()))?;
-        entry.session.spawn_agent(caller_slot_id, req).await
-    }
-
-    pub fn dispose_all(&self) {
-        let keys: Vec<String> = self.sessions.iter().map(|entry| entry.key().clone()).collect();
-        for key in keys {
-            self.stop_session(&key);
-        }
-        info!("All team sessions disposed");
-    }
-
-    /// Accessor used by [`TeamSession::spawn_agent`] to reach the conversation
-    /// service without threading it through every call site.
-    pub(crate) fn conversation_service_ref(&self) -> &ConversationService {
-        &self.conversation_service
-    }
-
-    /// Create the conversation + persist the new agent slot for a spawn.
-    ///
-    /// Holds the per-team `add_agent` lock for the entirety of the
-    /// read-modify-write on `teams.agents`, matching [`TeamSessionService::add_agent`]
-    /// (W4-D23) so concurrent spawns cannot race and drop slots.
-    ///
-    /// The lock is *not* held across the process warmup step — callers
-    /// (`TeamSession::spawn_agent`) wire that up separately so a slow
-    /// `warmup` never stalls other spawns against the same team.
-    pub(crate) async fn persist_spawned_agent(
-        &self,
-        team_id: &str,
-        user_id: &str,
-        name: String,
-        backend: String,
-        model: String,
-        custom_agent_id: Option<String>,
-    ) -> Result<TeamAgent, TeamError> {
-        let lock = self
-            .add_agent_locks
-            .entry(team_id.to_owned())
-            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-            .clone();
-        let _guard = lock.lock().await;
-
-        let row = self
-            .repo
-            .get_team(team_id)
-            .await?
-            .ok_or_else(|| TeamError::TeamNotFound(team_id.into()))?;
-        let mut team = Team::from_row(&row)?;
-
-        let agent_type = parse_agent_type(&backend)?;
-        let conv_req = CreateConversationRequest {
-            r#type: agent_type,
-            name: Some(name.clone()),
-            model: Some(ProviderWithModel {
-                provider_id: backend.clone(),
-                model: model.clone(),
-                use_model: None,
-            }),
-            source: None,
-            channel_chat_id: None,
-            extra: serde_json::json!({
-                "teamId": team_id,
-                "backend": backend,
-            }),
-        };
-        let conv = self
-            .conversation_service
-            .create(user_id, conv_req)
-            .await
-            .map_err(|e| TeamError::InvalidRequest(format!("failed to create conversation: {e}")))?;
-
-        let agent = TeamAgent {
-            slot_id: generate_id(),
-            name,
-            role: TeammateRole::Teammate,
-            conversation_id: conv.id,
-            backend,
-            model,
-            custom_agent_id,
-            status: None,
-            conversation_type: None,
-            cli_path: None,
-        };
-
-        team.agents.push(agent.clone());
-        let agents_json = serde_json::to_string(&team.agents)?;
-        self.repo
-            .update_team(
-                team_id,
-                &UpdateTeamParams {
-                    name: None,
-                    agents: Some(agents_json),
-                    lead_agent_id: None,
-                },
-            )
-            .await?;
-
-        Ok(agent)
-    }
-}
-
-/// Known ACP vendor labels. Kept in lockstep with the `agent_metadata`
-/// seed in `005_agent_metadata.sql` — a caller hitting an unknown
-/// vendor should trigger a schema drift discussion, not silently fall
-/// through.
-const ACP_VENDOR_LABELS: &[&str] = &[
-    "claude",
-    "codex",
-    "gemini",
-    "qwen",
-    "codebuddy",
-    "droid",
-    "goose",
-    "auggie",
-    "kimi",
-    "opencode",
-    "copilot",
-    "qoder",
-    "vibe",
-    "cursor",
-    "kiro",
-    "hermes",
-    "snow",
-];
-
-fn parse_agent_type(backend: &str) -> Result<AgentType, TeamError> {
-    // Any registered ACP vendor label collapses to `AgentType::Acp`.
-    if ACP_VENDOR_LABELS.contains(&backend) {
-        return Ok(AgentType::Acp);
-    }
-    // Otherwise interpret as a top-level `AgentType` (e.g. "acp",
-    // "nanobot", "aionrs", "remote", "openclaw-gateway").
-    let quoted = format!("\"{backend}\"");
-    if let Ok(t) = serde_json::from_str::<AgentType>(&quoted) {
-        return Ok(t);
-    }
-    Err(TeamError::InvalidRequest(format!("unsupported backend: {backend}")))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_agent_type_known_backends() {
-        assert_eq!(parse_agent_type("acp").unwrap(), AgentType::Acp);
-        assert_eq!(parse_agent_type("nanobot").unwrap(), AgentType::Nanobot);
-        assert_eq!(parse_agent_type("remote").unwrap(), AgentType::Remote);
-        assert_eq!(parse_agent_type("aionrs").unwrap(), AgentType::Aionrs);
-    }
-
-    #[test]
-    fn parse_agent_type_unknown_backend_returns_error() {
-        let err = parse_agent_type("unknown").unwrap_err();
-        assert!(matches!(err, TeamError::InvalidRequest(_)));
-    }
-
-    #[test]
-    fn parse_agent_type_openclaw_gateway() {
-        assert_eq!(
-            parse_agent_type("openclaw-gateway").unwrap(),
-            AgentType::OpenclawGateway
-        );
     }
 }

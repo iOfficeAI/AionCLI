@@ -21,6 +21,7 @@ use aionui_ai_agent::{
     acp_routes, agent_routes, auxiliary_routes, build_agent_factory, connection_test_routes, remote_agent_routes,
 };
 use aionui_api_types::GuideMcpConfig;
+use aionui_assets::{AssetRouterState, asset_routes};
 use aionui_assistant::{AssistantRouterState, assistant_routes};
 use aionui_auth::{
     AuthRouterState, AuthState, CookieConfig, JwtService, QrTokenStore, auth_middleware, auth_routes, csrf_middleware,
@@ -551,6 +552,7 @@ pub fn create_router_with_all_state(services: &AppServices, states: ModuleStates
 
     // Office proxy routes — exempt from auth (serve iframe content)
     let office_proxy = office_proxy_routes(states.office);
+    let public_assets = asset_routes(AssetRouterState::default());
 
     // WebSocket upgrade route — exempt from CSRF (no cookie-based
     // double-submit) but still gets security response headers.
@@ -593,6 +595,7 @@ pub fn create_router_with_all_state(services: &AppServices, states: ModuleStates
     }
     .merge(ws_routes)
     .merge(office_proxy)
+    .merge(public_assets)
     .layer(middleware::from_fn(security_headers_middleware));
 
     let router = with_access_log(router);

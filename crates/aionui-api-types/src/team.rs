@@ -108,6 +108,8 @@ pub struct TeamAgentResponse {
     pub role: String,
     pub conversation_id: String,
     pub backend: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
     pub model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub custom_agent_id: Option<String>,
@@ -442,6 +444,7 @@ mod tests {
             role: "lead".into(),
             conversation_id: "conv-1".into(),
             backend: "acp".into(),
+            icon: Some("/api/assets/logos/ai-major/claude.svg".into()),
             model: "claude".into(),
             custom_agent_id: Some("agent-x".into()),
             status: Some("idle".into()),
@@ -452,6 +455,7 @@ mod tests {
         assert_eq!(json["role"], "lead");
         assert_eq!(json["conversation_id"], "conv-1");
         assert_eq!(json["backend"], "acp");
+        assert_eq!(json["icon"], "/api/assets/logos/ai-major/claude.svg");
         assert_eq!(json["model"], "claude");
         assert_eq!(json["custom_agent_id"], "agent-x");
         assert_eq!(json["status"], "idle");
@@ -465,11 +469,13 @@ mod tests {
             role: "teammate".into(),
             conversation_id: "conv-2".into(),
             backend: "acp".into(),
+            icon: None,
             model: "claude".into(),
             custom_agent_id: None,
             status: None,
         };
         let json = serde_json::to_value(&agent).unwrap();
+        assert!(json.get("icon").is_none());
         assert!(json.get("custom_agent_id").is_none());
         assert!(json.get("status").is_none());
     }
@@ -485,6 +491,7 @@ mod tests {
                 role: "lead".into(),
                 conversation_id: "conv-1".into(),
                 backend: "acp".into(),
+                icon: Some("/api/assets/logos/ai-major/claude.svg".into()),
                 model: "claude".into(),
                 custom_agent_id: None,
                 status: None,
@@ -543,6 +550,7 @@ mod tests {
                 role: "teammate".into(),
                 conversation_id: "conv-3".into(),
                 backend: "claude".into(),
+                icon: Some("/api/assets/logos/ai-major/claude.svg".into()),
                 model: "opus".into(),
                 custom_agent_id: None,
                 status: Some("idle".into()),
@@ -590,6 +598,7 @@ mod tests {
             role: "lead".into(),
             conversation_id: "conv-1".into(),
             backend: "acp".into(),
+            icon: Some("/api/assets/logos/ai-major/claude.svg".into()),
             model: "claude".into(),
             custom_agent_id: Some("custom-1".into()),
             status: Some("working".into()),
@@ -611,6 +620,7 @@ mod tests {
                     role: "lead".into(),
                     conversation_id: "c1".into(),
                     backend: "acp".into(),
+                    icon: None,
                     model: "claude".into(),
                     custom_agent_id: None,
                     status: None,
@@ -621,6 +631,7 @@ mod tests {
                     role: "teammate".into(),
                     conversation_id: "c2".into(),
                     backend: "acp".into(),
+                    icon: Some("/api/assets/logos/tools/coding/codex.svg".into()),
                     model: "claude".into(),
                     custom_agent_id: Some("x".into()),
                     status: Some("idle".into()),
@@ -657,6 +668,7 @@ mod tests {
                 role: "teammate".into(),
                 conversation_id: "c3".into(),
                 backend: "claude".into(),
+                icon: None,
                 model: "sonnet".into(),
                 custom_agent_id: None,
                 status: None,

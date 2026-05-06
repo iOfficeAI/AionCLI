@@ -9,12 +9,40 @@ use std::time::Duration;
 
 use aionui_team::mcp::protocol::{read_frame, write_frame};
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::process::Command;
 use tokio::time::timeout;
 
 const BRIDGE_BIN: &str = env!("CARGO_BIN_EXE_aionui-backend");
+
+async fn write_stdio_message<W: AsyncWriteExt + Unpin>(writer: &mut W, value: &Value) {
+    let body = serde_json::to_vec(value).unwrap();
+    let header = format!("Content-Length: {}\r\n\r\n", body.len());
+    writer.write_all(header.as_bytes()).await.unwrap();
+    writer.write_all(&body).await.unwrap();
+}
+
+async fn read_stdio_message<R: AsyncBufReadExt + AsyncReadExt + Unpin>(reader: &mut R) -> Value {
+    let mut content_length = None;
+    let mut header_line = String::new();
+    loop {
+        header_line.clear();
+        let n = reader.read_line(&mut header_line).await.unwrap();
+        assert!(n > 0, "unexpected EOF while reading stdio headers");
+        let trimmed = header_line.trim();
+        if trimmed.is_empty() {
+            break;
+        }
+        if let Some(len) = trimmed.strip_prefix("Content-Length:") {
+            content_length = Some(len.trim().parse::<usize>().unwrap());
+        }
+    }
+
+    let mut body = vec![0; content_length.expect("missing Content-Length header")];
+    reader.read_exact(&mut body).await.unwrap();
+    serde_json::from_slice(&body).unwrap()
+}
 
 /// 1) spawn bridge → mock TCP server accepts → stdin "tools/list" round-trip.
 ///    Also verifies the bridge injects `auth_token` + `slot_id` into the
@@ -77,35 +105,38 @@ async fn bridge_forwards_initialize_and_tools_list() {
 
     let mut stdin = child.stdin.take().unwrap();
     let stdout = child.stdout.take().unwrap();
-    let mut stdout_lines = BufReader::new(stdout).lines();
+    let mut stdout_reader = BufReader::new(stdout);
 
-    stdin
-        .write_all(
-            b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\
-               \"params\":{\"protocolVersion\":\"2024-11-05\"}}\n",
-        )
-        .await
-        .unwrap();
-    stdin
-        .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}\n")
-        .await
-        .unwrap();
+    write_stdio_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":1,
+            "method":"initialize",
+            "params":{"protocolVersion":"2024-11-05"}
+        }),
+    )
+    .await;
+    write_stdio_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":2,
+            "method":"tools/list"
+        }),
+    )
+    .await;
+    stdin.flush().await.unwrap();
 
-    let line1 = timeout(Duration::from_secs(5), stdout_lines.next_line())
+    let v1 = timeout(Duration::from_secs(5), read_stdio_message(&mut stdout_reader))
         .await
-        .expect("initialize response timeout")
-        .unwrap()
-        .expect("eof before initialize response");
-    let v1: Value = serde_json::from_str(&line1).unwrap();
+        .expect("initialize response timeout");
     assert_eq!(v1["id"], 1);
     assert_eq!(v1["result"]["protocolVersion"], "2024-11-05");
 
-    let line2 = timeout(Duration::from_secs(5), stdout_lines.next_line())
+    let v2 = timeout(Duration::from_secs(5), read_stdio_message(&mut stdout_reader))
         .await
-        .expect("tools/list response timeout")
-        .unwrap()
-        .expect("eof before tools/list response");
-    let v2: Value = serde_json::from_str(&line2).unwrap();
+        .expect("tools/list response timeout");
     assert_eq!(v2["id"], 2);
     assert_eq!(v2["result"]["tools"][0]["name"], "team_members");
 

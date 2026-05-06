@@ -29,6 +29,7 @@ use aionui_realtime::EventBroadcaster;
 use aionui_team::mcp::protocol::{read_frame, write_frame};
 use aionui_team::service::TeamSessionService;
 use aionui_team::{TeamAgent, TeamSession, TeammateRole};
+use async_trait::async_trait;
 use common::MockTeamRepo;
 use serde_json::{Value, json};
 use tokio::net::TcpStream;
@@ -201,11 +202,13 @@ impl StubTaskManager {
     }
 }
 
+#[async_trait]
 impl aionui_ai_agent::IWorkerTaskManager for StubTaskManager {
     fn get_task(&self, conversation_id: &str) -> Option<AgentManagerHandle> {
         self.tasks.lock().unwrap().get(conversation_id).cloned()
     }
-    fn get_or_build_task(&self, _: &str, _: BuildTaskOptions) -> Result<AgentManagerHandle, AppError> {
+
+    async fn get_or_build_task(&self, _: &str, _: BuildTaskOptions) -> Result<AgentManagerHandle, AppError> {
         Err(AppError::Internal(
             "StubTaskManager does not support get_or_build_task".into(),
         ))

@@ -396,6 +396,7 @@ pub fn build_team_state(
     }
     let service = TeamSessionService::new(
         team_repo,
+        Arc::new(SqliteAgentMetadataRepository::new(services.database.pool().clone())),
         conv_service,
         services.event_bus.clone(),
         services.worker_task_manager.clone(),

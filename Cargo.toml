@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/aionui-assets",
     "crates/aionui-common",
     "crates/aionui-db",
     "crates/aionui-api-types",
@@ -29,6 +30,7 @@ license = "MIT"
 [workspace.dependencies]
 # Internal crates
 aionui-common = { path = "crates/aionui-common" }
+aionui-assets = { path = "crates/aionui-assets" }
 aionui-db = { path = "crates/aionui-db" }
 aionui-api-types = { path = "crates/aionui-api-types" }
 aionui-realtime = { path = "crates/aionui-realtime" }
@@ -58,6 +60,7 @@ tokio = { version = "1", features = ["full"] }
 axum = { version = "0.8", features = ["multipart", "ws"] }
 tower = { version = "0.5" }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
+http = "1"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -118,6 +121,7 @@ ignore = "0.4"
 zip = "2"
 git2 = "0.20"
 mime_guess = "2"
+rust-embed = "8"
 
 # Cron
 cron = "0.15"

@@ -109,12 +109,17 @@ pub struct TeamAgent {
 
 impl TeamAgent {
     pub fn to_response(&self) -> TeamAgentResponse {
+        self.to_response_with_icon(None)
+    }
+
+    pub fn to_response_with_icon(&self, icon: Option<String>) -> TeamAgentResponse {
         TeamAgentResponse {
             slot_id: self.slot_id.clone(),
             name: self.name.clone(),
             role: self.role.to_string(),
             conversation_id: self.conversation_id.clone(),
             backend: self.backend.clone(),
+            icon,
             model: self.model.clone(),
             custom_agent_id: self.custom_agent_id.clone(),
             status: self.status.map(|s| s.to_string()),
@@ -501,8 +506,29 @@ mod tests {
         let resp = agent.to_response();
         assert_eq!(resp.slot_id, "s1");
         assert_eq!(resp.role, "lead");
+        assert!(resp.icon.is_none());
         assert_eq!(resp.status.as_deref(), Some("working"));
         assert_eq!(resp.custom_agent_id.as_deref(), Some("custom-1"));
+    }
+
+    #[test]
+    fn team_agent_to_response_with_icon() {
+        let agent = TeamAgent {
+            slot_id: "s1".into(),
+            name: "Lead".into(),
+            role: TeammateRole::Lead,
+            conversation_id: "c1".into(),
+            backend: "claude".into(),
+            model: "opus".into(),
+            custom_agent_id: None,
+            status: None,
+            conversation_type: None,
+            cli_path: None,
+        };
+
+        let resp = agent.to_response_with_icon(Some("/api/assets/logos/ai-major/claude.svg".into()));
+        assert_eq!(resp.icon.as_deref(), Some("/api/assets/logos/ai-major/claude.svg"));
+        assert_eq!(resp.backend, "claude");
     }
 
     #[test]

@@ -1008,10 +1008,7 @@ impl ConversationService {
             ));
             let mut continuation_count = 0usize;
 
-            loop {
-                let Some((current_send, msg_id)) = pending_send.take() else {
-                    break;
-                };
+            while let Some((current_send, msg_id)) = pending_send.take() {
                 if continuation_count >= MAX_CRON_CONTINUATIONS_PER_TURN {
                     warn!(
                         conversation_id = %conv_id,

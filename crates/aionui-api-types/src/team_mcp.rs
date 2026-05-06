@@ -65,7 +65,7 @@ mod tests {
         // Forward-compat: extra fields in persisted `conversation.extra.team_mcp_stdio_config`
         // JSON (e.g. added by a later backend version) must still round-trip through
         // older binaries without error.
-        let json = r#"{"team_id":"t-1","port":1,"token":"t","slot_id":"s","future_field":42}"#;
+        let json = r#"{"team_id":"t-1","port":1,"token":"t","slot_id":"s","binary_path":"/usr/bin/aionui-backend","future_field":42}"#;
         let parsed: TeamMcpStdioConfig = serde_json::from_str(json).unwrap();
         assert_eq!(parsed.team_id, "t-1");
         assert_eq!(parsed.port, 1);
