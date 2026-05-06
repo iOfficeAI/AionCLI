@@ -10,7 +10,7 @@ use tracing::{debug, info, warn};
 use crate::acp_agent_service::AcpAgentService;
 use crate::agent_manager::AgentManagerHandle;
 use crate::agent_registry::AgentRegistry;
-use crate::remote_agent::RemoteAgentConfig;
+use crate::manager::remote::RemoteAgentConfig;
 use crate::skill_manager::AcpSkillManager;
 use crate::task_manager::AgentFactory;
 use crate::types::{

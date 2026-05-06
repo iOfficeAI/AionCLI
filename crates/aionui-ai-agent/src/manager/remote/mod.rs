@@ -1,3 +1,9 @@
+pub mod routes;
+pub mod service;
+
+pub use routes::{RemoteAgentRouterState, remote_agent_routes};
+pub use service::RemoteAgentService;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
