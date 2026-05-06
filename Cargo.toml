@@ -101,6 +101,9 @@ dashmap = "6"
 # WebSocket
 tokio-tungstenite = "0.26"
 
+# Protobuf
+prost = "0.13"
+
 # Semver
 semver = "1"
 
