@@ -249,7 +249,7 @@ pub struct ShutdownAgentInput {
 // Backend whitelist for spawn_agent
 // ---------------------------------------------------------------------------
 
-const SPAWN_BACKEND_WHITELIST: &[&str] = &["claude", "codex"];
+const SPAWN_BACKEND_WHITELIST: &[&str] = crate::guide::capability::TEAM_CAPABLE_BACKENDS;
 
 pub fn is_whitelisted_backend(backend: &str) -> bool {
     SPAWN_BACKEND_WHITELIST.contains(&backend)

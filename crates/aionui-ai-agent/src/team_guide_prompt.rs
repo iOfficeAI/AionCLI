@@ -19,7 +19,7 @@
 /// the time of W5-D28b. Kept as a local copy to avoid a crate-dependency
 /// cycle (see module docs); when a new backend is whitelisted for team
 /// membership it must be added in **both** places.
-const TEAM_GUIDE_CAPABLE_BACKENDS: &[&str] = &["claude", "codex", "gemini", "aionrs"];
+const TEAM_GUIDE_CAPABLE_BACKENDS: &[&str] = &["claude", "codex", "gemini", "aionrs", "codebuddy"];
 
 const EXPLICIT_TEAM_REQUEST_CRITERIA: &str = "\
 - The user explicitly asks to create a Team

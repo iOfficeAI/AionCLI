@@ -6,7 +6,7 @@ use crate::team_guide_prompt;
 use aionui_api_types::AgentMetadata;
 
 /// Backends for which solo conversations receive the Guide MCP server.
-const TEAM_CAPABLE_BACKENDS: &[&str] = &["claude", "codex", "gemini", "aionrs"];
+const TEAM_CAPABLE_BACKENDS: &[&str] = &["claude", "codex", "gemini", "aionrs", "codebuddy"];
 
 /// Pre-computed workspace information.
 #[derive(Debug, Clone)]

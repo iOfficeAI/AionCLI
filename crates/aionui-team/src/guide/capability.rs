@@ -1,4 +1,4 @@
-pub const TEAM_CAPABLE_BACKENDS: &[&str] = &["claude", "codex", "gemini", "aionrs"];
+pub const TEAM_CAPABLE_BACKENDS: &[&str] = &["claude", "codex", "gemini", "aionrs", "codebuddy"];
 
 pub fn is_team_capable_backend(backend: &str, mcp_stdio_capable: bool) -> bool {
     TEAM_CAPABLE_BACKENDS.contains(&backend) || mcp_stdio_capable

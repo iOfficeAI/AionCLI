@@ -595,7 +595,10 @@ async fn exec_spawn_agent(
     if let Some(bk) = agent_type.as_deref()
         && !is_whitelisted_backend(bk)
     {
-        return Err(format!("Backend '{bk}' not allowed. Whitelist: claude, codex"));
+        return Err(format!(
+            "Backend '{bk}' not allowed. Whitelist: {}",
+            crate::guide::capability::TEAM_CAPABLE_BACKENDS.join(", ")
+        ));
     }
 
     let req = SpawnAgentRequest {

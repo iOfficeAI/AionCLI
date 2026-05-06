@@ -688,10 +688,9 @@ impl TeamSession {
             return Err(TeamError::DuplicateAgentName(requested_name));
         }
 
-        // Step 3: backend whitelist. Empty/missing agent_type inherits from
-        // the caller. The whitelist is intentionally narrow to match the
-        // phase1 spawn scope — widen only via a contract change.
-        const SPAWN_BACKEND_WHITELIST: &[&str] = &["claude", "codex"];
+        // Step 3: backend whitelist. Canonical list lives in
+        // guide::capability::TEAM_CAPABLE_BACKENDS.
+        let spawn_backend_whitelist = crate::guide::capability::TEAM_CAPABLE_BACKENDS;
         let backend = req
             .agent_type
             .as_deref()
@@ -699,7 +698,7 @@ impl TeamSession {
             .filter(|s| !s.is_empty())
             .unwrap_or(caller.backend.as_str())
             .to_owned();
-        if !SPAWN_BACKEND_WHITELIST.contains(&backend.as_str()) {
+        if !spawn_backend_whitelist.contains(&backend.as_str()) {
             return Err(TeamError::BackendNotAllowed(backend));
         }
 
