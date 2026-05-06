@@ -1,4 +1,3 @@
-use crate::IAgentManager;
 use crate::acp_protocol::AcpProtocol;
 use crate::agent_registry::CatalogSender;
 use crate::cli_process::CliAgentProcess;
@@ -892,9 +891,17 @@ impl AcpAgentManager {
 }
 
 #[async_trait::async_trait]
-impl IAgentManager for AcpAgentManager {
+impl crate::agent_task::IAgentTask for AcpAgentManager {
     fn agent_type(&self) -> AgentType {
         AgentType::Acp
+    }
+
+    fn conversation_id(&self) -> &str {
+        &self.params.conversation_id
+    }
+
+    fn workspace(&self) -> &str {
+        &self.params.workspace.path
     }
 
     fn status(&self) -> Option<ConversationStatus> {
@@ -903,14 +910,6 @@ impl IAgentManager for AcpAgentManager {
             Ok(guard) => *guard,
             Err(_) => None,
         }
-    }
-
-    fn workspace(&self) -> &str {
-        &self.params.workspace.path
-    }
-
-    fn conversation_id(&self) -> &str {
-        &self.params.conversation_id
     }
 
     fn last_activity_at(&self) -> TimestampMs {
@@ -959,28 +958,6 @@ impl IAgentManager for AcpAgentManager {
         Ok(())
     }
 
-    fn confirm(
-        &self,
-        _msg_id: &str,
-        call_id: &str,
-        data: serde_json::Value,
-        _always_allow: bool,
-    ) -> Result<(), AppError> {
-        let option_id = confirm_option_id(&data)
-            .ok_or_else(|| AppError::BadRequest("ACP confirmation requires an option_id string".into()))?;
-
-        self.permission_router
-            .confirm(call_id, option_id, &self.params.conversation_id)
-    }
-
-    fn get_confirmations(&self) -> Vec<Confirmation> {
-        Vec::new()
-    }
-
-    fn check_approval(&self, _action: &str, _command_type: Option<&str>) -> bool {
-        false
-    }
-
     fn kill(&self, reason: Option<AgentKillReason>) -> Result<(), AppError> {
         info!(
             conversation_id = %self.params.conversation_id,
@@ -1011,8 +988,45 @@ impl IAgentManager for AcpAgentManager {
 
         Ok(())
     }
+}
 
-    async fn get_mode(&self) -> Result<aionui_api_types::AgentModeResponse, AppError> {
+/// ACP-specific operations that used to live on `IAgentManager` and are
+/// now reached through `AgentInstance::Acp(..)` matches in the routes +
+/// services. Kept as inherent methods so the enum-match callsite reads
+/// `m.get_mode()` with no trait import.
+impl AcpAgentManager {
+    /// Submit a permission response for a pending tool call. ACP confirms
+    /// always carry an `option_id`; `always_allow` is consumed by the CLI
+    /// and is not reflected in the local approval memory (the ACP CLI
+    /// tracks its own).
+    pub fn confirm(
+        &self,
+        _msg_id: &str,
+        call_id: &str,
+        data: serde_json::Value,
+        _always_allow: bool,
+    ) -> Result<(), AppError> {
+        let option_id = confirm_option_id(&data)
+            .ok_or_else(|| AppError::BadRequest("ACP confirmation requires an option_id string".into()))?;
+
+        self.permission_router
+            .confirm(call_id, option_id, &self.params.conversation_id)
+    }
+
+    /// ACP tracks pending permission prompts through the permission
+    /// router, not through a surfaced confirmation list, so the enum-
+    /// level helper returns empty when the variant is ACP.
+    pub fn get_confirmations(&self) -> Vec<Confirmation> {
+        Vec::new()
+    }
+
+    /// Approval memory is not tracked at the manager level for ACP —
+    /// every tool request round-trips through the CLI.
+    pub fn check_approval(&self, _action: &str, _command_type: Option<&str>) -> bool {
+        false
+    }
+
+    pub async fn get_mode(&self) -> Result<aionui_api_types::AgentModeResponse, AppError> {
         let desired = self
             .desired_mode()
             .await
@@ -1029,7 +1043,7 @@ impl IAgentManager for AcpAgentManager {
         })
     }
 
-    async fn set_mode(&self, mode: &str) -> Result<(), AppError> {
+    pub async fn set_mode(&self, mode: &str) -> Result<(), AppError> {
         let normalized_mode = normalize_requested_mode(&self.params.metadata, mode);
         if normalized_mode.is_empty() {
             return Ok(());
@@ -1050,47 +1064,6 @@ impl IAgentManager for AcpAgentManager {
         session.set_desired_mode(ModeId::new(normalized_mode));
         self.commit_session_changes(&mut session).await;
         Ok(())
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-}
-
-/// PR #8a: the new, slim `IAgentTask` surface delegates to the existing
-/// `IAgentManager` methods. Once PR #8c deletes `IAgentManager`, these
-/// bodies will absorb the underlying implementations directly.
-#[async_trait::async_trait]
-impl crate::agent_task::IAgentTask for AcpAgentManager {
-    fn agent_type(&self) -> AgentType {
-        <Self as IAgentManager>::agent_type(self)
-    }
-    fn conversation_id(&self) -> &str {
-        <Self as IAgentManager>::conversation_id(self)
-    }
-    fn workspace(&self) -> &str {
-        <Self as IAgentManager>::workspace(self)
-    }
-    fn status(&self) -> Option<ConversationStatus> {
-        <Self as IAgentManager>::status(self)
-    }
-    fn last_activity_at(&self) -> TimestampMs {
-        <Self as IAgentManager>::last_activity_at(self)
-    }
-    fn subscribe(&self) -> broadcast::Receiver<AgentStreamEvent> {
-        <Self as IAgentManager>::subscribe(self)
-    }
-    fn subscribe_stream(&self) -> broadcast::Receiver<AgentStreamChunk> {
-        <Self as IAgentManager>::subscribe_stream(self)
-    }
-    async fn send_message(&self, data: SendMessageData) -> Result<(), AppError> {
-        <Self as IAgentManager>::send_message(self, data).await
-    }
-    async fn stop(&self) -> Result<(), AppError> {
-        <Self as IAgentManager>::stop(self).await
-    }
-    fn kill(&self, reason: Option<AgentKillReason>) -> Result<(), AppError> {
-        <Self as IAgentManager>::kill(self, reason)
     }
 }
 

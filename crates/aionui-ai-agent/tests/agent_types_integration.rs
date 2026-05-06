@@ -9,16 +9,7 @@
 
 use std::sync::Arc;
 
-// Explicit imports (no glob) — `aionui_ai_agent::*` still re-exports the
-// legacy `IAgentManager`, so glob-importing it alongside `IAgentTask`
-// would cause ambiguous method resolution during the PR #8 migration.
-// PR #8c removes `IAgentManager` and restores the crate prelude.
-use aionui_ai_agent::IAgentManager;
-use aionui_ai_agent::agent_task::{AgentInstance, IAgentTask, IMockAgent};
-use aionui_ai_agent::{
-    AgentFactory, AgentStreamEvent, AionrsAgentManager, AionrsResolvedConfig, BuildTaskOptions, IWorkerTaskManager,
-    SendMessageData, SkillIndex, WorkerTaskManagerImpl, build_system_instructions_with_skills_index,
-};
+use aionui_ai_agent::*;
 use aionui_common::{AgentKillReason, AgentType, ConversationStatus, ProviderWithModel, TimestampMs, now_ms};
 use serde_json::json;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -113,8 +104,8 @@ async fn aionrs_agent_kill_succeeds() {
     let agent = AionrsAgentManager::new("conv-1".into(), "/proj".into(), make_aionrs_config(), None)
         .await
         .unwrap();
-    assert!(IAgentTask::kill(&agent, None).is_ok());
-    assert!(IAgentTask::kill(&agent, Some(AgentKillReason::IdleTimeout)).is_ok());
+    assert!(agent.kill(None).is_ok());
+    assert!(agent.kill(Some(AgentKillReason::IdleTimeout)).is_ok());
 }
 
 #[tokio::test]
@@ -122,7 +113,10 @@ async fn aionrs_agent_confirm_succeeds() {
     let agent = AionrsAgentManager::new("conv-1".into(), "/proj".into(), make_aionrs_config(), None)
         .await
         .unwrap();
-    let result = IAgentManager::confirm(&agent, "msg", "call", json!({}), false);
+    // `confirm` is an inherent method on `AionrsAgentManager` (reached via
+    // `AgentInstance::Aionrs(..)` in production); the test calls it
+    // directly on the concrete manager.
+    let result = agent.confirm("msg", "call", json!({}), false);
     assert!(result.is_ok());
 }
 
@@ -131,16 +125,12 @@ async fn aionrs_agent_metadata() {
     let agent = AionrsAgentManager::new("conv-abc".into(), "/work".into(), make_aionrs_config(), None)
         .await
         .unwrap();
-    // UFCS because AionrsAgentManager currently implements BOTH `IAgentManager`
-    // (legacy, removed in PR #8c) and `IAgentTask` (new), so the short
-    // `agent.status()` etc. calls would be ambiguous. Once PR #8c deletes
-    // `IAgentManager` these can collapse back to method-call syntax.
-    assert_eq!(IAgentTask::agent_type(&agent), AgentType::Aionrs);
-    assert_eq!(IAgentTask::workspace(&agent), "/work");
-    assert_eq!(IAgentTask::conversation_id(&agent), "conv-abc");
-    assert_eq!(IAgentTask::status(&agent), Some(ConversationStatus::Pending));
-    assert!(IAgentManager::get_confirmations(&agent).is_empty());
-    assert!(!IAgentManager::check_approval(&agent, "any", None));
+    assert_eq!(agent.agent_type(), AgentType::Aionrs);
+    assert_eq!(agent.workspace(), "/work");
+    assert_eq!(agent.conversation_id(), "conv-abc");
+    assert_eq!(agent.status(), Some(ConversationStatus::Pending));
+    assert!(agent.get_confirmations().is_empty());
+    assert!(!agent.check_approval("any", None));
 }
 
 // ---------------------------------------------------------------------------

@@ -7,7 +7,6 @@ use serde_json::{Value, json};
 use tokio::sync::{Mutex, RwLock, broadcast};
 use tracing::{debug, error, info, warn};
 
-use crate::agent_manager::IAgentManager;
 use aionui_common::CommandSpec;
 
 use crate::cli_process::CliAgentProcess;
@@ -159,21 +158,21 @@ impl NanobotAgentManager {
 }
 
 #[async_trait::async_trait]
-impl IAgentManager for NanobotAgentManager {
+impl crate::agent_task::IAgentTask for NanobotAgentManager {
     fn agent_type(&self) -> AgentType {
         AgentType::Nanobot
     }
 
-    fn status(&self) -> Option<ConversationStatus> {
-        self.state.try_read().ok().and_then(|g| g.status)
+    fn conversation_id(&self) -> &str {
+        &self.conversation_id
     }
 
     fn workspace(&self) -> &str {
         &self.workspace
     }
 
-    fn conversation_id(&self) -> &str {
-        &self.conversation_id
+    fn status(&self) -> Option<ConversationStatus> {
+        self.state.try_read().ok().and_then(|g| g.status)
     }
 
     fn last_activity_at(&self) -> TimestampMs {
@@ -210,21 +209,6 @@ impl IAgentManager for NanobotAgentManager {
         self.process.send(&payload).await
     }
 
-    /// Nanobot does not support confirmations.
-    fn confirm(&self, _msg_id: &str, _call_id: &str, _data: Value, _always_allow: bool) -> Result<(), AppError> {
-        Err(AppError::BadRequest("Nanobot does not support confirmations".into()))
-    }
-
-    /// Nanobot has no pending confirmations.
-    fn get_confirmations(&self) -> Vec<Confirmation> {
-        Vec::new()
-    }
-
-    /// Nanobot does not support YOLO / approval memory.
-    fn check_approval(&self, _action: &str, _command_type: Option<&str>) -> bool {
-        false
-    }
-
     fn kill(&self, reason: Option<AgentKillReason>) -> Result<(), AppError> {
         info!(
             conversation_id = %self.conversation_id,
@@ -242,41 +226,23 @@ impl IAgentManager for NanobotAgentManager {
 
         Ok(())
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
-/// PR #8a: `IAgentTask` delegates to `IAgentManager` during the transition.
-#[async_trait::async_trait]
-impl crate::agent_task::IAgentTask for NanobotAgentManager {
-    fn agent_type(&self) -> AgentType {
-        <Self as IAgentManager>::agent_type(self)
+/// Nanobot-specific operations reached through `AgentInstance::Nanobot(..)`.
+/// Nanobot does not track tool confirmations or approval memory, so these
+/// are trivial stubs matching the semantics of the removed `IAgentManager`
+/// default impls.
+impl NanobotAgentManager {
+    pub fn confirm(&self, _msg_id: &str, _call_id: &str, _data: Value, _always_allow: bool) -> Result<(), AppError> {
+        Err(AppError::BadRequest("Nanobot does not support confirmations".into()))
     }
-    fn conversation_id(&self) -> &str {
-        <Self as IAgentManager>::conversation_id(self)
+
+    pub fn get_confirmations(&self) -> Vec<Confirmation> {
+        Vec::new()
     }
-    fn workspace(&self) -> &str {
-        <Self as IAgentManager>::workspace(self)
-    }
-    fn status(&self) -> Option<ConversationStatus> {
-        <Self as IAgentManager>::status(self)
-    }
-    fn last_activity_at(&self) -> TimestampMs {
-        <Self as IAgentManager>::last_activity_at(self)
-    }
-    fn subscribe(&self) -> broadcast::Receiver<AgentStreamEvent> {
-        <Self as IAgentManager>::subscribe(self)
-    }
-    async fn send_message(&self, data: SendMessageData) -> Result<(), AppError> {
-        <Self as IAgentManager>::send_message(self, data).await
-    }
-    async fn stop(&self) -> Result<(), AppError> {
-        <Self as IAgentManager>::stop(self).await
-    }
-    fn kill(&self, reason: Option<AgentKillReason>) -> Result<(), AppError> {
-        <Self as IAgentManager>::kill(self, reason)
+
+    pub fn check_approval(&self, _action: &str, _command_type: Option<&str>) -> bool {
+        false
     }
 }
 

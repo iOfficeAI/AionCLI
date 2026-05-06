@@ -7,7 +7,7 @@
 //! - Real in-memory mock repo (same pattern as existing tests)
 //! - Real TCP MCP server (TeamMcpServer)
 //! - Real TeamSession with real Mailbox + TaskBoard
-//! - RecordingAgent: captures send_message calls (mock IAgentManager)
+//! - RecordingAgent: captures send_message calls (mock `IAgentTask` / `IMockAgent`)
 //! - StubTaskManager: pre-populated with RecordingAgent instances
 //!
 //! Scenarios that cannot yet be wired without a live TeamSessionService DB path

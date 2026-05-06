@@ -28,17 +28,12 @@ pub mod types;
 
 pub use acp_agent::AcpAgentManager;
 pub use acp_routes::{AcpRouterState, acp_routes};
-pub use agent_manager::{AgentManagerHandle, IAgentManager, approval_key};
+pub use agent_manager::approval_key;
 pub use agent_registry::AgentRegistry;
-// `AgentInstance` is the new canonical agent handle; `IAgentTask` is
-// intentionally *not* re-exported while `IAgentManager` still exists —
-// otherwise glob-importing consumers would see ambiguous method
-// resolution (`agent_type`/`status`/...). PR #8c removes `IAgentManager`
-// and adds `pub use agent_task::IAgentTask` here.
 pub use agent_routes::{AgentRouterState, agent_routes};
-pub use agent_task::AgentInstance;
 #[cfg(any(test, feature = "test-support"))]
 pub use agent_task::IMockAgent;
+pub use agent_task::{AgentInstance, IAgentTask};
 pub use aionrs_agent::AionrsAgentManager;
 pub use aionui_api_types::{
     AcpBuildExtra, AcpModelInfo, AcpSessionConfigOption, AionrsBuildExtra, OpenClawBuildExtra, OpenClawGatewayConfig,

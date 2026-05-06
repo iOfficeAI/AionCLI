@@ -16,7 +16,6 @@ use serde_json::Value;
 use tokio::sync::{Mutex, broadcast};
 use tracing::{debug, error, info};
 
-use crate::agent_manager::IAgentManager;
 use crate::backend_output_sink::BackendOutputSink;
 use crate::backend_protocol_sink::BackendProtocolSink;
 use crate::stream_event::AgentStreamEvent;
@@ -157,21 +156,21 @@ impl AionrsAgentManager {
 }
 
 #[async_trait::async_trait]
-impl IAgentManager for AionrsAgentManager {
+impl crate::agent_task::IAgentTask for AionrsAgentManager {
     fn agent_type(&self) -> AgentType {
         AgentType::Aionrs
     }
 
-    fn status(&self) -> Option<ConversationStatus> {
-        self.status.read().ok().and_then(|s| *s)
+    fn conversation_id(&self) -> &str {
+        &self.conversation_id
     }
 
     fn workspace(&self) -> &str {
         &self.workspace
     }
 
-    fn conversation_id(&self) -> &str {
-        &self.conversation_id
+    fn status(&self) -> Option<ConversationStatus> {
+        self.status.read().ok().and_then(|s| *s)
     }
 
     fn last_activity_at(&self) -> TimestampMs {
@@ -271,7 +270,23 @@ impl IAgentManager for AionrsAgentManager {
         Ok(())
     }
 
-    fn confirm(&self, _msg_id: &str, call_id: &str, data: Value, always_allow: bool) -> Result<(), AppError> {
+    fn kill(&self, reason: Option<AgentKillReason>) -> Result<(), AppError> {
+        info!(
+            conversation_id = %self.conversation_id,
+            ?reason,
+            "Killing Aionrs agent"
+        );
+        if let Ok(mut s) = self.status.write() {
+            *s = None;
+        }
+        Ok(())
+    }
+}
+
+/// Aionrs-specific operations reached through `AgentInstance::Aionrs(..)`
+/// matches in the routes + services.
+impl AionrsAgentManager {
+    pub fn confirm(&self, _msg_id: &str, call_id: &str, data: Value, always_allow: bool) -> Result<(), AppError> {
         if let Ok(mut confs) = self.confirmations.write() {
             confs.retain(|c| c.call_id != call_id);
         }
@@ -306,34 +321,22 @@ impl IAgentManager for AionrsAgentManager {
         Ok(())
     }
 
-    fn get_confirmations(&self) -> Vec<Confirmation> {
+    pub fn get_confirmations(&self) -> Vec<Confirmation> {
         self.confirmations.read().map(|c| c.clone()).unwrap_or_default()
     }
 
-    fn check_approval(&self, action: &str, _command_type: Option<&str>) -> bool {
+    pub fn check_approval(&self, action: &str, _command_type: Option<&str>) -> bool {
         self.approval_manager.is_auto_approved(action)
     }
 
-    fn kill(&self, reason: Option<AgentKillReason>) -> Result<(), AppError> {
-        info!(
-            conversation_id = %self.conversation_id,
-            ?reason,
-            "Killing Aionrs agent"
-        );
-        if let Ok(mut s) = self.status.write() {
-            *s = None;
-        }
-        Ok(())
-    }
-
-    async fn get_mode(&self) -> Result<AgentModeResponse, AppError> {
+    pub async fn get_mode(&self) -> Result<AgentModeResponse, AppError> {
         Ok(AgentModeResponse {
             mode: self.approval_manager.current_mode(),
             initialized: true,
         })
     }
 
-    async fn set_mode(&self, mode: &str) -> Result<(), AppError> {
+    pub async fn set_mode(&self, mode: &str) -> Result<(), AppError> {
         let prev = self.approval_manager.current_mode();
         self.approval_manager.set_mode(parse_session_mode(mode));
         info!(
@@ -343,42 +346,6 @@ impl IAgentManager for AionrsAgentManager {
             "Aionrs session mode switched"
         );
         Ok(())
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-}
-
-/// PR #8a: `IAgentTask` delegates to `IAgentManager` during the transition.
-#[async_trait::async_trait]
-impl crate::agent_task::IAgentTask for AionrsAgentManager {
-    fn agent_type(&self) -> AgentType {
-        <Self as IAgentManager>::agent_type(self)
-    }
-    fn conversation_id(&self) -> &str {
-        <Self as IAgentManager>::conversation_id(self)
-    }
-    fn workspace(&self) -> &str {
-        <Self as IAgentManager>::workspace(self)
-    }
-    fn status(&self) -> Option<ConversationStatus> {
-        <Self as IAgentManager>::status(self)
-    }
-    fn last_activity_at(&self) -> TimestampMs {
-        <Self as IAgentManager>::last_activity_at(self)
-    }
-    fn subscribe(&self) -> broadcast::Receiver<AgentStreamEvent> {
-        <Self as IAgentManager>::subscribe(self)
-    }
-    async fn send_message(&self, data: SendMessageData) -> Result<(), AppError> {
-        <Self as IAgentManager>::send_message(self, data).await
-    }
-    async fn stop(&self) -> Result<(), AppError> {
-        <Self as IAgentManager>::stop(self).await
-    }
-    fn kill(&self, reason: Option<AgentKillReason>) -> Result<(), AppError> {
-        <Self as IAgentManager>::kill(self, reason)
     }
 }
 
@@ -393,6 +360,7 @@ fn parse_session_mode(s: &str) -> SessionMode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent_task::IAgentTask;
 
     fn make_test_config() -> AionrsResolvedConfig {
         AionrsResolvedConfig {

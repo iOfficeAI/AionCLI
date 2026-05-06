@@ -17,7 +17,6 @@ use tokio::sync::{Mutex, RwLock, broadcast};
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, error, info, warn};
 
-use crate::agent_manager::IAgentManager;
 use crate::stream_event::AgentStreamEvent;
 use crate::types::SendMessageData;
 
@@ -261,21 +260,21 @@ impl RemoteAgentManager {
 use crate::agent_manager::approval_key;
 
 #[async_trait::async_trait]
-impl IAgentManager for RemoteAgentManager {
+impl crate::agent_task::IAgentTask for RemoteAgentManager {
     fn agent_type(&self) -> AgentType {
         AgentType::Remote
     }
 
-    fn status(&self) -> Option<ConversationStatus> {
-        self.state.try_read().ok().and_then(|g| g.status)
+    fn conversation_id(&self) -> &str {
+        &self.conversation_id
     }
 
     fn workspace(&self) -> &str {
         &self.workspace
     }
 
-    fn conversation_id(&self) -> &str {
-        &self.conversation_id
+    fn status(&self) -> Option<ConversationStatus> {
+        self.state.try_read().ok().and_then(|g| g.status)
     }
 
     fn last_activity_at(&self) -> TimestampMs {
@@ -337,7 +336,28 @@ impl IAgentManager for RemoteAgentManager {
         Ok(())
     }
 
-    fn confirm(&self, _msg_id: &str, call_id: &str, _data: Value, always_allow: bool) -> Result<(), AppError> {
+    fn kill(&self, reason: Option<AgentKillReason>) -> Result<(), AppError> {
+        info!(
+            conversation_id = %self.conversation_id,
+            ?reason,
+            "Killing Remote agent"
+        );
+
+        // Drop the WebSocket sink to close the connection.
+        // We can't move the Mutex into a spawned task, so we clear it inline
+        // using try_lock (non-blocking). If the lock is held, the connection
+        // will close when the holder drops it.
+        if let Ok(mut guard) = self.ws_sink.try_lock() {
+            *guard = None;
+        }
+
+        Ok(())
+    }
+}
+
+/// Remote-specific operations reached through `AgentInstance::Remote(..)`.
+impl RemoteAgentManager {
+    pub fn confirm(&self, _msg_id: &str, call_id: &str, _data: Value, always_allow: bool) -> Result<(), AppError> {
         if let Ok(mut state) = self.state.try_write() {
             if always_allow && let Some(conf) = state.confirmations.iter().find(|c| c.call_id == call_id) {
                 let key = approval_key(conf.action.as_deref(), conf.command_type.as_deref());
@@ -357,14 +377,14 @@ impl IAgentManager for RemoteAgentManager {
         Ok(())
     }
 
-    fn get_confirmations(&self) -> Vec<Confirmation> {
+    pub fn get_confirmations(&self) -> Vec<Confirmation> {
         self.state
             .try_read()
             .map(|g| g.confirmations.clone())
             .unwrap_or_default()
     }
 
-    fn check_approval(&self, action: &str, command_type: Option<&str>) -> bool {
+    pub fn check_approval(&self, action: &str, command_type: Option<&str>) -> bool {
         self.state
             .try_read()
             .map(|g| {
@@ -372,60 +392,6 @@ impl IAgentManager for RemoteAgentManager {
                 g.approval_memory.get(&key).copied().unwrap_or(false)
             })
             .unwrap_or(false)
-    }
-
-    fn kill(&self, reason: Option<AgentKillReason>) -> Result<(), AppError> {
-        info!(
-            conversation_id = %self.conversation_id,
-            ?reason,
-            "Killing Remote agent"
-        );
-
-        // Drop the WebSocket sink to close the connection.
-        // We can't move the Mutex into a spawned task, so we clear it inline
-        // using try_lock (non-blocking). If the lock is held, the connection
-        // will close when the holder drops it.
-        if let Ok(mut guard) = self.ws_sink.try_lock() {
-            *guard = None;
-        }
-
-        Ok(())
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-}
-
-/// PR #8a: `IAgentTask` delegates to `IAgentManager` during the transition.
-#[async_trait::async_trait]
-impl crate::agent_task::IAgentTask for RemoteAgentManager {
-    fn agent_type(&self) -> AgentType {
-        <Self as IAgentManager>::agent_type(self)
-    }
-    fn conversation_id(&self) -> &str {
-        <Self as IAgentManager>::conversation_id(self)
-    }
-    fn workspace(&self) -> &str {
-        <Self as IAgentManager>::workspace(self)
-    }
-    fn status(&self) -> Option<ConversationStatus> {
-        <Self as IAgentManager>::status(self)
-    }
-    fn last_activity_at(&self) -> TimestampMs {
-        <Self as IAgentManager>::last_activity_at(self)
-    }
-    fn subscribe(&self) -> broadcast::Receiver<AgentStreamEvent> {
-        <Self as IAgentManager>::subscribe(self)
-    }
-    async fn send_message(&self, data: SendMessageData) -> Result<(), AppError> {
-        <Self as IAgentManager>::send_message(self, data).await
-    }
-    async fn stop(&self) -> Result<(), AppError> {
-        <Self as IAgentManager>::stop(self).await
-    }
-    fn kill(&self, reason: Option<AgentKillReason>) -> Result<(), AppError> {
-        <Self as IAgentManager>::kill(self, reason)
     }
 }
 

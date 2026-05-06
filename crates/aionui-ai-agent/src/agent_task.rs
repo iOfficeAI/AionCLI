@@ -9,16 +9,14 @@
 //! and is reached through the `AgentInstance` enum — forcing every callsite
 //! to say out loud which agent type it is addressing.
 //!
-//! This replaces the old bloated `IAgentManager` trait + `as_any()`
-//! downcast pattern (see `agent_manager.rs` — still present during the
-//! PR #8 migration, scheduled for removal in PR #8c).
+//! Replaces the old bloated `IAgentManager` trait + `as_any()` downcast
+//! pattern (deleted in PR #8c).
 use std::sync::Arc;
 
 use aionui_common::{AgentKillReason, AgentType, AppError, ConversationStatus, TimestampMs};
 use tokio::sync::broadcast;
 
 use crate::acp_agent::AcpAgentManager;
-use crate::agent_manager::IAgentManager;
 use crate::aionrs_agent::AionrsAgentManager;
 use crate::manager::remote::RemoteAgentManager;
 use crate::nanobot_agent::NanobotAgentManager;

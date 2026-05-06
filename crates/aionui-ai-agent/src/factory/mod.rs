@@ -174,7 +174,7 @@ async fn build_agent(deps: Arc<AgentFactoryDeps>, options: BuildTaskOptions) -> 
             arc.start_session_event_tracker();
             CatalogForwarder::spawn(
                 arc.agent_metadata_id().to_owned(),
-                crate::IAgentManager::subscribe(arc.as_ref()),
+                crate::IAgentTask::subscribe(arc.as_ref()),
                 catalog_tx,
             );
 
