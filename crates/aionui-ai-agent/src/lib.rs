@@ -19,6 +19,7 @@ pub mod idle_scanner;
 pub mod manager;
 pub mod nanobot_agent;
 pub mod openclaw;
+pub mod protocol;
 pub mod skill_manager;
 pub mod stream_event;
 pub mod task_manager;
