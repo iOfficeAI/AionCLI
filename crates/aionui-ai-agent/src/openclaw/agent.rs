@@ -11,7 +11,8 @@ use tracing::{debug, error, info, warn};
 use crate::agent_manager::{IAgentManager, approval_key};
 use crate::cli_process::CliAgentProcess;
 use crate::stream_event::AgentStreamEvent;
-use crate::types::{OpenClawBuildExtra, OpenClawGatewayConfig, SendMessageData};
+use crate::types::SendMessageData;
+use aionui_api_types::{OpenClawBuildExtra, OpenClawGatewayConfig};
 
 use super::config::load_openclaw_config;
 use super::connection::{AuthConfig, OpenClawConnection};

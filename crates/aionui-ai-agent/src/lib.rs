@@ -32,6 +32,10 @@ pub use agent_manager::{AgentManagerHandle, IAgentManager, approval_key};
 pub use agent_registry::AgentRegistry;
 pub use agent_routes::{AgentRouterState, agent_routes};
 pub use aionrs_agent::AionrsAgentManager;
+pub use aionui_api_types::{
+    AcpBuildExtra, AcpModelInfo, AcpSessionConfigOption, AionrsBuildExtra, OpenClawBuildExtra, OpenClawGatewayConfig,
+    RemoteBuildExtra, SlashCommandItem,
+};
 pub use auxiliary_routes::{AuxiliaryRouterState, auxiliary_routes};
 pub use backend_output_sink::BackendOutputSink;
 pub use backend_protocol_sink::BackendProtocolSink;
@@ -50,8 +54,4 @@ pub use skill_manager::{
 };
 pub use stream_event::AgentStreamEvent;
 pub use task_manager::{AgentFactory, IWorkerTaskManager, WorkerTaskManagerImpl};
-pub use types::{
-    AcpBuildExtra, AcpModelInfo, AcpSessionConfigOption, AgentStreamChunk, AionrsBuildExtra, AionrsCompatOverrides,
-    AionrsResolvedConfig, BuildTaskOptions, OpenClawBuildExtra, OpenClawGatewayConfig, RemoteBuildExtra,
-    SendMessageData, SlashCommandItem,
-};
+pub use types::{AgentStreamChunk, AionrsCompatOverrides, AionrsResolvedConfig, BuildTaskOptions, SendMessageData};

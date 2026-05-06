@@ -1,5 +1,5 @@
 use aion_agent::session::SessionManager;
-use aionui_api_types::GuideMcpConfig;
+use aionui_api_types::{AcpBuildExtra, AionrsBuildExtra, GuideMcpConfig, OpenClawBuildExtra, RemoteBuildExtra};
 use aionui_common::{AgentType, AppError, CommandSpec};
 use aionui_db::{IProviderRepository, IRemoteAgentRepository};
 use futures_util::FutureExt;
@@ -13,10 +13,7 @@ use crate::agent_registry::AgentRegistry;
 use crate::manager::remote::RemoteAgentConfig;
 use crate::skill_manager::AcpSkillManager;
 use crate::task_manager::AgentFactory;
-use crate::types::{
-    AcpBuildExtra, AionrsBuildExtra, AionrsCompatOverrides, AionrsResolvedConfig, BuildTaskOptions, OpenClawBuildExtra,
-    RemoteBuildExtra,
-};
+use crate::types::{AionrsCompatOverrides, AionrsResolvedConfig, BuildTaskOptions};
 use crate::{AcpAgentManager, AionrsAgentManager, NanobotAgentManager, OpenClawAgentManager, RemoteAgentManager};
 
 /// Dependencies needed by the agent factory to construct agents.

@@ -15,7 +15,7 @@ use aionui_common::AppError;
 use crate::acp_agent_service;
 use crate::agent_registry::AgentRegistry;
 use crate::task_manager::IWorkerTaskManager;
-use crate::types::AcpModelInfo;
+use aionui_api_types::AcpModelInfo;
 
 /// Router state for ACP management routes.
 #[derive(Clone)]

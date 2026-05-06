@@ -11,13 +11,14 @@ use crate::stream_event::{
     permission_request_to_event_data,
 };
 use crate::team_guide_prompt;
-use crate::types::{AcpBuildExtra, AgentStreamChunk, SendMessageData, SlashCommandItem};
+use crate::types::{AgentStreamChunk, SendMessageData};
 use agent_client_protocol::schema::{
     AgentCapabilities, AvailableCommand, CancelNotification, ContentBlock, EnvVariable, LoadSessionRequest, McpServer,
     McpServerStdio, NewSessionRequest, PromptRequest, SessionConfigKind, SessionConfigOption, SessionId,
     SessionModeState, SessionModelState, SetSessionConfigOptionRequest, SetSessionModeRequest, SetSessionModelRequest,
     UsageUpdate,
 };
+use aionui_api_types::{AcpBuildExtra, SlashCommandItem};
 use aionui_api_types::{AgentHandshake, AgentMetadata};
 use aionui_api_types::{GuideMcpConfig, TeamMcpStdioConfig};
 use aionui_common::{

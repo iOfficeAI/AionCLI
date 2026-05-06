@@ -1,5 +1,6 @@
 //! All HTTP request/response DTOs shared across the API surface.
 mod acp;
+mod agent_build_extra;
 mod agent_discovery;
 mod assistant;
 mod auth;
@@ -29,6 +30,10 @@ pub use acp::{
     SessionConfigOptionUpdate, SetConfigOptionRequest, SetConfigOptionsRequest, SetModeRequest, SetModelRequest,
     SideQuestionRequest, SideQuestionResponse, TestCustomAgentRequest, TestCustomAgentResponse, WorkspaceBrowseQuery,
     WorkspaceEntry,
+};
+pub use agent_build_extra::{
+    AcpBuildExtra, AcpModelInfo, AcpSessionConfigOption, AionrsBuildExtra, OpenClawBuildExtra, OpenClawGatewayConfig,
+    RemoteBuildExtra, SlashCommandItem,
 };
 pub use agent_discovery::{AgentEnvEntry, AgentHandshake, AgentMetadata, AgentSource, AgentSourceInfo, BehaviorPolicy};
 pub use assistant::{

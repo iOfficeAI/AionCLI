@@ -10,12 +10,11 @@ use crate::acp_agent::AcpAgentManager;
 use crate::agent_manager::AgentManagerHandle;
 use crate::openclaw::OpenClawAgentManager;
 use crate::task_manager::IWorkerTaskManager;
-use crate::types::SlashCommandItem;
 use agent_client_protocol::schema::{AgentCapabilities, SessionConfigOption, UsageUpdate};
 use aionui_api_types::{
     AgentModeResponse, ApiResponse, GetModelInfoResponse, ModelInfoEntry, ModelInfoPayload, SetConfigOptionRequest,
     SetConfigOptionsRequest, SetModeRequest, SetModelRequest, SideQuestionRequest, SideQuestionResponse,
-    WorkspaceBrowseQuery, WorkspaceEntry,
+    SlashCommandItem, WorkspaceBrowseQuery, WorkspaceEntry,
 };
 use aionui_auth::CurrentUser;
 use aionui_common::{AgentType, AppError};

@@ -2,7 +2,6 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use aionui_api_types::{GuideMcpConfig, TeamMcpStdioConfig};
 use aionui_common::{AgentType, ProviderWithModel};
 
 /// Data payload for sending a user message to an Agent.
@@ -36,130 +35,7 @@ pub struct BuildTaskOptions {
     pub extra: serde_json::Value,
 }
 
-/// ACP-specific fields extracted from `extra` in [`BuildTaskOptions`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AcpBuildExtra {
-    /// Agent registry ID. When provided, `backend`/`cli_path` are resolved
-    /// from the registry and need not be supplied by the caller.
-    #[serde(default)]
-    pub agent_id: Option<String>,
-    /// Vendor label (e.g. "claude"). When present without `agent_id`, the
-    /// factory looks up the first builtin row matching this label.
-    #[serde(default)]
-    pub backend: Option<String>,
-    /// Path to the CLI executable (resolved from registry when `agent_id` is set).
-    #[serde(default)]
-    pub cli_path: Option<String>,
-    /// Agent name within the ACP backend.
-    #[serde(default)]
-    pub agent_name: Option<String>,
-    /// Custom agent ID (for user-defined agents).
-    #[serde(default)]
-    pub custom_agent_id: Option<String>,
-    /// Preset context to inject.
-    #[serde(default)]
-    pub preset_context: Option<String>,
-    /// Resolved skill snapshot for the session. Populated from
-    /// `conversation.extra.skills` by the factory. No runtime filtering —
-    /// what the caller sends is what the agent sees.
-    #[serde(default)]
-    pub skills: Vec<String>,
-    /// Preset assistant ID.
-    #[serde(default)]
-    pub preset_assistant_id: Option<String>,
-    /// Session mode override.
-    #[serde(default)]
-    pub session_mode: Option<String>,
-    /// Associated cron job ID.
-    #[serde(default)]
-    pub cron_job_id: Option<String>,
-    /// Team session MCP stdio config. When present, the factory injects it as
-    /// a stdio MCP server on `session/new`. Written by
-    /// `TeamSessionService::ensure_session` into `conversation.extra`; solo
-    /// conversations leave this unset.
-    #[serde(default)]
-    pub team_mcp_stdio_config: Option<TeamMcpStdioConfig>,
-    /// Guide MCP stdio config for solo team-capable sessions.
-    /// When present alongside a team-capable `backend` and no `team_mcp_stdio_config`,
-    /// `build_new_session_request` injects the Guide as a stdio MCP server.
-    #[serde(default)]
-    pub guide_mcp_config: Option<GuideMcpConfig>,
-    /// Owner user_id — passed to the Guide MCP bridge so `aion_create_team`
-    /// can associate the new team with the correct user.
-    #[serde(default)]
-    pub user_id: Option<String>,
-}
-
-/// OpenClaw gateway configuration.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct OpenClawGatewayConfig {
-    pub host: Option<String>,
-    pub port: Option<u16>,
-    pub token: Option<String>,
-    pub password: Option<String>,
-    #[serde(default)]
-    pub use_external_gateway: bool,
-    pub cli_path: Option<String>,
-}
-
-/// OpenClaw-specific fields extracted from `extra` in [`BuildTaskOptions`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OpenClawBuildExtra {
-    /// Optional downstream AI backend (informational only).
-    #[serde(default)]
-    pub backend: Option<String>,
-    /// Agent name.
-    #[serde(default)]
-    pub agent_name: Option<String>,
-    /// OpenClaw gateway configuration.
-    #[serde(default)]
-    pub gateway: OpenClawGatewayConfig,
-    /// Resolved skill snapshot for the session. Populated from
-    /// `conversation.extra.skills` by the factory.
-    #[serde(default)]
-    pub skills: Vec<String>,
-    /// Preset assistant ID.
-    #[serde(default)]
-    pub preset_assistant_id: Option<String>,
-    /// Associated cron job ID.
-    #[serde(default)]
-    pub cron_job_id: Option<String>,
-    /// Persisted session key for resume (from conversation.extra.sessionKey).
-    #[serde(default, rename = "sessionKey")]
-    pub session_key: Option<String>,
-}
-
-/// Remote agent-specific fields extracted from `extra` in [`BuildTaskOptions`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RemoteBuildExtra {
-    /// Remote agent configuration ID.
-    pub remote_agent_id: String,
-}
-
-/// Aionrs-specific fields extracted from `extra` in [`BuildTaskOptions`].
-///
-/// Provider credentials (provider name, api_key, model) are resolved from
-/// the providers table in the factory — they are NOT expected in `extra`.
-/// This struct only carries optional overrides the caller may supply.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct AionrsBuildExtra {
-    /// System prompt override.
-    #[serde(default)]
-    pub system_prompt: Option<String>,
-    /// Max tokens per response.
-    #[serde(default = "default_aionrs_max_tokens")]
-    pub max_tokens: u32,
-    /// Max agentic turns.
-    #[serde(default)]
-    pub max_turns: Option<usize>,
-    /// Session mode (default, auto_edit, yolo).
-    #[serde(default)]
-    pub session_mode: Option<String>,
-}
-
 /// Provider-specific compat overrides resolved in the factory.
-///
-/// These are merged on top of the provider defaults in the agent manager.
 #[derive(Debug, Clone, Default)]
 pub struct AionrsCompatOverrides {
     pub max_tokens_field: Option<String>,
@@ -167,9 +43,6 @@ pub struct AionrsCompatOverrides {
 }
 
 /// Fully resolved Aionrs configuration passed to the agent manager.
-///
-/// Constructed in the factory by combining provider DB data with
-/// optional overrides from [`AionrsBuildExtra`].
 #[derive(Debug, Clone)]
 pub struct AionrsResolvedConfig {
     /// LLM provider name (anthropic, openai, bedrock, vertex).
@@ -194,40 +67,7 @@ pub struct AionrsResolvedConfig {
     pub session_mode: Option<String>,
 }
 
-fn default_aionrs_max_tokens() -> u32 {
-    8192
-}
-
-/// ACP model information returned by the ACP backend.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AcpModelInfo {
-    pub model_id: String,
-    pub model_name: Option<String>,
-    pub provider: Option<String>,
-}
-
-/// ACP session configuration option.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AcpSessionConfigOption {
-    pub config_id: String,
-    pub label: String,
-    pub value: String,
-    /// Possible values; `None` means free-form input.
-    pub options: Option<Vec<String>>,
-}
-
-/// A slash command item available in a conversation session.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SlashCommandItem {
-    pub command: String,
-    pub description: String,
-}
-
 /// Unified stream chunk published on the per-session broadcast channel.
-///
-/// Emitted by `AgentManagerHandle` implementations at every stream event so
-/// downstream subscribers (wake timeout watchdog, crash detector) can observe
-/// agent progress without intercepting the existing frontend event pipeline.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentStreamChunk {
@@ -253,11 +93,13 @@ pub enum AgentStreamChunk {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aionui_api_types::{
+        AcpBuildExtra, AcpModelInfo, AcpSessionConfigOption, OpenClawGatewayConfig, SlashCommandItem,
+    };
     use serde_json::json;
 
     #[test]
     fn acp_build_extra_accepts_payload_without_skills() {
-        // Legacy payloads without skills should still deserialize.
         let legacy = r#"{"backend":"claude"}"#;
         let parsed: AcpBuildExtra = serde_json::from_str(legacy).unwrap();
         assert!(parsed.skills.is_empty());
@@ -272,9 +114,6 @@ mod tests {
 
     #[test]
     fn acp_build_extra_missing_team_mcp_stdio_config_is_none() {
-        // Legacy extra (pre-team-wave1) must deserialize cleanly with the new
-        // optional `team_mcp_stdio_config` absent — this keeps solo chat
-        // conversations working without any migration.
         let legacy = r#"{"backend":"claude","skills":["cron"]}"#;
         let parsed: AcpBuildExtra = serde_json::from_str(legacy).unwrap();
         assert!(parsed.team_mcp_stdio_config.is_none());

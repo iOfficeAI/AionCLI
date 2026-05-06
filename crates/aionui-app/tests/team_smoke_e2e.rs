@@ -20,8 +20,9 @@ use std::sync::Arc;
 
 use aionui_ai_agent::agent_manager::IAgentManager;
 use aionui_ai_agent::stream_event::{AgentStreamEvent, ErrorEventData, FinishEventData};
-use aionui_ai_agent::types::{AcpBuildExtra, AgentStreamChunk, BuildTaskOptions, SendMessageData};
+use aionui_ai_agent::types::{AgentStreamChunk, BuildTaskOptions, SendMessageData};
 use aionui_ai_agent::{AgentFactory, IWorkerTaskManager, WorkerTaskManagerImpl};
+use aionui_api_types::AcpBuildExtra;
 use aionui_api_types::TeamMcpStdioConfig;
 use aionui_app::{AppServices, build_module_states, create_router_with_states};
 use aionui_common::{AgentKillReason, AgentType, AppError, Confirmation, ConversationStatus, TimestampMs};
