@@ -167,12 +167,12 @@ async fn build_agent(deps: Arc<AgentFactoryDeps>, options: BuildTaskOptions) -> 
             let skill_mgr = deps.skill_manager.clone();
             let catalog_tx = deps.agent_registry.catalog_sender();
 
-            let (agent, domain_rx) = AcpAgentManager::new(params, skill_mgr, catalog_tx).await?;
+            let (agent, domain_rx) = AcpAgentManager::new(params, skill_mgr, &catalog_tx).await?;
 
             let arc = Arc::new(agent);
             arc.start_permission_handler();
             arc.start_session_event_tracker();
-            arc.start_catalog_sync();
+            arc.start_catalog_sync(catalog_tx);
             let handle: AgentManagerHandle = arc.clone();
 
             // Hand the service the domain event receiver so it can

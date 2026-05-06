@@ -1,14 +1,13 @@
 use crate::IAgentManager;
-use crate::acp_protocol::{AcpProtocol, PermissionDecision, PermissionRequest};
+use crate::acp_protocol::AcpProtocol;
 use crate::agent_registry::CatalogSender;
 use crate::cli_process::CliAgentProcess;
 use crate::factory::acp_assembler::AcpSessionParams;
 use crate::first_message_injector::{InjectionConfig, inject_first_message_prefix};
-use crate::manager::acp::{AcpSession, AcpSessionEvent, PersistedSessionState};
+use crate::manager::acp::{AcpSession, AcpSessionEvent, PermissionRouter, PersistedSessionState};
 use crate::skill_manager::AcpSkillManager;
 use crate::stream_event::{
     AgentStreamEvent, AvailableCommandsEventData, FinishEventData, SessionAssignedEventData, StartEventData,
-    permission_request_to_event_data,
 };
 use crate::types::{AgentStreamChunk, SendMessageData};
 use agent_client_protocol::schema::{
@@ -24,11 +23,10 @@ use aionui_common::{
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
-use tokio::sync::{Mutex, RwLock, broadcast, mpsc, oneshot};
-use tracing::{debug, error, info};
+use tokio::sync::{Mutex, RwLock, broadcast, mpsc};
+use tracing::{error, info};
 
 /// Grace period before force-killing an ACP process (ms).
 const ACP_KILL_GRACE_MS: u64 = 500;
@@ -159,9 +157,6 @@ fn catalog_partial_from_event(event: &AgentStreamEvent) -> Option<AgentHandshake
 pub struct AcpAgentManager {
     /// Pre-computed, immutable session parameters assembled by the factory.
     params: Arc<AcpSessionParams>,
-    /// Handle used to push partial handshake updates back into the
-    /// catalog. The consumer task lives inside the registry.
-    catalog_tx: CatalogSender,
     /// Session aggregate root — owns desired/observed/advertised state.
     /// Single in-memory source of truth for session lifecycle, modes,
     /// models, config, and all runtime data previously split across
@@ -181,16 +176,15 @@ pub struct AcpAgentManager {
     /// this channel exists from D25c-1 onward so `subscribe_stream` can
     /// hand out live receivers regardless of whether emitters are active.
     stream_tx: broadcast::Sender<AgentStreamChunk>,
-    /// Timestamp of last activity (atomic for lock-free reads).
-    last_activity: AtomicI64,
+    /// Timestamp of last activity (atomic for lock-free reads). Shared
+    /// with the `PermissionRouter` so permission arrivals update the
+    /// activity timestamp without reverse-referencing the manager.
+    last_activity: Arc<AtomicI64>,
     /// Mutex for serializing session operations (new/load/send).
     session_lock: Mutex<()>,
-    /// Receiver for permission requests from the protocol layer.
-    permission_rx: Mutex<mpsc::Receiver<PermissionRequest>>,
-    /// Pending ACP permission responders keyed by tool call ID.
-    pending_permissions: StdMutex<HashMap<String, oneshot::Sender<PermissionDecision>>>,
-    /// Whether a graceful shutdown is in progress.
-    closing: std::sync::atomic::AtomicBool,
+    /// Routes permission requests from the protocol layer to the user
+    /// and back. Owns the receiver channel, pending map, and closing flag.
+    permission_router: Arc<PermissionRouter>,
     /// Shared skill manager — used to discover skills for first-message injection.
     skill_manager: Arc<AcpSkillManager>,
     /// Domain event sender — session aggregate events are forwarded here
@@ -352,12 +346,13 @@ impl AcpAgentManager {
     ///
     /// `params` is the pre-computed, immutable session bundle assembled by
     /// `assemble_acp_params` in the factory layer. `catalog_tx` is the
-    /// MPSC sender the manager uses for both the one-shot initialize
-    /// handshake write and the session-driven forwarder.
+    /// MPSC sender used for the one-shot initialize handshake write;
+    /// session-driven fields flow through the forwarder started via
+    /// `start_catalog_sync`.
     pub async fn new(
         params: Arc<AcpSessionParams>,
         skill_manager: Arc<AcpSkillManager>,
-        catalog_tx: CatalogSender,
+        catalog_tx: &CatalogSender,
     ) -> Result<(Self, mpsc::Receiver<AcpSessionEvent>), AppError> {
         let process = CliAgentProcess::spawn_for_sdk(params.command_spec.clone()).await?;
 
@@ -411,20 +406,19 @@ impl AcpAgentManager {
             session.apply_advertised_auth_methods(auth_methods);
         }
 
+        let permission_router = Arc::new(PermissionRouter::new(permission_rx));
+
         let manager = Self {
             params,
-            catalog_tx,
             session: RwLock::new(session),
             status: RwLock::new(None),
             process: Arc::new(process),
             protocol,
             event_tx,
             stream_tx,
-            last_activity: AtomicI64::new(now_ms()),
+            last_activity: Arc::new(AtomicI64::new(now_ms())),
             session_lock: Mutex::new(()),
-            permission_rx: Mutex::new(permission_rx),
-            pending_permissions: StdMutex::new(HashMap::new()),
-            closing: std::sync::atomic::AtomicBool::new(false),
+            permission_router,
             skill_manager,
             domain_event_tx,
         };
@@ -433,57 +427,10 @@ impl AcpAgentManager {
     }
 
     /// Start the permission handler loop. Must be called after the manager
-    /// is wrapped in Arc.
-    ///
-    /// This background task receives permission requests from the protocol
-    /// layer, converts them to `Permission` events, and waits for user
-    /// responses routed through the `confirm()` method.
+    /// is wrapped in Arc. Delegates to `PermissionRouter::start`.
     pub fn start_permission_handler(self: &Arc<Self>) {
-        let this = Arc::clone(self);
-        tokio::spawn(async move {
-            let mut rx = this.permission_rx.lock().await;
-
-            while let Some(perm_req) = rx.recv().await {
-                this.last_activity.store(now_ms(), Ordering::Relaxed);
-
-                let call_id = perm_req.request.tool_call.tool_call_id.to_string();
-
-                // Auto-approve team MCP tools without user interaction.
-                if Self::is_auto_approve_tool(&perm_req.request) {
-                    let _ = perm_req.response_tx.send(PermissionDecision::Selected {
-                        option_id: "allow_always".into(),
-                    });
-                    continue;
-                }
-
-                let mut pending = this.pending_permissions.lock().unwrap();
-                if let Some(previous) = pending.insert(call_id.clone(), perm_req.response_tx) {
-                    let _ = previous.send(PermissionDecision::Cancelled);
-                }
-                drop(pending);
-
-                let permission_event = permission_request_to_event_data(&perm_req.request);
-
-                if this
-                    .event_tx
-                    .send(AgentStreamEvent::AcpPermission(permission_event))
-                    .is_err()
-                    && let Some(response_tx) = this.pending_permissions.lock().unwrap().remove(&call_id)
-                {
-                    let _ = response_tx.send(PermissionDecision::Cancelled);
-                }
-            }
-        });
-    }
-
-    /// MCP tool prefixes that are auto-approved without user permission.
-    const AUTO_APPROVE_PREFIXES: &[&str] = &["mcp__aionui-team-", "mcp__aionui-team-guide__"];
-
-    fn is_auto_approve_tool(request: &agent_client_protocol::schema::RequestPermissionRequest) -> bool {
-        let title = request.tool_call.fields.title.as_deref().unwrap_or("");
-        Self::AUTO_APPROVE_PREFIXES
-            .iter()
-            .any(|prefix| title.starts_with(prefix))
+        self.permission_router
+            .start(self.event_tx.clone(), Arc::clone(&self.last_activity));
     }
 
     /// Start the session event tracker loop.
@@ -547,17 +494,19 @@ impl AcpAgentManager {
     /// actually reporting. Runs as a subscriber on this manager's
     /// broadcast bus; the registry owns the single consumer that drains
     /// the resulting MPSC.
-    pub fn start_catalog_sync(self: &Arc<Self>) {
+    ///
+    /// `catalog_tx` is passed in rather than stored on the manager — the
+    /// spawned task is the sole consumer of the sender for session-driven
+    /// updates after initialization.
+    pub fn start_catalog_sync(self: &Arc<Self>, catalog_tx: CatalogSender) {
         let id = self.params.metadata.id.clone();
-        let sender = self.catalog_tx.clone();
-        let this = Arc::clone(self);
+        let mut rx = self.event_tx.subscribe();
         tokio::spawn(async move {
-            let mut rx = this.event_tx.subscribe();
             loop {
                 match rx.recv().await {
                     Ok(event) => {
                         if let Some(partial) = catalog_partial_from_event(&event) {
-                            sender.send_partial(id.clone(), partial);
+                            catalog_tx.send_partial(id.clone(), partial);
                         }
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
@@ -1069,9 +1018,7 @@ impl IAgentManager for AcpAgentManager {
         if let Some(sid) = session_id {
             self.protocol.cancel(CancelNotification::new(SessionId::new(sid)));
         }
-        for (_, responder) in self.pending_permissions.lock().unwrap().drain() {
-            let _ = responder.send(PermissionDecision::Cancelled);
-        }
+        self.permission_router.cancel_all();
 
         Ok(())
     }
@@ -1086,19 +1033,8 @@ impl IAgentManager for AcpAgentManager {
         let option_id = confirm_option_id(&data)
             .ok_or_else(|| AppError::BadRequest("ACP confirmation requires an option_id string".into()))?;
 
-        let responder = self
-            .pending_permissions
-            .lock()
-            .unwrap()
-            .remove(call_id)
-            .ok_or_else(|| AppError::BadRequest(format!("Pending ACP permission not found: {call_id}")))?;
-
-        responder
-            .send(PermissionDecision::Selected { option_id })
-            .map_err(|_| AppError::BadRequest(format!("Pending ACP permission expired: {call_id}")))?;
-
-        debug!(conversation_id = %self.params.conversation_id, call_id, "ACP permission response forwarded");
-        Ok(())
+        self.permission_router
+            .confirm(call_id, option_id, &self.params.conversation_id)
     }
 
     fn get_confirmations(&self) -> Vec<Confirmation> {
@@ -1117,7 +1053,7 @@ impl IAgentManager for AcpAgentManager {
         );
 
         // Mark closing to prevent reconnect attempts
-        self.closing.store(true, std::sync::atomic::Ordering::Release);
+        self.permission_router.set_closing();
 
         // Cancel the current session if active
         if let Ok(session) = self.session.try_read()
@@ -1135,9 +1071,7 @@ impl IAgentManager for AcpAgentManager {
             }
         });
 
-        for (_, responder) in self.pending_permissions.lock().unwrap().drain() {
-            let _ = responder.send(PermissionDecision::Cancelled);
-        }
+        self.permission_router.cancel_all();
 
         Ok(())
     }
