@@ -494,6 +494,7 @@ dependencies = [
  "aionui-realtime",
  "async-trait",
  "axum",
+ "regex",
  "serde",
  "serde_json",
  "tokio",

@@ -18,7 +18,6 @@ pub mod connection_test_service;
 pub mod factory;
 pub mod first_message_injector;
 pub mod idle_scanner;
-pub mod middleware;
 pub mod nanobot_agent;
 pub mod openclaw;
 pub mod remote_agent;
@@ -45,10 +44,6 @@ pub use connection_test_routes::{ConnectionTestRouterState, connection_test_rout
 pub use connection_test_service::ConnectionTestService;
 pub use factory::{AgentFactoryDeps, build_agent_factory};
 pub use idle_scanner::start_idle_scanner;
-pub use middleware::{
-    CronCommand, CronCommandResult, CronCreateParams, CronUpdateParams, ICronService, MessageMiddleware,
-    MiddlewareResult, detect_cron_commands, has_cron_commands, strip_cron_commands, strip_think_tags,
-};
 pub use nanobot_agent::NanobotAgentManager;
 pub use openclaw::OpenClawAgentManager;
 pub use remote_agent::{RemoteAgentConfig, RemoteAgentManager};

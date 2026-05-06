@@ -783,13 +783,13 @@ impl aionui_conversation::OnConversationDelete for CronService {
 // ---------------------------------------------------------------------------
 
 #[async_trait::async_trait]
-impl aionui_ai_agent::middleware::ICronService for CronService {
+impl aionui_conversation::response_middleware::ICronService for CronService {
     async fn create_job(
         &self,
         _user_id: &str,
         conversation_id: &str,
-        params: &aionui_ai_agent::middleware::CronCreateParams,
-    ) -> aionui_ai_agent::middleware::CronCommandResult {
+        params: &aionui_conversation::response_middleware::CronCreateParams,
+    ) -> aionui_conversation::response_middleware::CronCommandResult {
         let schedule_dto = CronScheduleDto::Cron {
             expr: params.schedule.clone(),
             tz: None,
@@ -843,12 +843,12 @@ impl aionui_ai_agent::middleware::ICronService for CronService {
                     );
                 }
 
-                aionui_ai_agent::middleware::CronCommandResult {
+                aionui_conversation::response_middleware::CronCommandResult {
                     success: true,
                     message: format!("Created cron job '{}' ({})", job.name, job.id),
                 }
             }
-            Err(e) => aionui_ai_agent::middleware::CronCommandResult {
+            Err(e) => aionui_conversation::response_middleware::CronCommandResult {
                 success: false,
                 message: e.to_string(),
             },
@@ -859,8 +859,8 @@ impl aionui_ai_agent::middleware::ICronService for CronService {
         &self,
         _user_id: &str,
         conversation_id: &str,
-        params: &aionui_ai_agent::middleware::CronUpdateParams,
-    ) -> aionui_ai_agent::middleware::CronCommandResult {
+        params: &aionui_conversation::response_middleware::CronUpdateParams,
+    ) -> aionui_conversation::response_middleware::CronCommandResult {
         let req = UpdateCronJobRequest {
             name: Some(params.name.clone()),
             description: None,
@@ -892,26 +892,30 @@ impl aionui_ai_agent::middleware::ICronService for CronService {
                     );
                 }
 
-                aionui_ai_agent::middleware::CronCommandResult {
+                aionui_conversation::response_middleware::CronCommandResult {
                     success: true,
                     message: format!("Updated cron job '{}' ({})", job.name, job.id),
                 }
             }
-            Err(e) => aionui_ai_agent::middleware::CronCommandResult {
+            Err(e) => aionui_conversation::response_middleware::CronCommandResult {
                 success: false,
                 message: e.to_string(),
             },
         }
     }
 
-    async fn list_jobs(&self, _user_id: &str, conversation_id: &str) -> aionui_ai_agent::middleware::CronCommandResult {
+    async fn list_jobs(
+        &self,
+        _user_id: &str,
+        conversation_id: &str,
+    ) -> aionui_conversation::response_middleware::CronCommandResult {
         let query = ListCronJobsQuery {
             conversation_id: Some(conversation_id.to_owned()),
         };
         match self.list_jobs(&query).await {
             Ok(jobs) => {
                 if jobs.is_empty() {
-                    return aionui_ai_agent::middleware::CronCommandResult {
+                    return aionui_conversation::response_middleware::CronCommandResult {
                         success: true,
                         message: format!("No cron jobs found for conversation '{}'.", conversation_id),
                     };
@@ -925,7 +929,7 @@ impl aionui_ai_agent::middleware::ICronService for CronService {
                     })
                     .collect();
 
-                aionui_ai_agent::middleware::CronCommandResult {
+                aionui_conversation::response_middleware::CronCommandResult {
                     success: true,
                     message: format!(
                         "Found {} cron job(s) for conversation '{}':\n{}",
@@ -935,20 +939,24 @@ impl aionui_ai_agent::middleware::ICronService for CronService {
                     ),
                 }
             }
-            Err(e) => aionui_ai_agent::middleware::CronCommandResult {
+            Err(e) => aionui_conversation::response_middleware::CronCommandResult {
                 success: false,
                 message: e.to_string(),
             },
         }
     }
 
-    async fn delete_job(&self, _user_id: &str, job_id: &str) -> aionui_ai_agent::middleware::CronCommandResult {
+    async fn delete_job(
+        &self,
+        _user_id: &str,
+        job_id: &str,
+    ) -> aionui_conversation::response_middleware::CronCommandResult {
         match self.remove_job(job_id).await {
-            Ok(()) => aionui_ai_agent::middleware::CronCommandResult {
+            Ok(()) => aionui_conversation::response_middleware::CronCommandResult {
                 success: true,
                 message: format!("Deleted cron job '{job_id}'"),
             },
-            Err(e) => aionui_ai_agent::middleware::CronCommandResult {
+            Err(e) => aionui_conversation::response_middleware::CronCommandResult {
                 success: false,
                 message: e.to_string(),
             },

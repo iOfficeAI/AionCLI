@@ -12,7 +12,6 @@ use std::sync::{Arc, Mutex};
 
 use aionui_ai_agent::AgentRegistry;
 use aionui_ai_agent::agent_manager::AgentManagerHandle;
-use aionui_ai_agent::middleware::{CronCreateParams, CronUpdateParams};
 use aionui_ai_agent::types::BuildTaskOptions;
 use aionui_api_types::{
     CreateCronJobRequest, CronScheduleDto, ListCronJobsQuery, SaveCronSkillRequest, UpdateCronJobRequest,
@@ -20,6 +19,7 @@ use aionui_api_types::{
 };
 use aionui_common::{PaginatedResult, TimestampMs, now_ms};
 use aionui_conversation::ConversationService;
+use aionui_conversation::response_middleware::{CronCreateParams, CronUpdateParams};
 use aionui_db::{
     ConversationFilters, ConversationRowUpdate, IAcpSessionRepository, IAgentMetadataRepository,
     IConversationRepository, ICronRepository, MessageRowUpdate, MessageSearchRow, SortOrder,
@@ -1169,7 +1169,7 @@ async fn delete_skill_clears_content() {
 async fn icron_service_create_job() {
     let (svc, _, _, conv_repo) = setup_with_conv_repo().await;
 
-    use aionui_ai_agent::middleware::ICronService;
+    use aionui_conversation::response_middleware::ICronService;
 
     let params = CronCreateParams {
         name: "Agent Job".into(),
@@ -1195,7 +1195,7 @@ async fn icron_service_create_job() {
 async fn icron_service_create_job_inherits_conversation_mode_and_backend() {
     let (svc, _, _) = setup().await;
 
-    use aionui_ai_agent::middleware::ICronService;
+    use aionui_conversation::response_middleware::ICronService;
 
     let params = CronCreateParams {
         name: "Agent Job".into(),
@@ -1230,7 +1230,7 @@ async fn icron_service_create_job_inherits_conversation_mode_and_backend() {
 async fn icron_service_create_job_forces_full_auto_mode_for_generated_crons() {
     let (svc, _, _) = setup().await;
 
-    use aionui_ai_agent::middleware::ICronService;
+    use aionui_conversation::response_middleware::ICronService;
 
     let params = CronCreateParams {
         name: "Generated Agent Job".into(),
@@ -1314,7 +1314,7 @@ async fn icron_service_create_job_forces_full_auto_mode_for_generated_crons() {
 async fn icron_service_list_jobs() {
     let (svc, _, _) = setup().await;
 
-    use aionui_ai_agent::middleware::ICronService;
+    use aionui_conversation::response_middleware::ICronService;
 
     let result = ICronService::list_jobs(&svc, "user_1", "conv_1").await;
     assert!(result.success);
@@ -1336,7 +1336,7 @@ async fn icron_service_list_jobs() {
 async fn icron_service_update_job() {
     let (svc, _, _, conv_repo) = setup_with_conv_repo().await;
 
-    use aionui_ai_agent::middleware::ICronService;
+    use aionui_conversation::response_middleware::ICronService;
 
     let job = svc
         .add_job(make_create_req("Update Via Trait", every_60s()))
@@ -1371,7 +1371,7 @@ async fn icron_service_update_job() {
 async fn icron_service_delete_job() {
     let (svc, _, _) = setup().await;
 
-    use aionui_ai_agent::middleware::ICronService;
+    use aionui_conversation::response_middleware::ICronService;
 
     let job = svc
         .add_job(make_create_req("Delete Via Trait", every_60s()))

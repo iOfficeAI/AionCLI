@@ -1,10 +1,12 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
+use aionui_ai_agent::IWorkerTaskManager;
 use aionui_ai_agent::agent_manager::{AgentManagerHandle, IAgentManager};
 use aionui_ai_agent::stream_event::{AgentStreamEvent, FinishEventData, TextEventData};
 use aionui_ai_agent::types::{BuildTaskOptions, SendMessageData};
-use aionui_ai_agent::{CronCommandResult, CronCreateParams, CronUpdateParams, ICronService, IWorkerTaskManager};
+
+use crate::response_middleware::{CronCommandResult, CronCreateParams, CronUpdateParams, ICronService};
 use aionui_api_types::ConversationArtifactKind;
 use aionui_api_types::{
     CloneConversationRequest, CreateConversationRequest, ListConversationsQuery, SearchMessagesQuery,

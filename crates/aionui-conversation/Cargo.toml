@@ -12,6 +12,7 @@ aionui-auth.workspace = true
 aionui-ai-agent.workspace = true
 aionui-extension.workspace = true
 axum.workspace = true
+regex.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true

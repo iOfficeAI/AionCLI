@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use aionui_ai_agent::{
-    AgentStreamEvent, ICronService, MessageMiddleware, MiddlewareResult, stream_event::ThinkingEventData,
-};
+use aionui_ai_agent::{AgentStreamEvent, stream_event::ThinkingEventData};
+
+use crate::response_middleware::{ICronService, MessageMiddleware, MiddlewareResult};
 use aionui_api_types::WebSocketMessage;
 use aionui_common::{normalize_keys_to_snake_case, now_ms};
 
@@ -417,8 +417,8 @@ impl ICronService for SharedCronService {
         &self,
         user_id: &str,
         conversation_id: &str,
-        params: &aionui_ai_agent::CronCreateParams,
-    ) -> aionui_ai_agent::CronCommandResult {
+        params: &crate::response_middleware::CronCreateParams,
+    ) -> crate::response_middleware::CronCommandResult {
         self.0.create_job(user_id, conversation_id, params).await
     }
 
@@ -426,16 +426,16 @@ impl ICronService for SharedCronService {
         &self,
         user_id: &str,
         conversation_id: &str,
-        params: &aionui_ai_agent::CronUpdateParams,
-    ) -> aionui_ai_agent::CronCommandResult {
+        params: &crate::response_middleware::CronUpdateParams,
+    ) -> crate::response_middleware::CronCommandResult {
         self.0.update_job(user_id, conversation_id, params).await
     }
 
-    async fn list_jobs(&self, user_id: &str, conversation_id: &str) -> aionui_ai_agent::CronCommandResult {
+    async fn list_jobs(&self, user_id: &str, conversation_id: &str) -> crate::response_middleware::CronCommandResult {
         self.0.list_jobs(user_id, conversation_id).await
     }
 
-    async fn delete_job(&self, user_id: &str, job_id: &str) -> aionui_ai_agent::CronCommandResult {
+    async fn delete_job(&self, user_id: &str, job_id: &str) -> crate::response_middleware::CronCommandResult {
         self.0.delete_job(user_id, job_id).await
     }
 }
@@ -659,9 +659,9 @@ mod tests {
             &self,
             _user_id: &str,
             _conversation_id: &str,
-            _params: &aionui_ai_agent::CronCreateParams,
-        ) -> aionui_ai_agent::CronCommandResult {
-            aionui_ai_agent::CronCommandResult {
+            _params: &crate::response_middleware::CronCreateParams,
+        ) -> crate::response_middleware::CronCommandResult {
+            crate::response_middleware::CronCommandResult {
                 success: true,
                 message: "created".into(),
             }
@@ -671,23 +671,27 @@ mod tests {
             &self,
             _user_id: &str,
             _conversation_id: &str,
-            _params: &aionui_ai_agent::CronUpdateParams,
-        ) -> aionui_ai_agent::CronCommandResult {
-            aionui_ai_agent::CronCommandResult {
+            _params: &crate::response_middleware::CronUpdateParams,
+        ) -> crate::response_middleware::CronCommandResult {
+            crate::response_middleware::CronCommandResult {
                 success: true,
                 message: "updated".into(),
             }
         }
 
-        async fn list_jobs(&self, _user_id: &str, _conversation_id: &str) -> aionui_ai_agent::CronCommandResult {
-            aionui_ai_agent::CronCommandResult {
+        async fn list_jobs(
+            &self,
+            _user_id: &str,
+            _conversation_id: &str,
+        ) -> crate::response_middleware::CronCommandResult {
+            crate::response_middleware::CronCommandResult {
                 success: true,
                 message: "listed".into(),
             }
         }
 
-        async fn delete_job(&self, _user_id: &str, _job_id: &str) -> aionui_ai_agent::CronCommandResult {
-            aionui_ai_agent::CronCommandResult {
+        async fn delete_job(&self, _user_id: &str, _job_id: &str) -> crate::response_middleware::CronCommandResult {
+            crate::response_middleware::CronCommandResult {
                 success: true,
                 message: "deleted".into(),
             }

@@ -5,7 +5,7 @@
 //! - Cron command detection (6.2)
 //! - MessageMiddleware pipeline end-to-end
 
-use aionui_ai_agent::{
+use aionui_conversation::{
     CronCommand, CronCommandResult, CronCreateParams, CronUpdateParams, ICronService, MessageMiddleware,
     detect_cron_commands, has_cron_commands, strip_cron_commands, strip_think_tags,
 };
