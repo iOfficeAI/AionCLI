@@ -7,6 +7,7 @@ use agent_client_protocol::schema::{
 
 use super::events::AcpSessionEvent;
 use super::reconcile::ReconcileAction;
+use crate::shared_kernel::{ConfigKey, ConfigValue, ModeId, ModelId, SessionId};
 
 /// Decoded per-session runtime state loaded from `acp_session.session_config.runtime`.
 ///
@@ -152,8 +153,9 @@ impl AcpSession {
             return;
         }
         self.session_id = Some(sid.clone());
-        self.pending_events
-            .push(AcpSessionEvent::SessionAssigned { session_id: sid });
+        self.pending_events.push(AcpSessionEvent::SessionAssigned {
+            session_id: SessionId::new(sid),
+        });
     }
 
     /// Mark the session as opened with the CLI (first turn handshake complete).
@@ -178,8 +180,9 @@ impl AcpSession {
             return false;
         }
         self.desired.mode_id = Some(mode_id.clone());
-        self.pending_events
-            .push(AcpSessionEvent::DesiredModeChanged { mode_id });
+        self.pending_events.push(AcpSessionEvent::DesiredModeChanged {
+            mode_id: ModeId::new(mode_id),
+        });
         true
     }
 
@@ -188,9 +191,14 @@ impl AcpSession {
         let changed = self.desired.config_selections.get(&config_id) != Some(&value);
         self.desired.config_selections.insert(config_id, value);
         if changed {
-            self.pending_events.push(AcpSessionEvent::DesiredConfigChanged {
-                selections: self.desired.config_selections.clone(),
-            });
+            let selections = self
+                .desired
+                .config_selections
+                .iter()
+                .map(|(k, v)| (ConfigKey::new(k), ConfigValue::new(v)))
+                .collect();
+            self.pending_events
+                .push(AcpSessionEvent::DesiredConfigChanged { selections });
         }
     }
 
@@ -201,7 +209,7 @@ impl AcpSession {
         self.observed.mode_id = Some(mode_id.to_owned());
         if changed {
             self.pending_events.push(AcpSessionEvent::ObservedModeSynced {
-                mode_id: mode_id.to_owned(),
+                mode_id: ModeId::new(mode_id),
             });
         }
     }
@@ -211,7 +219,7 @@ impl AcpSession {
         self.observed.model_id = Some(model_id.to_owned());
         if changed {
             self.pending_events.push(AcpSessionEvent::ObservedModelSynced {
-                model_id: model_id.to_owned(),
+                model_id: ModelId::new(model_id),
             });
         }
     }
@@ -302,15 +310,15 @@ impl AcpSession {
             && self.observed.mode_id.as_deref() != Some(desired_mode)
         {
             actions.push(ReconcileAction::SetMode {
-                mode_id: desired_mode.clone(),
+                mode_id: ModeId::new(desired_mode),
             });
         }
 
         for (config_id, desired_value) in &self.desired.config_selections {
             if self.observed.config_current.get(config_id) != Some(desired_value) {
                 actions.push(ReconcileAction::SetConfigOption {
-                    config_id: config_id.clone(),
-                    value: desired_value.clone(),
+                    config_id: ConfigKey::new(config_id),
+                    value: ConfigValue::new(desired_value),
                 });
             }
         }

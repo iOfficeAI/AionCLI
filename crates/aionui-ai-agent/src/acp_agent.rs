@@ -229,7 +229,7 @@ impl AcpAgentManager {
         for action in actions {
             match action {
                 ReconcileAction::SetMode { mode_id } => {
-                    let normalized = normalize_requested_mode(&self.params.metadata, &mode_id);
+                    let normalized = normalize_requested_mode(&self.params.metadata, mode_id.as_str());
                     if normalized.is_empty() {
                         continue;
                     }
@@ -254,18 +254,20 @@ impl AcpAgentManager {
                     session.apply_observed_mode(&normalized);
                 }
                 ReconcileAction::SetConfigOption { config_id, value } => {
+                    let cid_str = config_id.into_inner();
+                    let val_str = value.into_inner();
                     if let Err(err) = self
                         .protocol
                         .set_config_option(SetSessionConfigOptionRequest::new(
                             SessionId::new(session_id),
-                            config_id.clone(),
-                            value.clone(),
+                            cid_str.clone(),
+                            val_str.clone(),
                         ))
                         .await
                     {
                         info!(
-                            config_id = %config_id,
-                            desired = %value,
+                            config_id = %cid_str,
+                            desired = %val_str,
                             error = %err,
                             "reconcile_session: set_config_option failed; skipping"
                         );

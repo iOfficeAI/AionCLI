@@ -156,16 +156,20 @@ impl PendingUpdate {
     fn merge_from_domain_event(&mut self, event: &AcpSessionEvent) -> bool {
         match event {
             AcpSessionEvent::DesiredModeChanged { mode_id } => {
-                self.current_mode_id = Some(Some(mode_id.clone()));
+                self.current_mode_id = Some(Some(mode_id.as_str().to_owned()));
                 true
             }
             AcpSessionEvent::DesiredConfigChanged { selections } => {
-                let json = serde_json::to_string(selections).unwrap_or_default();
+                let string_map: HashMap<String, String> = selections
+                    .iter()
+                    .map(|(k, v)| (k.as_str().to_owned(), v.as_str().to_owned()))
+                    .collect();
+                let json = serde_json::to_string(&string_map).unwrap_or_default();
                 self.config_selections_json = Some(Some(json));
                 true
             }
             AcpSessionEvent::ObservedModelSynced { model_id } => {
-                self.current_model_id = Some(Some(model_id.clone()));
+                self.current_model_id = Some(Some(model_id.as_str().to_owned()));
                 true
             }
             _ => false,

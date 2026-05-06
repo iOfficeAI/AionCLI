@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use crate::shared_kernel::{ConfigKey, ConfigValue, ModeId, ModelId, SessionId};
+
 /// Domain events emitted by the `AcpSession` aggregate.
 ///
 /// These capture *intent* changes (user wants mode X) and *observation*
@@ -7,12 +9,22 @@ use std::collections::HashMap;
 /// decide which to write to DB without re-interpreting UI stream events.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AcpSessionEvent {
-    SessionAssigned { session_id: String },
+    SessionAssigned {
+        session_id: SessionId,
+    },
     SessionOpened,
-    DesiredModeChanged { mode_id: String },
-    DesiredConfigChanged { selections: HashMap<String, String> },
-    ObservedModeSynced { mode_id: String },
-    ObservedModelSynced { model_id: String },
+    DesiredModeChanged {
+        mode_id: ModeId,
+    },
+    DesiredConfigChanged {
+        selections: HashMap<ConfigKey, ConfigValue>,
+    },
+    ObservedModeSynced {
+        mode_id: ModeId,
+    },
+    ObservedModelSynced {
+        model_id: ModelId,
+    },
 }
 
 #[cfg(test)]
@@ -22,17 +34,19 @@ mod tests {
     #[test]
     fn event_equality() {
         let a = AcpSessionEvent::SessionAssigned {
-            session_id: "s1".into(),
+            session_id: SessionId::new("s1"),
         };
         let b = AcpSessionEvent::SessionAssigned {
-            session_id: "s1".into(),
+            session_id: SessionId::new("s1"),
         };
         assert_eq!(a, b);
     }
 
     #[test]
     fn event_debug_format() {
-        let e = AcpSessionEvent::DesiredModeChanged { mode_id: "plan".into() };
+        let e = AcpSessionEvent::DesiredModeChanged {
+            mode_id: ModeId::new("plan"),
+        };
         let dbg = format!("{e:?}");
         assert!(dbg.contains("plan"));
     }
