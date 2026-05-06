@@ -12,8 +12,8 @@ use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 use tracing::debug;
 
-use crate::agent_registry::CatalogSender;
 use crate::protocol::events::AgentStreamEvent;
+use crate::registry::CatalogSender;
 
 /// Subscriber that projects session-driven ACP events into the
 /// `agent_metadata` catalog so the stored handshake blob stays in sync

@@ -9,8 +9,8 @@ use aionui_api_types::{AgentMetadata, ApiResponse, TestCustomAgentRequest, TestC
 use aionui_auth::CurrentUser;
 use aionui_common::AppError;
 
-use crate::agent_registry::AgentRegistry;
 use crate::protocol::cli_detect;
+use crate::registry::AgentRegistry;
 
 #[derive(Clone)]
 pub struct AgentRouterState {

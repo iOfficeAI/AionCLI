@@ -8,7 +8,7 @@ use aionui_api_types::{
 use aionui_common::AppError;
 use tracing::debug;
 
-use crate::agent_registry::AgentRegistry;
+use crate::registry::AgentRegistry;
 
 /// Detect the CLI path for a given ACP backend using PATH lookup.
 ///

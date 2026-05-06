@@ -12,8 +12,8 @@ use aionui_api_types::{
 use aionui_auth::CurrentUser;
 use aionui_common::AppError;
 
-use crate::agent_registry::AgentRegistry;
 use crate::protocol::cli_detect;
+use crate::registry::AgentRegistry;
 use crate::task_manager::IWorkerTaskManager;
 use aionui_api_types::AcpModelInfo;
 

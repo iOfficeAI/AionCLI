@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Weak};
 
-use aionui_ai_agent::{IWorkerTaskManager, SendMessageData};
+use aionui_ai_agent::IWorkerTaskManager;
+use aionui_ai_agent::types::SendMessageData;
 use aionui_common::AgentKillReason;
 use aionui_conversation::ConversationService;
 use aionui_db::ITeamRepository;

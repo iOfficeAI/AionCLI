@@ -17,8 +17,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use aionui_ai_agent::acp_agent::AcpAgentManager;
-use aionui_ai_agent::agent_registry::AgentRegistry;
 use aionui_ai_agent::factory::acp_assembler::{WorkspaceInfo, assemble_acp_params};
+use aionui_ai_agent::registry::AgentRegistry;
 use aionui_ai_agent::{AgentStreamEvent, IAgentTask};
 use aionui_common::ConversationStatus;
 use aionui_db::{SqliteAgentMetadataRepository, init_database_memory};

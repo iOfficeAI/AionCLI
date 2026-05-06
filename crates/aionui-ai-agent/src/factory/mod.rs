@@ -9,15 +9,19 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
-use crate::agent_registry::AgentRegistry;
+use crate::acp_agent::AcpAgentManager;
 use crate::agent_task::AgentInstance;
 use crate::capability::skill_manager::AcpSkillManager;
 use crate::factory::acp_assembler::{WorkspaceInfo, assemble_acp_params};
 use crate::manager::acp::{AcpSessionSyncService, CatalogForwarder};
+use crate::manager::aionrs::AionrsAgentManager;
+use crate::manager::nanobot::NanobotAgentManager;
+use crate::manager::openclaw::OpenClawAgentManager;
 use crate::manager::remote::RemoteAgentConfig;
+use crate::manager::remote::RemoteAgentManager;
+use crate::registry::AgentRegistry;
 use crate::task_manager::AgentFactory;
 use crate::types::{AionrsCompatOverrides, AionrsResolvedConfig, BuildTaskOptions};
-use crate::{AcpAgentManager, AionrsAgentManager, NanobotAgentManager, OpenClawAgentManager, RemoteAgentManager};
 
 /// Dependencies needed by the agent factory to construct agents.
 pub struct AgentFactoryDeps {

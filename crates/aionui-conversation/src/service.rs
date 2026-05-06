@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use aionui_ai_agent::{BuildTaskOptions, IWorkerTaskManager, SendMessageData};
+use aionui_ai_agent::IWorkerTaskManager;
+use aionui_ai_agent::types::{BuildTaskOptions, SendMessageData};
 
 use crate::response_middleware::ICronService;
 use aionui_api_types::{

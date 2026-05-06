@@ -884,7 +884,7 @@ impl TeamSessionService {
                 return;
             };
             let msg_id = aionui_common::generate_id();
-            let data = aionui_ai_agent::SendMessageData {
+            let data = aionui_ai_agent::types::SendMessageData {
                 content: input.first_message,
                 msg_id: msg_id.clone(),
                 files: Vec::new(),

@@ -2,9 +2,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use aionui_ai_agent::AcpSessionSyncService;
-use aionui_ai_agent::agent_registry::AgentRegistry;
 use aionui_ai_agent::capability::skill_manager::AcpSkillManager;
 use aionui_ai_agent::factory::{AgentFactoryDeps, build_agent_factory};
+use aionui_ai_agent::registry::AgentRegistry;
 use aionui_ai_agent::types::BuildTaskOptions;
 use aionui_common::{AgentType, ProviderWithModel, encrypt_string};
 use aionui_db::{
