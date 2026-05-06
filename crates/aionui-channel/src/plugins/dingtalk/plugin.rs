@@ -391,6 +391,7 @@ async fn ws_stream_loop(
         let stream_info = match api.register_stream().await {
             Ok(info) => {
                 consecutive_errors = 0;
+                info!(endpoint = %info.endpoint, "DingTalk stream registered successfully");
                 info
             }
             Err(e) => {
@@ -410,7 +411,7 @@ async fn ws_stream_loop(
 
         let ws_url = format!("{}?ticket={}", stream_info.endpoint, stream_info.ticket);
 
-        debug!(url = %ws_url, "Connecting to DingTalk WebSocket Stream");
+        info!(url = %ws_url, "Connecting to DingTalk WebSocket Stream");
 
         match connect_and_listen(&ws_url, &message_tx, &confirm_tx, &mut shutdown_rx).await {
             Ok(()) => {
@@ -592,10 +593,17 @@ async fn handle_bot_message(data_str: &str, message_tx: &mpsc::Sender<UnifiedInc
     let cb: BotMessageCallback = match serde_json::from_str(data_str) {
         Ok(c) => c,
         Err(e) => {
-            warn!(error = %e, "Failed to parse DingTalk bot message");
+            warn!(error = %e, raw = %&data_str[..data_str.len().min(200)], "Failed to parse DingTalk bot message");
             return;
         }
     };
+
+    debug!(
+        msg_id = cb.msg_id.as_deref().unwrap_or(""),
+        sender = cb.sender_nick.as_deref().unwrap_or(""),
+        msgtype = cb.msgtype.as_deref().unwrap_or(""),
+        "DingTalk bot message received"
+    );
 
     let sender_staff_id = cb
         .sender_staff_id
@@ -648,6 +656,11 @@ async fn handle_card_action(
             return;
         }
     };
+
+    debug!(
+        user_id = cb.user_id.as_deref().unwrap_or(""),
+        "DingTalk card action received"
+    );
 
     // Extract action string from content field
     let action_str = cb
