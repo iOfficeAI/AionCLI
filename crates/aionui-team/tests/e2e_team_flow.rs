@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex, Weak};
 
 use aionui_ai_agent::agent_manager::approval_key;
 use aionui_ai_agent::agent_task::{AgentInstance, IAgentTask, IMockAgent};
-use aionui_ai_agent::stream_event::{AgentStreamEvent, FinishEventData};
+use aionui_ai_agent::protocol::events::{AgentStreamEvent, FinishEventData};
 use aionui_ai_agent::types::{BuildTaskOptions, SendMessageData};
 use aionui_api_types::AgentModeResponse;
 use aionui_api_types::WebSocketMessage;

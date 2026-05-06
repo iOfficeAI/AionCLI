@@ -10,7 +10,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::agent_manager::approval_key;
 use crate::capability::cli_process::CliAgentProcess;
-use crate::stream_event::AgentStreamEvent;
+use crate::protocol::events::AgentStreamEvent;
 use crate::types::SendMessageData;
 use aionui_api_types::{OpenClawBuildExtra, OpenClawGatewayConfig};
 
@@ -426,13 +426,13 @@ impl crate::agent_task::IAgentTask for OpenClawAgentManager {
             );
             let _ = self
                 .event_tx
-                .send(AgentStreamEvent::Error(crate::stream_event::ErrorEventData {
+                .send(AgentStreamEvent::Error(crate::protocol::events::ErrorEventData {
                     message: format!("OpenClaw send failed: {e}"),
                     code: None,
                 }));
             let _ = self
                 .event_tx
-                .send(AgentStreamEvent::Finish(crate::stream_event::FinishEventData {
+                .send(AgentStreamEvent::Finish(crate::protocol::events::FinishEventData {
                     session_id: None,
                 }));
         }
@@ -473,11 +473,11 @@ impl crate::agent_task::IAgentTask for OpenClawAgentManager {
                     conversation_id = %conversation_id,
                     "Gateway did not send abort event within timeout, emitting fallback Finish"
                 );
-                let _ = event_tx.send(AgentStreamEvent::Error(crate::stream_event::ErrorEventData {
+                let _ = event_tx.send(AgentStreamEvent::Error(crate::protocol::events::ErrorEventData {
                     message: "Stopped by user".into(),
                     code: None,
                 }));
-                let _ = event_tx.send(AgentStreamEvent::Finish(crate::stream_event::FinishEventData {
+                let _ = event_tx.send(AgentStreamEvent::Finish(crate::protocol::events::FinishEventData {
                     session_id: None,
                 }));
             }

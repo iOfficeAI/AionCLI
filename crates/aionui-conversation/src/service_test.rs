@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use aionui_ai_agent::IWorkerTaskManager;
 use aionui_ai_agent::agent_task::{AgentInstance, IAgentTask, IMockAgent};
-use aionui_ai_agent::stream_event::{AgentStreamEvent, FinishEventData, TextEventData};
+use aionui_ai_agent::protocol::events::{AgentStreamEvent, FinishEventData, TextEventData};
 use aionui_ai_agent::types::{BuildTaskOptions, SendMessageData};
 
 use crate::response_middleware::{CronCommandResult, CronCreateParams, CronUpdateParams, ICronService};
@@ -1220,7 +1220,7 @@ impl IAgentTask for MockAgent {
     async fn send_message(&self, _data: SendMessageData) -> Result<(), AppError> {
         // Emit finish event so the relay task completes
         let _ = self.event_tx.send(AgentStreamEvent::Finish(
-            aionui_ai_agent::stream_event::FinishEventData::default(),
+            aionui_ai_agent::protocol::events::FinishEventData::default(),
         ));
         Ok(())
     }

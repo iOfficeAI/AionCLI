@@ -21,7 +21,7 @@ use crate::manager::aionrs::AionrsAgentManager;
 use crate::manager::nanobot::NanobotAgentManager;
 use crate::manager::openclaw::OpenClawAgentManager;
 use crate::manager::remote::RemoteAgentManager;
-use crate::stream_event::AgentStreamEvent;
+use crate::protocol::events::AgentStreamEvent;
 use crate::types::{AgentStreamChunk, SendMessageData};
 
 #[cfg(any(test, feature = "test-support"))]

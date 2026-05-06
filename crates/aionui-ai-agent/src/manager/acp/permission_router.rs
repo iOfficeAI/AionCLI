@@ -1,5 +1,5 @@
-use crate::acp_protocol::{PermissionDecision, PermissionRequest};
-use crate::stream_event::{AgentStreamEvent, permission_request_to_event_data};
+use crate::protocol::acp::{PermissionDecision, PermissionRequest};
+use crate::protocol::events::{AgentStreamEvent, permission_request_to_event_data};
 use aionui_common::now_ms;
 use std::collections::HashMap;
 use std::sync::Arc;

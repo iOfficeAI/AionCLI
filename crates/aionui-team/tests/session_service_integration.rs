@@ -490,7 +490,7 @@ impl IWorkerTaskManager for CountingTaskManager {
 // `send_message` called on it.
 mod mock_agent {
     use aionui_ai_agent::agent_task::{IAgentTask, IMockAgent};
-    use aionui_ai_agent::stream_event::AgentStreamEvent;
+    use aionui_ai_agent::protocol::events::AgentStreamEvent;
     use aionui_ai_agent::types::SendMessageData;
     use aionui_common::{AgentKillReason, AgentType, AppError, ConversationStatus, TimestampMs};
     use tokio::sync::broadcast;

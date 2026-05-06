@@ -160,7 +160,7 @@ impl IWorkerTaskManager for WorkerTaskManagerImpl {
 mod tests {
     use super::*;
     use crate::agent_task::{IAgentTask, IMockAgent};
-    use crate::stream_event::AgentStreamEvent;
+    use crate::protocol::events::AgentStreamEvent;
     use crate::types::SendMessageData;
     use aionui_common::{AgentKillReason, AgentType, ConversationStatus, ProviderWithModel};
     use futures_util::FutureExt;

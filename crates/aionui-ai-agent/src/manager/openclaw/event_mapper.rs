@@ -2,7 +2,7 @@ use serde_json::Value;
 use tracing::debug;
 
 use super::protocol::{AgentEvent, ApprovalRequestEvent, ChatEvent, ChatEventState, EventFrame};
-use crate::stream_event::{
+use crate::protocol::events::{
     AgentStreamEvent, ErrorEventData, FinishEventData, StartEventData, TextEventData, ThinkingEventData,
     ToolCallEventData, ToolCallStatus,
 };

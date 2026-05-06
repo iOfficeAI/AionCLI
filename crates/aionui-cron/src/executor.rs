@@ -1121,7 +1121,7 @@ mod tests {
     use super::*;
     use crate::types::{CreatedBy, CronAgentConfig, CronSchedule};
     use aionui_ai_agent::agent_task::{AgentInstance, IAgentTask, IMockAgent};
-    use aionui_ai_agent::stream_event::FinishEventData;
+    use aionui_ai_agent::protocol::events::FinishEventData;
     use aionui_api_types::{AgentModeResponse, WebSocketMessage};
     use aionui_common::{AgentKillReason, ConversationStatus, PaginatedResult, TimestampMs};
     use aionui_db::{

@@ -5,7 +5,7 @@ use aion_agent::output::OutputSink;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use crate::stream_event::{
+use crate::protocol::events::{
     AgentStreamEvent, ErrorEventData, FinishEventData, StartEventData, TextEventData, ThinkingEventData, TipType,
     TipsEventData, ToolCallEventData, ToolCallStatus,
 };

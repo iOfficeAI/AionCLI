@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use aionui_ai_agent::AgentStreamEvent;
-use aionui_ai_agent::stream_event::{ErrorEventData, FinishEventData, TextEventData};
+use aionui_ai_agent::protocol::events::{ErrorEventData, FinishEventData, TextEventData};
 use aionui_channel::stream_relay::{ChannelStreamRelay, MessageRecorder, RelayConfig};
 use aionui_channel::types::PluginType;
 use tokio::sync::broadcast;

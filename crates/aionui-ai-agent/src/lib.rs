@@ -1,7 +1,5 @@
 //! AI agent lifecycle, worker task dispatch, and skill management.
 pub mod acp_agent;
-pub mod acp_error;
-pub mod acp_protocol;
 pub mod acp_routes;
 pub mod agent_manager;
 pub mod agent_registry;
@@ -14,7 +12,6 @@ pub mod manager;
 pub mod protocol;
 pub mod routes;
 pub mod shared_kernel;
-pub mod stream_event;
 pub mod task_manager;
 pub mod types;
 
@@ -47,7 +44,7 @@ pub use manager::openclaw::OpenClawAgentManager;
 pub use manager::remote::{
     RemoteAgentConfig, RemoteAgentManager, RemoteAgentRouterState, RemoteAgentService, remote_agent_routes,
 };
+pub use protocol::events::AgentStreamEvent;
 pub use routes::{SessionRouterState, session_routes};
-pub use stream_event::AgentStreamEvent;
 pub use task_manager::{AgentFactory, IWorkerTaskManager, WorkerTaskManagerImpl};
 pub use types::{AgentStreamChunk, AionrsCompatOverrides, AionrsResolvedConfig, BuildTaskOptions, SendMessageData};

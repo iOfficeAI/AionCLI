@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use aionui_ai_agent::{AgentStreamEvent, stream_event::ThinkingEventData};
+use aionui_ai_agent::{AgentStreamEvent, protocol::events::ThinkingEventData};
 
 use crate::response_middleware::{ICronService, MessageMiddleware, MiddlewareResult};
 use aionui_api_types::WebSocketMessage;
@@ -152,7 +152,7 @@ impl StreamRelay {
                         .finalize(
                             &text_buffer,
                             &record_created,
-                            &AgentStreamEvent::Finish(aionui_ai_agent::stream_event::FinishEventData::default()),
+                            &AgentStreamEvent::Finish(aionui_ai_agent::protocol::events::FinishEventData::default()),
                         )
                         .await;
                     if self.complete_turn {
@@ -443,7 +443,7 @@ impl ICronService for SharedCronService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aionui_ai_agent::stream_event::{ErrorEventData, FinishEventData, TextEventData};
+    use aionui_ai_agent::protocol::events::{ErrorEventData, FinishEventData, TextEventData};
     use aionui_db::DbError;
     use std::sync::Mutex;
 

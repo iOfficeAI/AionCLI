@@ -14,7 +14,7 @@ use tokio::sync::broadcast;
 use tower::ServiceExt;
 
 use aionui_ai_agent::agent_task::{AgentInstance, IAgentTask, IMockAgent};
-use aionui_ai_agent::stream_event::TextEventData;
+use aionui_ai_agent::protocol::events::TextEventData;
 use aionui_ai_agent::types::{BuildTaskOptions, SendMessageData};
 use aionui_ai_agent::{AgentStreamEvent, IWorkerTaskManager};
 use aionui_common::{AgentKillReason, AgentType, AppError, Confirmation, ConversationStatus, TimestampMs, now_ms};
@@ -80,7 +80,7 @@ impl IAgentTask for MockAgent {
             content: "Mock response".into(),
         }));
         let _ = self.event_tx.send(AgentStreamEvent::Finish(
-            aionui_ai_agent::stream_event::FinishEventData::default(),
+            aionui_ai_agent::protocol::events::FinishEventData::default(),
         ));
         Ok(())
     }

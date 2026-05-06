@@ -13,7 +13,7 @@ use tokio::task::JoinHandle;
 use tracing::debug;
 
 use crate::agent_registry::CatalogSender;
-use crate::stream_event::AgentStreamEvent;
+use crate::protocol::events::AgentStreamEvent;
 
 /// Subscriber that projects session-driven ACP events into the
 /// `agent_metadata` catalog so the stored handshake blob stays in sync
@@ -93,7 +93,7 @@ fn catalog_partial_from_event(event: &AgentStreamEvent) -> Option<AgentHandshake
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::stream_event::StartEventData;
+    use crate::protocol::events::StartEventData;
     use serde_json::json;
 
     /// Each session-driven event projects onto exactly one handshake

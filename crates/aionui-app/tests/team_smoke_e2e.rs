@@ -19,7 +19,7 @@ mod common;
 use std::sync::Arc;
 
 use aionui_ai_agent::agent_task::{AgentInstance, IAgentTask, IMockAgent};
-use aionui_ai_agent::stream_event::{AgentStreamEvent, ErrorEventData, FinishEventData};
+use aionui_ai_agent::protocol::events::{AgentStreamEvent, ErrorEventData, FinishEventData};
 use aionui_ai_agent::types::{AgentStreamChunk, BuildTaskOptions, SendMessageData};
 use aionui_ai_agent::{AgentFactory, IWorkerTaskManager, WorkerTaskManagerImpl};
 use aionui_api_types::AcpBuildExtra;

@@ -7,7 +7,7 @@ use serde_json::json;
 use tokio::sync::broadcast;
 use tracing::debug;
 
-use crate::stream_event::{AgentStreamEvent, ToolCallEventData, ToolCallStatus};
+use crate::protocol::events::{AgentStreamEvent, ToolCallEventData, ToolCallStatus};
 
 /// Implements `ProtocolEmitter` for the aionui-backend context.
 ///

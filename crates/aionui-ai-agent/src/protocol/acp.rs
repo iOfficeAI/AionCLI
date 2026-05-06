@@ -40,8 +40,8 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use tracing::{debug, warn};
 
-use crate::acp_error::AcpError;
-use crate::stream_event::{self, AgentStreamEvent};
+use crate::protocol::error::AcpError;
+use crate::protocol::events::{self as stream_event, AgentStreamEvent};
 use crate::types::AgentStreamChunk;
 
 use agent_client_protocol::schema::{

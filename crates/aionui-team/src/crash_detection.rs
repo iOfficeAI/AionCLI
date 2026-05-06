@@ -4,7 +4,7 @@
 //! `TeammateStatus::Failed` without going through crash recovery (no kill,
 //! no testament) — see interface-contracts §23.
 
-use aionui_ai_agent::stream_event::AgentStreamEvent;
+use aionui_ai_agent::protocol::events::AgentStreamEvent;
 use regex::Regex;
 use std::sync::OnceLock;
 
@@ -27,7 +27,7 @@ pub fn is_rate_limited(event: &AgentStreamEvent) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aionui_ai_agent::stream_event::{ErrorEventData, StartEventData};
+    use aionui_ai_agent::protocol::events::{ErrorEventData, StartEventData};
 
     fn error_event(message: &str) -> AgentStreamEvent {
         AgentStreamEvent::Error(ErrorEventData {
@@ -92,7 +92,7 @@ pub fn detect_crash(event: &AgentStreamEvent) -> Option<CrashReason> {
 #[cfg(test)]
 mod crash_tests {
     use super::*;
-    use aionui_ai_agent::stream_event::ErrorEventData;
+    use aionui_ai_agent::protocol::events::ErrorEventData;
 
     #[test]
     fn detect_crash_process_exited() {
@@ -126,7 +126,7 @@ mod crash_tests {
 
     #[test]
     fn detect_crash_non_error_returns_none() {
-        let event = AgentStreamEvent::Start(aionui_ai_agent::stream_event::StartEventData { session_id: None });
+        let event = AgentStreamEvent::Start(aionui_ai_agent::protocol::events::StartEventData { session_id: None });
         assert_eq!(detect_crash(&event), None);
     }
 }

@@ -370,7 +370,7 @@ fn channel_conversation_name(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aionui_ai_agent::stream_event::{
+    use aionui_ai_agent::protocol::events::{
         ErrorEventData, FinishEventData, StartEventData, TextEventData, ThinkingEventData, ToolCallEventData,
         ToolCallStatus,
     };

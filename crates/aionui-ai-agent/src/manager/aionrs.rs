@@ -18,7 +18,7 @@ use tracing::{debug, error, info};
 
 use crate::capability::backend_output_sink::BackendOutputSink;
 use crate::capability::backend_protocol_sink::BackendProtocolSink;
-use crate::stream_event::AgentStreamEvent;
+use crate::protocol::events::AgentStreamEvent;
 use crate::types::{AionrsResolvedConfig, SendMessageData};
 
 pub struct AionrsAgentManager {
@@ -216,7 +216,7 @@ impl crate::agent_task::IAgentTask for AionrsAgentManager {
                 // send the Finish event ourselves to unblock StreamRelay.
                 let _ = self
                     .event_tx
-                    .send(AgentStreamEvent::Finish(crate::stream_event::FinishEventData {
+                    .send(AgentStreamEvent::Finish(crate::protocol::events::FinishEventData {
                         session_id: None,
                     }));
                 Ok(())
@@ -231,13 +231,13 @@ impl crate::agent_task::IAgentTask for AionrsAgentManager {
                 );
                 let _ = self
                     .event_tx
-                    .send(AgentStreamEvent::Error(crate::stream_event::ErrorEventData {
+                    .send(AgentStreamEvent::Error(crate::protocol::events::ErrorEventData {
                         message: error_msg.clone(),
                         code: None,
                     }));
                 let _ = self
                     .event_tx
-                    .send(AgentStreamEvent::Finish(crate::stream_event::FinishEventData {
+                    .send(AgentStreamEvent::Finish(crate::protocol::events::FinishEventData {
                         session_id: None,
                     }));
                 Err(AppError::Internal(error_msg))
@@ -255,13 +255,13 @@ impl crate::agent_task::IAgentTask for AionrsAgentManager {
         }
         let _ = self
             .event_tx
-            .send(AgentStreamEvent::Error(crate::stream_event::ErrorEventData {
+            .send(AgentStreamEvent::Error(crate::protocol::events::ErrorEventData {
                 message: "Stopped by user".into(),
                 code: None,
             }));
         let _ = self
             .event_tx
-            .send(AgentStreamEvent::Finish(crate::stream_event::FinishEventData {
+            .send(AgentStreamEvent::Finish(crate::protocol::events::FinishEventData {
                 session_id: None,
             }));
         if let Ok(mut s) = self.status.write() {
@@ -468,13 +468,13 @@ mod tests {
 
         let _ = agent
             .event_tx
-            .send(AgentStreamEvent::Error(crate::stream_event::ErrorEventData {
+            .send(AgentStreamEvent::Error(crate::protocol::events::ErrorEventData {
                 message: "test error".into(),
                 code: None,
             }));
         let _ = agent
             .event_tx
-            .send(AgentStreamEvent::Finish(crate::stream_event::FinishEventData {
+            .send(AgentStreamEvent::Finish(crate::protocol::events::FinishEventData {
                 session_id: None,
             }));
 
