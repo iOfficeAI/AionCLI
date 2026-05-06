@@ -11,7 +11,7 @@
 use std::fs;
 use std::sync::{Arc, Mutex};
 
-use aionui_ai_agent::skill_manager::{
+use aionui_ai_agent::capability::skill_manager::{
     AcpSkillManager, build_skills_index_text, build_system_instructions, detect_skill_load_request,
     prepare_first_message, prepare_first_message_with_skills_index,
 };

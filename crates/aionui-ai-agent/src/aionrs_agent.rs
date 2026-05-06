@@ -16,8 +16,8 @@ use serde_json::Value;
 use tokio::sync::{Mutex, broadcast};
 use tracing::{debug, error, info};
 
-use crate::backend_output_sink::BackendOutputSink;
-use crate::backend_protocol_sink::BackendProtocolSink;
+use crate::capability::backend_output_sink::BackendOutputSink;
+use crate::capability::backend_protocol_sink::BackendProtocolSink;
 use crate::stream_event::AgentStreamEvent;
 use crate::types::{AionrsResolvedConfig, SendMessageData};
 

@@ -11,10 +11,10 @@ use tracing::{debug, info, warn};
 
 use crate::agent_registry::AgentRegistry;
 use crate::agent_task::AgentInstance;
+use crate::capability::skill_manager::AcpSkillManager;
 use crate::factory::acp_assembler::{WorkspaceInfo, assemble_acp_params};
 use crate::manager::acp::{AcpSessionSyncService, CatalogForwarder};
 use crate::manager::remote::RemoteAgentConfig;
-use crate::skill_manager::AcpSkillManager;
 use crate::task_manager::AgentFactory;
 use crate::types::{AionrsCompatOverrides, AionrsResolvedConfig, BuildTaskOptions};
 use crate::{AcpAgentManager, AionrsAgentManager, NanobotAgentManager, OpenClawAgentManager, RemoteAgentManager};

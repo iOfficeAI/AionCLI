@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use crate::skill_manager::{AcpSkillManager, prepare_first_message_with_skills_index};
+use crate::capability::skill_manager::{AcpSkillManager, prepare_first_message_with_skills_index};
 
 /// Configuration for the first-message injector.
 pub struct InjectionConfig<'a> {

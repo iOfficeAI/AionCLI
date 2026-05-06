@@ -1,11 +1,11 @@
 use crate::acp_protocol::AcpProtocol;
 use crate::agent_registry::CatalogSender;
-use crate::cli_process::CliAgentProcess;
+use crate::capability::cli_process::CliAgentProcess;
+use crate::capability::first_message_injector::{InjectionConfig, inject_first_message_prefix};
+use crate::capability::skill_manager::AcpSkillManager;
 use crate::factory::acp_assembler::AcpSessionParams;
-use crate::first_message_injector::{InjectionConfig, inject_first_message_prefix};
 use crate::manager::acp::{AcpSession, AcpSessionEvent, PermissionRouter, PersistedSessionState};
 use crate::shared_kernel::{ModeId, ModelId, SessionId as DomainSessionId};
-use crate::skill_manager::AcpSkillManager;
 use crate::stream_event::{
     AgentStreamEvent, AvailableCommandsEventData, FinishEventData, SessionAssignedEventData, StartEventData,
 };

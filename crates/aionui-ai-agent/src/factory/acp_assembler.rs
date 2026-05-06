@@ -2,7 +2,7 @@ use agent_client_protocol::schema::{EnvVariable, McpServer, McpServerStdio, NewS
 use aionui_api_types::{AcpBuildExtra, GuideMcpConfig, TeamMcpStdioConfig};
 use aionui_common::CommandSpec;
 
-use crate::team_guide_prompt;
+use crate::capability::team_guide_prompt;
 use aionui_api_types::AgentMetadata;
 
 /// Backends for which solo conversations receive the Guide MCP server.
