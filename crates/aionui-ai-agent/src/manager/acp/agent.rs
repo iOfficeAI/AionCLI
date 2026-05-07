@@ -9,7 +9,8 @@ use crate::shared_kernel::{ModeId, ModelId, SessionId as DomainSessionId};
 use crate::types::SendMessageData;
 use agent_client_protocol::schema::{
     AgentCapabilities, AvailableCommand, CancelNotification, SessionConfigOption, SessionId, SessionModeState,
-    SessionModelState, SetSessionConfigOptionRequest, SetSessionModeRequest, SetSessionModelRequest, UsageUpdate,
+    SessionModelState, SessionNotification, SetSessionConfigOptionRequest, SetSessionModeRequest,
+    SetSessionModelRequest, UsageUpdate,
 };
 use aionui_api_types::{AgentHandshake, SlashCommandItem};
 use aionui_common::{
@@ -253,7 +254,14 @@ impl AcpAgentManager {
         params: Arc<AcpSessionParams>,
         skill_manager: Arc<AcpSkillManager>,
         catalog_tx: &CatalogSender,
-    ) -> Result<(Self, mpsc::Receiver<AcpSessionEvent>), AppError> {
+    ) -> Result<
+        (
+            Self,
+            mpsc::Receiver<AcpSessionEvent>,
+            mpsc::Receiver<SessionNotification>,
+        ),
+        AppError,
+    > {
         let process = CliAgentProcess::spawn_for_sdk(params.command_spec.clone()).await?;
 
         // Take raw stdio for the SDK transport
@@ -265,9 +273,13 @@ impl AcpAgentManager {
         let (event_tx, _) = broadcast::channel(256);
         let (permission_tx, permission_rx) = mpsc::channel(32);
         let (domain_event_tx, domain_event_rx) = mpsc::channel(256);
+        // Dedicated channel for raw SDK SessionNotifications → session tracker.
+        // This channel is separate from event_tx so the tracker never re-applies
+        // events that were broadcast for the UI (e.g. from emit_snapshot_events).
+        let (notification_tx, notification_rx) = mpsc::channel::<SessionNotification>(256);
 
         // Connect via ACP SDK — executes initialize handshake
-        let protocol = AcpProtocol::connect(stdin, stdout, event_tx.clone(), permission_tx)
+        let protocol = AcpProtocol::connect(stdin, stdout, event_tx.clone(), permission_tx, notification_tx)
             .await
             .map_err(|e| {
                 error!(
@@ -323,7 +335,7 @@ impl AcpAgentManager {
             domain_event_tx,
         };
 
-        Ok((manager, domain_event_rx))
+        Ok((manager, domain_event_rx, notification_rx))
     }
 
     /// Start the permission handler loop. Must be called after the manager

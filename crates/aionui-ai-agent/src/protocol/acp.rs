@@ -101,6 +101,7 @@ impl AcpProtocol {
         stdout: ChildStdout,
         event_tx: broadcast::Sender<AgentStreamEvent>,
         permission_tx: mpsc::Sender<PermissionRequest>,
+        notification_tx: mpsc::Sender<SessionNotification>,
     ) -> Result<Self, AcpError> {
         let alive = Arc::new(AtomicBool::new(true));
 
@@ -120,6 +121,7 @@ impl AcpProtocol {
             stdout,
             event_tx,
             permission_tx,
+            notification_tx,
             init_tx,
             ready_tx,
             shutdown_rx,
@@ -309,6 +311,7 @@ async fn run_sdk_background(
     stdout: ChildStdout,
     event_tx: broadcast::Sender<AgentStreamEvent>,
     permission_tx: mpsc::Sender<PermissionRequest>,
+    notification_tx: mpsc::Sender<SessionNotification>,
     init_tx: oneshot::Sender<Result<InitializeResponse, AcpError>>,
     ready_tx: oneshot::Sender<ConnectionTo<Agent>>,
     shutdown_rx: oneshot::Receiver<()>,
@@ -326,7 +329,15 @@ async fn run_sdk_background(
         .builder()
         .on_receive_notification(
             {
+                let event_tx = event_tx.clone();
+                let notification_tx = notification_tx.clone();
                 async move |notification: SessionNotification, _cx: ConnectionTo<Agent>| {
+                    // Fan out the raw SDK notification to the manager's apply-loop
+                    // FIRST, so session state is consistent by the time the UI
+                    // event hits the broadcast channel. Swallow send errors — if
+                    // the manager has dropped the receiver, session consistency
+                    // is moot anyway (we're on our way down).
+                    let _ = notification_tx.send(notification.clone()).await;
                     handle_session_notification(notification, &event_tx).await;
                     Ok(())
                 }
