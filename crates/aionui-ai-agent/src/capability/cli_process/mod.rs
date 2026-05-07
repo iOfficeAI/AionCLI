@@ -8,9 +8,9 @@ use tokio::process::{ChildStdin, ChildStdout};
 use tokio::sync::{Mutex, broadcast, watch};
 use tracing::{debug, error, warn};
 
-pub mod spawn_legacy;
-pub mod spawn_sdk;
-pub mod stderr_monitor;
+mod spawn_legacy;
+mod spawn_sdk;
+mod stderr_monitor;
 
 use stderr_monitor::force_kill;
 
