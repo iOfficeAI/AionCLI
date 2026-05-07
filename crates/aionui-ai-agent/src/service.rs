@@ -70,7 +70,7 @@ impl AgentService {
         instance.set_mode(&req.mode).await
     }
 
-    pub async fn get_model_info(&self, conversation_id: &str) -> Result<GetModelInfoResponse, AppError> {
+    pub async fn get_model(&self, conversation_id: &str) -> Result<GetModelInfoResponse, AppError> {
         let instance = self.task(conversation_id)?;
         let AgentInstance::Acp(acp) = &instance else {
             return Err(AppError::BadRequest(
@@ -95,7 +95,7 @@ impl AgentService {
         acp.set_model_info(&req.model_id).await
     }
 
-    pub async fn get_config_option(
+    pub async fn get_config(
         &self,
         conversation_id: &str,
         config_id: &str,
@@ -114,7 +114,7 @@ impl AgentService {
         Ok(found)
     }
 
-    pub async fn set_config_option(
+    pub async fn set_config(
         &self,
         conversation_id: &str,
         config_id: &str,
@@ -129,7 +129,7 @@ impl AgentService {
         acp.set_config_option(config_id, &req.value).await
     }
 
-    pub async fn get_configs(
+    pub async fn get_configs_batch(
         &self,
         conversation_id: &str,
     ) -> Result<Vec<agent_client_protocol::schema::SessionConfigOption>, AppError> {
@@ -235,7 +235,10 @@ impl AgentService {
         };
         Ok(openclaw.get_diagnostics().await)
     }
+}
 
+// Conversation-related operations
+impl AgentService {
     /// Reload-context endpoint. **Placeholder** — see `tmp/refactoring/1-aionui-ai-agent-review.md` §m7.
     /// Current behaviour: confirms an active agent exists for the conversation;
     /// does not actually reload anything. Tracked for implement-or-delete decision
@@ -356,7 +359,10 @@ impl AgentService {
 
         Ok(entries)
     }
+}
 
+// Agent operations
+impl AgentService {
     pub async fn list_agents(&self) -> Result<Vec<AgentMetadata>, AppError> {
         Ok(self.registry.list_all().await)
     }
@@ -369,7 +375,10 @@ impl AgentService {
     pub fn test_custom_agent(&self, req: TestCustomAgentRequest) -> Result<TestCustomAgentResponse, AppError> {
         crate::protocol::cli_detect::test_custom_agent(&req.command, &req.acp_args, &req.env)
     }
+}
 
+// ACP related operations
+impl AgentService {
     pub async fn detect_cli(&self, req: DetectCliRequest) -> Result<DetectCliResponse, AppError> {
         Ok(crate::protocol::cli_detect::detect_cli(&self.registry, &req.backend).await)
     }
