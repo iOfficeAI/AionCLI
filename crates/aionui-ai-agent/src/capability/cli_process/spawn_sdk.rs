@@ -134,6 +134,12 @@ impl CliAgentProcess {
             ("BUN_TMPDIR".into(), bun_tmp.to_string_lossy().into_owned()),
         ];
 
+        if let Some(bun_dir) = aionui_runtime::bun_bin_dir() {
+            let sep = if cfg!(windows) { ";" } else { ":" };
+            let current = std::env::var("PATH").unwrap_or_default();
+            env.push(("PATH".into(), format!("{}{}{}", bun_dir.display(), sep, current)));
+        }
+
         if let Some(claude_path) = Self::find_native_claude() {
             env.push(("CLAUDE_CODE_EXECUTABLE".into(), claude_path));
         }

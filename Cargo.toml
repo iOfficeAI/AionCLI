@@ -6,6 +6,7 @@ members = [
     "crates/aionui-db",
     "crates/aionui-api-types",
     "crates/aionui-realtime",
+    "crates/aionui-runtime",
     "crates/aionui-auth",
     "crates/aionui-system",
     "crates/aionui-file",
@@ -34,6 +35,7 @@ aionui-assets = { path = "crates/aionui-assets" }
 aionui-db = { path = "crates/aionui-db" }
 aionui-api-types = { path = "crates/aionui-api-types" }
 aionui-realtime = { path = "crates/aionui-realtime" }
+aionui-runtime = { path = "crates/aionui-runtime" }
 aionui-auth = { path = "crates/aionui-auth" }
 aionui-system = { path = "crates/aionui-system" }
 aionui-file = { path = "crates/aionui-file" }
@@ -125,6 +127,10 @@ zip = "2"
 git2 = "0.20"
 mime_guess = "2"
 rust-embed = "8"
+
+# Runtime embedding
+fs2 = "0.4"
+zstd = "0.13"
 
 # Cron
 cron = "0.15"

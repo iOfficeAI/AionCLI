@@ -304,6 +304,7 @@ dependencies = [
  "aionui-common",
  "aionui-db",
  "aionui-extension",
+ "aionui-runtime",
  "aionui-system",
  "async-trait",
  "axum",
@@ -664,6 +665,26 @@ dependencies = [
  "tokio",
  "tokio-tungstenite 0.26.2",
  "tracing",
+]
+
+[[package]]
+name = "aionui-runtime"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "fs2",
+ "hex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml 0.8.23",
+ "tracing",
+ "which",
+ "zip",
+ "zstd",
 ]
 
 [[package]]
@@ -2322,6 +2343,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
+]
+
+[[package]]
+name = "fs2"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
+dependencies = [
+ "libc",
+ "winapi",
 ]
 
 [[package]]
@@ -4252,6 +4283,7 @@ dependencies = [
  "base64",
  "bytes",
  "encoding_rs",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "h2 0.4.13",

@@ -116,6 +116,24 @@ Every domain crate must follow:
 
 ## Development Workflow
 
+### Bundled bun Runtime
+
+The backend embeds a bun runtime for self-contained distribution. Relevant env vars:
+
+- `AIONUI_EMBED_BUN=1` — enable bun download + embed during `cargo build`.
+  Release CI sets this; local dev builds skip it (faster, no network).
+- `BUN_VARIANT=default|baseline` — select which Linux x64 variant to
+  embed. `baseline` targets CPUs without AVX2.
+- `AIONUI_BUN_PATH=/abs/path/to/bun` — runtime override. When set and
+  pointing to an executable file, `resolve_bun()` returns it verbatim,
+  skipping the embedded + `which` fallback chain. Useful for testing
+  custom bun builds or bisecting bun regressions.
+
+The bun version is pinned in
+`crates/aionui-runtime/Cargo.toml` under
+`[package.metadata.aionui-runtime] bun_version = "..."`. Upgrading bun is
+a one-line change — no source edits required.
+
 ### Pushing Code
 
 Always use `just push` instead of `git push`.

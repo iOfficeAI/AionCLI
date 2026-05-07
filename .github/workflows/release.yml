@@ -1,0 +1,74 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  build:
+    name: build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: darwin-x64,          os: macos-14,       target: x86_64-apple-darwin,         variant: default }
+          - { name: darwin-arm64,        os: macos-14,       target: aarch64-apple-darwin,        variant: default }
+          - { name: linux-x64,           os: ubuntu-latest,  target: x86_64-unknown-linux-gnu,    variant: default }
+          - { name: linux-x64-baseline,  os: ubuntu-latest,  target: x86_64-unknown-linux-gnu,    variant: baseline }
+          - { name: linux-arm64,         os: ubuntu-latest,  target: aarch64-unknown-linux-gnu,   variant: default, cross: true }
+          - { name: windows-x64,         os: windows-latest, target: x86_64-pc-windows-msvc,      variant: default }
+          - { name: windows-arm64,       os: windows-latest, target: aarch64-pc-windows-msvc,     variant: default }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.name }}
+      - name: Install cross (linux-arm64 only)
+        if: matrix.cross
+        run: cargo install cross --locked
+      - name: Build
+        shell: bash
+        env:
+          AIONUI_EMBED_BUN: "1"
+          BUN_VARIANT: ${{ matrix.variant }}
+        run: |
+          if [[ "${{ matrix.cross }}" == "true" ]]; then
+            cross build --release -p aionui-app --target ${{ matrix.target }}
+          else
+            cargo build --release -p aionui-app --target ${{ matrix.target }}
+          fi
+      - name: Collect artifact
+        shell: bash
+        run: |
+          ext=""
+          if [[ "${{ matrix.target }}" == *windows* ]]; then
+            ext=".exe"
+          fi
+          src="target/${{ matrix.target }}/release/aionui-backend${ext}"
+          dst="aionui-backend-${{ matrix.name }}${ext}"
+          cp "$src" "$dst"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aionui-backend-${{ matrix.name }}
+          path: aionui-backend-${{ matrix.name }}*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: List artifacts
+        run: ls -R dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**/aionui-backend-*
+          generate_release_notes: true

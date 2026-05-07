@@ -344,6 +344,28 @@ impl CatalogSender {
     }
 }
 
+/// Resolve a command name to an absolute path.
+///
+/// For `bun` / `bunx` we go through `aionui_runtime` so the bundled
+/// runtime is used when present; everything else falls back to the
+/// user's `$PATH` via `which::which`.
+fn resolve_command_path(cmd: &str) -> Option<PathBuf> {
+    match cmd {
+        "bun" => aionui_runtime::resolve_bun().ok(),
+        "bunx" => {
+            let bunx_name = if cfg!(windows) { "bunx.exe" } else { "bunx" };
+            if let Some(dir) = aionui_runtime::bun_bin_dir() {
+                let p = dir.join(bunx_name);
+                if p.exists() {
+                    return Some(p);
+                }
+            }
+            which::which("bunx").ok()
+        }
+        other => which::which(other).ok(),
+    }
+}
+
 /// Resolve the spawn command to an absolute path via `$PATH`. Returns
 /// `None` when the row is disabled, the command is missing, or any
 /// required binary (spawn command, bridge binary, primary CLI) is not
@@ -363,19 +385,19 @@ fn probe_resolved_command(meta: &AgentMetadata) -> Option<PathBuf> {
 
     if let Some(bridge) = meta.agent_source_info.bridge_binary.as_deref()
         && bridge != cmd
-        && which::which(bridge).is_err()
+        && resolve_command_path(bridge).is_none()
     {
         return None;
     }
     if let Some(primary) = meta.agent_source_info.binary_name.as_deref()
         && primary != cmd
         && meta.agent_source_info.bridge_binary.as_deref() != Some(primary)
-        && which::which(primary).is_err()
+        && resolve_command_path(primary).is_none()
     {
         return None;
     }
 
-    which::which(cmd).ok()
+    resolve_command_path(cmd)
 }
 
 #[cfg(test)]
