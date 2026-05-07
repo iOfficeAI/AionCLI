@@ -28,9 +28,8 @@ use axum::routing::{get, post};
 
 use agent_client_protocol::schema::{AgentCapabilities, SessionConfigOption, UsageUpdate};
 use aionui_api_types::{
-    AgentModeResponse, ApiResponse, GetModelInfoResponse, ModelInfoEntry, ModelInfoPayload, SetConfigOptionRequest,
-    SetConfigOptionsRequest, SetModeRequest, SetModelRequest, SideQuestionRequest, SideQuestionResponse,
-    SlashCommandItem,
+    AgentModeResponse, ApiResponse, GetModelInfoResponse, SetConfigOptionRequest, SetConfigOptionsRequest,
+    SetModeRequest, SetModelRequest, SideQuestionRequest, SideQuestionResponse, SlashCommandItem,
 };
 use aionui_auth::CurrentUser;
 use aionui_common::AppError;
@@ -129,8 +128,7 @@ async fn get_mode(
     Extension(_user): Extension<CurrentUser>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<AgentModeResponse>>, AppError> {
-    let instance = get_task(&state, &id)?;
-    Ok(Json(ApiResponse::ok(instance.get_mode().await?)))
+    Ok(Json(ApiResponse::ok(state.service.get_mode(&id).await?)))
 }
 
 async fn set_mode(
@@ -140,11 +138,7 @@ async fn set_mode(
     body: Result<Json<SetModeRequest>, JsonRejection>,
 ) -> Result<Json<ApiResponse<()>>, AppError> {
     let Json(req) = body.map_err(|e| AppError::BadRequest(e.to_string()))?;
-    if req.mode.trim().is_empty() {
-        return Err(AppError::BadRequest("mode must not be empty".into()));
-    }
-    let instance = get_task(&state, &id)?;
-    instance.set_mode(&req.mode).await?;
+    state.service.set_mode(&id, req).await?;
     Ok(Json(ApiResponse::success()))
 }
 
@@ -153,39 +147,7 @@ async fn get_model(
     Extension(_user): Extension<CurrentUser>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<GetModelInfoResponse>>, AppError> {
-    let instance = get_task(&state, &id)?;
-    let AgentInstance::Acp(acp) = &instance else {
-        return Err(AppError::BadRequest(
-            "Model info is only available for ACP agents".into(),
-        ));
-    };
-    let sdk_model = acp.model_info().await;
-
-    let model_info = sdk_model.map(|m| {
-        let available: Vec<ModelInfoEntry> = m
-            .available_models
-            .iter()
-            .map(|am| ModelInfoEntry {
-                id: am.model_id.to_string(),
-                label: am.name.clone(),
-            })
-            .collect();
-
-        let current_id = m.current_model_id.to_string();
-        let current_label = available
-            .iter()
-            .find(|e| e.id == current_id)
-            .map(|e| e.label.clone())
-            .unwrap_or_else(|| current_id.clone());
-
-        ModelInfoPayload {
-            current_model_id: Some(current_id),
-            current_model_label: Some(current_label),
-            available_models: available,
-        }
-    });
-
-    Ok(Json(ApiResponse::ok(GetModelInfoResponse { model_info })))
+    Ok(Json(ApiResponse::ok(state.service.get_model_info(&id).await?)))
 }
 
 async fn set_model(
@@ -195,18 +157,7 @@ async fn set_model(
     body: Result<Json<SetModelRequest>, JsonRejection>,
 ) -> Result<Json<ApiResponse<()>>, AppError> {
     let Json(req) = body.map_err(|e| AppError::BadRequest(e.to_string()))?;
-    if req.model_id.trim().is_empty() {
-        return Err(AppError::BadRequest("model_id must not be empty".into()));
-    }
-
-    let instance = get_task(&state, &id)?;
-    let AgentInstance::Acp(acp) = &instance else {
-        return Err(AppError::BadRequest(
-            "Model switching is not supported for this agent type".into(),
-        ));
-    };
-
-    acp.set_model_info(&req.model_id).await?;
+    state.service.set_model(&id, req).await?;
     Ok(Json(ApiResponse::success()))
 }
 
