@@ -68,25 +68,6 @@ pub fn session_ops_routes(state: SessionRouterState) -> Router {
 
 // ── Route handlers ─────────────────────────────────────────────────
 
-async fn side_question(
-    State(state): State<SessionRouterState>,
-    Extension(_user): Extension<CurrentUser>,
-    Path(id): Path<String>,
-    Json(req): Json<SideQuestionRequest>,
-) -> Result<Json<ApiResponse<SideQuestionResponse>>, AppError> {
-    Ok(Json(ApiResponse::ok(
-        state.service.handle_side_question(&id, req).await?,
-    )))
-}
-
-async fn get_slash_commands(
-    State(state): State<SessionRouterState>,
-    Extension(_user): Extension<CurrentUser>,
-    Path(id): Path<String>,
-) -> Result<Json<ApiResponse<Vec<SlashCommandItem>>>, AppError> {
-    Ok(Json(ApiResponse::ok(state.service.get_slash_commands(&id).await?)))
-}
-
 async fn get_mode(
     State(state): State<SessionRouterState>,
     Extension(_user): Extension<CurrentUser>,
@@ -111,7 +92,7 @@ async fn get_model(
     Extension(_user): Extension<CurrentUser>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<GetModelInfoResponse>>, AppError> {
-    Ok(Json(ApiResponse::ok(state.service.get_model_info(&id).await?)))
+    Ok(Json(ApiResponse::ok(state.service.get_model(&id).await?)))
 }
 
 async fn set_model(
@@ -131,7 +112,7 @@ async fn get_config(
     Path(params): Path<ConfigPathParams>,
 ) -> Result<Json<ApiResponse<Option<SessionConfigOption>>>, AppError> {
     Ok(Json(ApiResponse::ok(
-        state.service.get_config_option(&params.id, &params.config_id).await?,
+        state.service.get_config(&params.id, &params.config_id).await?,
     )))
 }
 
@@ -142,10 +123,7 @@ async fn set_config(
     body: Result<Json<SetConfigOptionRequest>, JsonRejection>,
 ) -> Result<Json<ApiResponse<()>>, AppError> {
     let Json(req) = body.map_err(|e| AppError::BadRequest(e.to_string()))?;
-    state
-        .service
-        .set_config_option(&params.id, &params.config_id, req)
-        .await?;
+    state.service.set_config(&params.id, &params.config_id, req).await?;
     Ok(Json(ApiResponse::success()))
 }
 
@@ -154,7 +132,7 @@ async fn get_configs(
     Extension(_user): Extension<CurrentUser>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<Vec<SessionConfigOption>>>, AppError> {
-    Ok(Json(ApiResponse::ok(state.service.get_configs(&id).await?)))
+    Ok(Json(ApiResponse::ok(state.service.get_configs_batch(&id).await?)))
 }
 
 async fn set_configs(
@@ -174,6 +152,25 @@ async fn get_usage(
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<Option<UsageUpdate>>>, AppError> {
     Ok(Json(ApiResponse::ok(state.service.get_usage(&id).await?)))
+}
+
+async fn side_question(
+    State(state): State<SessionRouterState>,
+    Extension(_user): Extension<CurrentUser>,
+    Path(id): Path<String>,
+    Json(req): Json<SideQuestionRequest>,
+) -> Result<Json<ApiResponse<SideQuestionResponse>>, AppError> {
+    Ok(Json(ApiResponse::ok(
+        state.service.handle_side_question(&id, req).await?,
+    )))
+}
+
+async fn get_slash_commands(
+    State(state): State<SessionRouterState>,
+    Extension(_user): Extension<CurrentUser>,
+    Path(id): Path<String>,
+) -> Result<Json<ApiResponse<Vec<SlashCommandItem>>>, AppError> {
+    Ok(Json(ApiResponse::ok(state.service.get_slash_commands(&id).await?)))
 }
 
 async fn get_agent_capabilities(
