@@ -155,6 +155,42 @@ Every domain crate must follow:
 - Prefer real in-memory DB over mocks; mock only to isolate unneeded dependencies
 - New features must include tests
 
+### Test Scope Requirements
+
+**Happy Path (Critical Paths)**
+
+Every new or modified feature must have integration tests covering its normal flow. Critical paths that always require test coverage:
+- Authentication flow (login, token refresh, permission checks)
+- Message sending and retrieval
+- Agent session creation and interaction
+- File upload/download
+- WebSocket connection and event delivery
+
+**Bad Path (Error Paths)**
+
+New endpoints or business logic must include tests for these scenarios:
+- Invalid input (missing fields, wrong types, oversized content)
+- Resource not found (404)
+- Insufficient permissions (unauthenticated, accessing another user's resources)
+- Business rule violations (duplicate creation, operations not allowed in current state)
+
+Bad path tests must assert specific error codes or error messages — asserting merely "not success" is not acceptable.
+
+**Security Tests**
+
+Endpoints involving authentication, authorization, or data isolation must include security tests:
+- Unauthenticated requests are rejected (401)
+- Cross-user data isolation (user A cannot access user B's resources)
+- State-changing requests are rejected when CSRF token is missing or invalid
+- Sensitive fields (passwords, tokens) never appear in responses
+
+**WebSocket Event Tests**
+
+New WebSocket events must verify:
+- The event is emitted after the correct business operation
+- Event payload conforms to `WebSocketMessage<T>` structure
+- Events are only delivered to authorized subscribers (no leakage to unrelated users)
+
 ### Test Failure Handling
 
 When a test fails, do NOT modify the test to make it pass. First determine:
