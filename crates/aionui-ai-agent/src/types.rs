@@ -37,14 +37,14 @@ pub struct BuildTaskOptions {
 
 /// Provider-specific compat overrides resolved in the factory.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct AionrsCompatOverrides {
+pub struct AionrsCompatOverrides {
     pub max_tokens_field: Option<String>,
     pub api_path: Option<String>,
 }
 
 /// Fully resolved Aionrs configuration passed to the agent manager.
 #[derive(Debug, Clone)]
-pub(crate) struct AionrsResolvedConfig {
+pub struct AionrsResolvedConfig {
     /// LLM provider name (anthropic, openai, bedrock, vertex).
     pub provider: String,
     /// Decrypted API key.

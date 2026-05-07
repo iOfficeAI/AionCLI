@@ -35,7 +35,7 @@ pub struct AionrsAgentManager {
 }
 
 impl AionrsAgentManager {
-    pub(crate) async fn new(
+    pub async fn new(
         conversation_id: String,
         workspace: String,
         config_extra: AionrsResolvedConfig,
