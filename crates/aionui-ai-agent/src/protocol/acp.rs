@@ -87,6 +87,16 @@ pub struct AcpProtocol {
     alive: Arc<AtomicBool>,
     /// Cached initialize response from the ACP handshake.
     initialize_response: Arc<RwLock<Option<InitializeResponse>>>,
+    /// Set to `true` for the duration of a `session/load` request so that
+    /// the SDK notification handler skips broadcasting the CLI's historical
+    /// `session/update` replay to the UI event channel. The flag does NOT
+    /// affect `notification_tx` — internal session aggregate updates keep
+    /// flowing so metadata like `available_commands_update` still reaches
+    /// `event_tracker`.
+    ///
+    /// Owned by the outer struct; an `Arc` clone is captured by the SDK
+    /// background task's `on_receive_notification` closure.
+    replay_suppression: Arc<AtomicBool>,
 }
 
 #[allow(dead_code)] // Full ACP method set; some methods await wiring (fork, close, list, auth, ext).
@@ -104,6 +114,7 @@ impl AcpProtocol {
         notification_tx: mpsc::Sender<SessionNotification>,
     ) -> Result<Self, AcpError> {
         let alive = Arc::new(AtomicBool::new(true));
+        let replay_suppression = Arc::new(AtomicBool::new(false));
 
         // Signals from the background task:
         // - `init_tx`: initialize handshake result (with possible SDK error)
@@ -126,6 +137,7 @@ impl AcpProtocol {
             ready_tx,
             shutdown_rx,
             Arc::clone(&alive),
+            Arc::clone(&replay_suppression),
         ));
 
         // Wait for init to complete with timeout.
@@ -148,6 +160,7 @@ impl AcpProtocol {
             shutdown_tx: Some(shutdown_tx),
             alive,
             initialize_response: Arc::new(RwLock::new(Some(init_response))),
+            replay_suppression,
         })
     }
 
@@ -169,7 +182,20 @@ impl AcpProtocol {
     }
 
     /// Load (resume) an existing ACP session.
+    ///
+    /// Backends that support `session/load` (e.g. Codex) will replay the
+    /// entire conversation as `session/update` notifications between the
+    /// moment the request is sent and the moment the response returns.
+    /// Those replayed events are historical and must not reach the UI —
+    /// the frontend already renders history from the local DB. The RAII
+    /// `ReplaySuppressionGuard` flips `replay_suppression` on for the
+    /// duration of the request so the SDK notification handler skips the
+    /// UI broadcast path for replay events.
+    ///
+    /// Note: Claude resumes via `session/new` with `_meta.claudeCode.options.resume`
+    /// and never calls this method, so it is unaffected by the guard.
     pub async fn load_session(&self, req: LoadSessionRequest) -> Result<LoadSessionResponse, AcpError> {
+        let _guard = ReplaySuppressionGuard::new(&self.replay_suppression);
         self.send_request(req, AGENT_METHOD_NAMES.session_load).await
     }
 
@@ -302,6 +328,31 @@ impl Drop for AcpProtocol {
     }
 }
 
+/// Scoped guard: set an `AtomicBool` to `true` on construction, reset to
+/// `false` on drop. Used to mark the inclusive time window of a
+/// `session/load` request so that the SDK notification handler can
+/// suppress UI broadcasts of the CLI's historical replay.
+///
+/// Using a guard (instead of manual `store` around `send_request`) ensures
+/// the flag is cleared even if the future is cancelled, the request fails,
+/// or the task panics.
+struct ReplaySuppressionGuard<'a> {
+    flag: &'a AtomicBool,
+}
+
+impl<'a> ReplaySuppressionGuard<'a> {
+    fn new(flag: &'a AtomicBool) -> Self {
+        flag.store(true, Ordering::Release);
+        Self { flag }
+    }
+}
+
+impl Drop for ReplaySuppressionGuard<'_> {
+    fn drop(&mut self) {
+        self.flag.store(false, Ordering::Release);
+    }
+}
+
 /// Run the SDK `connect_with` future: register notification/request
 /// handlers, execute the initialize handshake, publish the connection
 /// handle, then park on the shutdown signal until [`AcpProtocol`] is dropped.
@@ -316,6 +367,7 @@ async fn run_sdk_background(
     ready_tx: oneshot::Sender<ConnectionTo<Agent>>,
     shutdown_rx: oneshot::Receiver<()>,
     alive: Arc<AtomicBool>,
+    replay_suppression: Arc<AtomicBool>,
 ) {
     let transport = ByteStreams::new(stdin.compat_write(), stdout.compat());
 
@@ -331,6 +383,7 @@ async fn run_sdk_background(
             {
                 let event_tx = event_tx.clone();
                 let notification_tx = notification_tx.clone();
+                let replay_suppression = Arc::clone(&replay_suppression);
                 async move |notification: SessionNotification, _cx: ConnectionTo<Agent>| {
                     // Fan out the raw SDK notification to the manager's apply-loop
                     // FIRST, so session state is consistent by the time the UI
@@ -338,7 +391,16 @@ async fn run_sdk_background(
                     // the manager has dropped the receiver, session consistency
                     // is moot anyway (we're on our way down).
                     let _ = notification_tx.send(notification.clone()).await;
-                    handle_session_notification(notification, &event_tx).await;
+
+                    // During a session/load request, the CLI replays historical
+                    // session/update notifications back to us. The frontend
+                    // already renders history from the local DB, so broadcasting
+                    // the replay would produce duplicate UI blocks. Keep feeding
+                    // notification_tx (event_tracker still needs metadata like
+                    // available_commands_update), but skip the UI broadcast.
+                    if !replay_suppression.load(Ordering::Acquire) {
+                        handle_session_notification(notification, &event_tx).await;
+                    }
                     Ok(())
                 }
             },
@@ -490,5 +552,60 @@ impl std::fmt::Debug for AcpProtocol {
         f.debug_struct("AcpProtocol")
             .field("alive", &self.is_connected())
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replay_suppression_guard_sets_and_clears_flag() {
+        let flag = AtomicBool::new(false);
+        assert!(!flag.load(Ordering::Acquire));
+
+        {
+            let _guard = ReplaySuppressionGuard::new(&flag);
+            assert!(flag.load(Ordering::Acquire));
+        }
+
+        assert!(!flag.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn replay_suppression_guard_clears_on_panic_unwind() {
+        // Use catch_unwind to ensure Drop runs even when the scope panics.
+        let flag = std::sync::Arc::new(AtomicBool::new(false));
+        let flag_for_closure = std::sync::Arc::clone(&flag);
+
+        // &AtomicBool is not UnwindSafe (shared ref), so AssertUnwindSafe is required.
+        // This test also relies on panic = "unwind" (the default); it would not run under panic = "abort".
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = ReplaySuppressionGuard::new(&flag_for_closure);
+            assert!(flag_for_closure.load(Ordering::Acquire));
+            panic!("simulated failure inside load_session");
+        }));
+
+        assert!(!flag.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn replay_suppression_guard_scopes_to_future_lifetime() {
+        // Simulate load_session's body: guard lives across an await point
+        // then drops at function return. Verify the flag sees true during
+        // the await and false afterward.
+        let flag = Arc::new(AtomicBool::new(false));
+        let flag_probe = Arc::clone(&flag);
+
+        async fn simulated_load(flag: &AtomicBool, probe: Arc<AtomicBool>) -> bool {
+            let _guard = ReplaySuppressionGuard::new(flag);
+            // Yield to the runtime so we know the guard survives .await.
+            tokio::task::yield_now().await;
+            probe.load(Ordering::Acquire)
+        }
+
+        let seen_during = simulated_load(&flag, Arc::clone(&flag_probe)).await;
+        assert!(seen_during, "flag should be true inside guarded scope");
+        assert!(!flag.load(Ordering::Acquire), "flag should be false after guard drop");
     }
 }
