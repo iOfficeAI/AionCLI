@@ -138,7 +138,6 @@ pub fn session_notification_to_events(notif: &SessionNotification) -> Vec<AgentS
     events
 }
 
-
 pub fn permission_request_to_event_data(request: &RequestPermissionRequest) -> AcpPermissionEventData {
     AcpPermissionEventData::Request(AcpPermissionRequestData {
         session_id: request.session_id.to_string(),

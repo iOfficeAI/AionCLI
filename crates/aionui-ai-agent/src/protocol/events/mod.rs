@@ -346,5 +346,4 @@ mod tests {
         assert_eq!(json["type"], "thinking");
         assert_eq!(json["data"]["duration"], 1500);
     }
-
 }

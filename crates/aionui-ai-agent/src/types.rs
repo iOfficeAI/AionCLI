@@ -67,7 +67,6 @@ pub struct AionrsResolvedConfig {
     pub session_mode: Option<String>,
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

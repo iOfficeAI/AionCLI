@@ -1127,7 +1127,8 @@ async fn arm_wake_timeout_activity_resets_deadline() {
 
     // Just before the first deadline, an activity chunk arrives.
     tokio::time::advance(Duration::from_millis(WAKE_TIMEOUT_MS - 1_000)).await;
-    tx.send(AgentStreamEvent::Text(TextEventData { content: "hi".into() })).unwrap();
+    tx.send(AgentStreamEvent::Text(TextEventData { content: "hi".into() }))
+        .unwrap();
     // Let the select branch observe the chunk before advancing again.
     tokio::task::yield_now().await;
 
@@ -1157,8 +1158,7 @@ async fn arm_wake_timeout_finish_exits_without_firing() {
     mgr.arm_wake_timeout("worker-1", rx, counting_handler(counter.clone()));
     let_watchdog_settle().await;
 
-    tx.send(AgentStreamEvent::Finish(FinishEventData::default()))
-    .unwrap();
+    tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
     wait_for_map_empty(&mgr, "worker-1", 128).await;
 
     assert_eq!(

@@ -899,8 +899,8 @@ mod tests {
     use crate::test_utils::MockTeamRepo;
     use crate::types::{Team, TeamAgent, TeammateRole};
     use aionui_ai_agent::agent_task::{AgentInstance, IAgentTask, IMockAgent};
-    use aionui_ai_agent::shared_kernel::approval_key;
     use aionui_ai_agent::protocol::events::AgentStreamEvent;
+    use aionui_ai_agent::shared_kernel::approval_key;
     use aionui_ai_agent::types::BuildTaskOptions;
     use aionui_api_types::{AgentModeResponse, WebSocketMessage};
     use aionui_common::{AgentKillReason, AgentType, AppError, Confirmation, ConversationStatus, TimestampMs, now_ms};

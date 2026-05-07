@@ -20,8 +20,8 @@ use std::sync::Arc;
 
 use aionui_ai_agent::agent_task::{AgentInstance, IAgentTask, IMockAgent};
 use aionui_ai_agent::protocol::events::{AgentStreamEvent, ErrorEventData, FinishEventData};
-use aionui_ai_agent::types::{BuildTaskOptions, SendMessageData};
 use aionui_ai_agent::task_manager::AgentFactory;
+use aionui_ai_agent::types::{BuildTaskOptions, SendMessageData};
 use aionui_ai_agent::{IWorkerTaskManager, WorkerTaskManagerImpl};
 use aionui_api_types::AcpBuildExtra;
 use aionui_api_types::TeamMcpStdioConfig;
