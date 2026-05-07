@@ -423,7 +423,7 @@ impl crate::agent_task::IAgentTask for OpenClawAgentManager {
         result
     }
 
-    async fn stop(&self) -> Result<(), AppError> {
+    async fn cancel(&self) -> Result<(), AppError> {
         let session_key = self.state.read().await.session_key.clone();
         if let Some(ref key) = session_key {
             let params = ChatAbortParams {

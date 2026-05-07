@@ -193,7 +193,7 @@ impl crate::agent_task::IAgentTask for NanobotAgentManager {
         self.process.send(&payload).await
     }
 
-    async fn stop(&self) -> Result<(), AppError> {
+    async fn cancel(&self) -> Result<(), AppError> {
         let payload = json!({ "type": "stop.stream", "data": {} });
         self.process.send(&payload).await
     }

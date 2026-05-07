@@ -556,7 +556,7 @@ impl crate::agent_task::IAgentTask for AcpAgentManager {
         result
     }
 
-    async fn stop(&self) -> Result<(), AppError> {
+    async fn cancel(&self) -> Result<(), AppError> {
         let session_id = self.session.read().await.session_id().map(ToOwned::to_owned);
         if let Some(sid) = session_id {
             self.protocol.cancel(CancelNotification::new(SessionId::new(sid)));

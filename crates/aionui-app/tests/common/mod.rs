@@ -156,7 +156,7 @@ impl IAgentTask for NoopMockAgent {
     ) -> Result<(), aionui_common::AppError> {
         Ok(())
     }
-    async fn stop(&self) -> Result<(), aionui_common::AppError> {
+    async fn cancel(&self) -> Result<(), aionui_common::AppError> {
         Ok(())
     }
     fn kill(&self, _reason: Option<aionui_common::AgentKillReason>) -> Result<(), aionui_common::AppError> {

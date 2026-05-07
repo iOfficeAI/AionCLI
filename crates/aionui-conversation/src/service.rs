@@ -1133,9 +1133,9 @@ impl ConversationService {
             .get_task(conversation_id)
             .ok_or_else(|| AppError::Conflict("No active agent for this conversation".into()))?;
 
-        agent.stop().await?;
+        agent.cancel().await?;
 
-        info!(conversation_id, "Stream stopped");
+        info!(conversation_id, "Stream canceled");
         Ok(())
     }
 

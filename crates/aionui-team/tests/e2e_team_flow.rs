@@ -152,7 +152,7 @@ impl IAgentTask for RecordingAgent {
             None => Ok(()),
         }
     }
-    async fn stop(&self) -> Result<(), AppError> {
+    async fn cancel(&self) -> Result<(), AppError> {
         Ok(())
     }
     fn kill(&self, _reason: Option<AgentKillReason>) -> Result<(), AppError> {

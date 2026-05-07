@@ -234,7 +234,7 @@ impl crate::agent_task::IAgentTask for AionrsAgentManager {
         }
     }
 
-    async fn stop(&self) -> Result<(), AppError> {
+    async fn cancel(&self) -> Result<(), AppError> {
         info!(
             conversation_id = %self.runtime.conversation_id(),
             "Aionrs stop requested"
@@ -422,7 +422,7 @@ mod tests {
             .unwrap();
         let mut rx = agent.subscribe();
 
-        agent.stop().await.unwrap();
+        agent.cancel().await.unwrap();
 
         assert_eq!(agent.status(), Some(ConversationStatus::Finished));
 

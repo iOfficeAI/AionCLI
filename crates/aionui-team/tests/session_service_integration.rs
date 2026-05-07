@@ -537,7 +537,7 @@ mod mock_agent {
         async fn send_message(&self, _data: SendMessageData) -> Result<(), AppError> {
             Ok(())
         }
-        async fn stop(&self) -> Result<(), AppError> {
+        async fn cancel(&self) -> Result<(), AppError> {
             Ok(())
         }
         fn kill(&self, _reason: Option<AgentKillReason>) -> Result<(), AppError> {

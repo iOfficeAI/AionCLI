@@ -1224,7 +1224,7 @@ impl IAgentTask for MockAgent {
         ));
         Ok(())
     }
-    async fn stop(&self) -> Result<(), AppError> {
+    async fn cancel(&self) -> Result<(), AppError> {
         *self.stopped.lock().unwrap() = true;
         Ok(())
     }
@@ -1447,7 +1447,7 @@ impl IAgentTask for ScriptedAgent {
         Ok(())
     }
 
-    async fn stop(&self) -> Result<(), AppError> {
+    async fn cancel(&self) -> Result<(), AppError> {
         Ok(())
     }
 

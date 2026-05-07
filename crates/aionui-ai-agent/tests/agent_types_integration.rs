@@ -74,7 +74,7 @@ impl IAgentTask for TypedMockAgent {
     async fn send_message(&self, _data: SendMessageData) -> Result<(), aionui_common::AppError> {
         Ok(())
     }
-    async fn stop(&self) -> Result<(), aionui_common::AppError> {
+    async fn cancel(&self) -> Result<(), aionui_common::AppError> {
         Ok(())
     }
     fn kill(&self, _reason: Option<AgentKillReason>) -> Result<(), aionui_common::AppError> {

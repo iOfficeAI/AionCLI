@@ -314,7 +314,7 @@ impl crate::agent_task::IAgentTask for RemoteAgentManager {
         }
     }
 
-    async fn stop(&self) -> Result<(), AppError> {
+    async fn cancel(&self) -> Result<(), AppError> {
         let payload = json!({ "type": "session/cancel", "data": {} });
         self.ws_send(&payload).await?;
 

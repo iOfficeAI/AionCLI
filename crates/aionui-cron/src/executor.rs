@@ -2103,7 +2103,7 @@ mod tests {
             Ok(())
         }
 
-        async fn stop(&self) -> Result<(), aionui_common::AppError> {
+        async fn cancel(&self) -> Result<(), aionui_common::AppError> {
             Ok(())
         }
 

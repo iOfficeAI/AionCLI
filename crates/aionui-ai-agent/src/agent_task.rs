@@ -61,7 +61,7 @@ pub trait IAgentTask: Send + Sync {
     async fn send_message(&self, data: SendMessageData) -> Result<(), AppError>;
 
     /// Stop the current streaming response without killing the agent.
-    async fn stop(&self) -> Result<(), AppError>;
+    async fn cancel(&self) -> Result<(), AppError>;
 
     /// Terminate the agent process.
     ///
@@ -197,9 +197,9 @@ impl AgentInstance {
         self.as_task().send_message(data).await
     }
 
-    /// Stop the current streaming response without killing the agent.
-    pub async fn stop(&self) -> Result<(), AppError> {
-        self.as_task().stop().await
+    /// Cancel the current streaming response without killing the agent.
+    pub async fn cancel(&self) -> Result<(), AppError> {
+        self.as_task().cancel().await
     }
 
     /// Terminate the agent process.
