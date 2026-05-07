@@ -1,4 +1,5 @@
 //! AI agent lifecycle, worker task dispatch, and skill management.
+pub mod agent_runtime;
 pub mod agent_task;
 pub(crate) mod capability;
 pub mod factory;
@@ -13,6 +14,7 @@ pub mod shared_kernel;
 pub mod task_manager;
 pub mod types;
 
+pub use agent_runtime::AgentRuntime;
 #[cfg(any(test, feature = "test-support"))]
 pub use agent_task::IMockAgent;
 pub use agent_task::{AgentInstance, IAgentTask};
