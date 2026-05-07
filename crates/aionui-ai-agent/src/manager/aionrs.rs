@@ -24,10 +24,25 @@ use crate::types::{AionrsResolvedConfig, SendMessageData};
 pub struct AionrsAgentManager {
     runtime: AgentRuntime,
     engine: Mutex<AgentEngine>,
-    #[allow(dead_code)] // held for Arc drop cleanup on agent destruction
+    /// Holds `Arc<McpManager>` instances alive for the duration of this agent's
+    /// lifetime. The managers are not accessed after construction — they exist
+    /// solely so their underlying MCP connections outlive the engine's event
+    /// loop. Rust drops them here, in field-declaration order, after `engine`
+    /// and `runtime` are dropped. See the explicit `Drop` impl below.
+    #[allow(dead_code)] // intentional: lifetime-extension only; see Drop impl
     mcp_managers: Vec<Arc<McpManager>>,
     approval_manager: Arc<ToolApprovalManager>,
     confirmations: Arc<std::sync::RwLock<Vec<Confirmation>>>,
+}
+
+impl Drop for AionrsAgentManager {
+    fn drop(&mut self) {
+        // McpManagers are held alive by the `mcp_managers` field specifically
+        // so they outlive the agent's event loop. No explicit cleanup is needed
+        // here — the Arc drop path releases each McpManager's underlying MCP
+        // connection. This impl exists to document the intentional Drop-order
+        // semantics rather than as a lint escape hatch.
+    }
 }
 
 impl AionrsAgentManager {
