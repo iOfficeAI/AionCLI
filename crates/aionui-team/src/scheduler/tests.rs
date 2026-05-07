@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use aionui_ai_agent::AgentStreamEvent;
-use aionui_ai_agent::protocol::events::{ErrorEventData, FinishEventData, TextEventData};
+use aionui_ai_agent::protocol::events::{FinishEventData, TextEventData};
 use aionui_api_types::WebSocketMessage;
 use aionui_realtime::EventBroadcaster;
 use dashmap::DashMap;
