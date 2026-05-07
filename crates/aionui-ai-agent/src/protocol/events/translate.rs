@@ -18,7 +18,7 @@ use super::tool_call::{
 use super::{AgentStreamEvent, TextEventData};
 
 /// Convert an SDK [`SessionNotification`] into zero or more [`AgentStreamEvent`]s.
-pub fn session_notification_to_events(notif: &SessionNotification) -> Vec<AgentStreamEvent> {
+pub(crate) fn session_notification_to_events(notif: &SessionNotification) -> Vec<AgentStreamEvent> {
     let session_id = notif.session_id.to_string();
     let mut events = Vec::new();
 
@@ -138,7 +138,7 @@ pub fn session_notification_to_events(notif: &SessionNotification) -> Vec<AgentS
     events
 }
 
-pub fn permission_request_to_event_data(request: &RequestPermissionRequest) -> AcpPermissionEventData {
+pub(crate) fn permission_request_to_event_data(request: &RequestPermissionRequest) -> AcpPermissionEventData {
     AcpPermissionEventData::Request(AcpPermissionRequestData {
         session_id: request.session_id.to_string(),
         tool_call: map_permission_tool_call(&request.tool_call),

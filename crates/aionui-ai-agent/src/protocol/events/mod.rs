@@ -18,7 +18,7 @@ pub use tool_call::{
     AcpToolCallSessionUpdateKind, AcpToolCallStatus, AcpToolCallTextBlock, AcpToolCallTextBlockType,
     AcpToolCallUpdateData, ToolCallEventData, ToolCallStatus, ToolGroupEntry,
 };
-pub use translate::{permission_request_to_event_data, session_notification_to_events};
+pub(crate) use translate::{permission_request_to_event_data, session_notification_to_events};
 
 /// Events emitted by an Agent during a message processing turn.
 #[derive(Debug, Clone, Serialize, Deserialize)]
