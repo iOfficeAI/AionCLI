@@ -224,6 +224,7 @@ impl TeamSessionService {
             agents: agents_json,
             lead_agent_id: lead_agent_id.clone(),
             session_mode: None,
+            agents_version: "1.0.1".into(),
             created_at: now,
             updated_at: now,
         };
@@ -259,8 +260,17 @@ impl TeamSessionService {
         let rows = self.repo.list_teams().await?;
         let mut teams = Vec::with_capacity(rows.len());
         for row in &rows {
-            let team = Team::from_row(row)?;
-            teams.push(self.build_team_response(&team).await?);
+            match Team::from_row(row) {
+                Ok(team) => match self.build_team_response(&team).await {
+                    Ok(resp) => teams.push(resp),
+                    Err(e) => {
+                        tracing::warn!(team_id = %row.id, error = %e, "skipping team with build error");
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!(team_id = %row.id, error = %e, "skipping team with invalid agents JSON");
+                }
+            }
         }
         Ok(teams)
     }

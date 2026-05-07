@@ -87,23 +87,24 @@ impl TeammateStatus {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TeamAgent {
-    #[serde(default)]
+    #[serde(default, alias = "slotId")]
     pub slot_id: String,
     #[serde(alias = "agentName")]
     pub name: String,
     pub role: TeammateRole,
+    #[serde(alias = "conversationId")]
     pub conversation_id: String,
     #[serde(alias = "agentType")]
     pub backend: String,
     #[serde(default)]
     pub model: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", alias = "customAgentId")]
     pub custom_agent_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<TeammateStatus>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "conversationType")]
     pub conversation_type: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "cliPath")]
     pub cli_path: Option<String>,
 }
 
@@ -616,6 +617,7 @@ mod tests {
             agents: agents_json,
             lead_agent_id: Some("s1".into()),
             session_mode: None,
+            agents_version: "1.0.1".into(),
             created_at: 1000,
             updated_at: 2000,
         };
@@ -668,10 +670,32 @@ mod tests {
             agents: "not-json".into(),
             lead_agent_id: None,
             session_mode: None,
+            agents_version: "1.0.1".into(),
             created_at: 0,
             updated_at: 0,
         };
         assert!(Team::from_row(&row).is_err());
+    }
+
+    #[test]
+    fn team_agent_deserialize_old_camelcase_format() {
+        let raw = serde_json::json!({
+            "slotId": "slot-abc",
+            "conversationId": "conv-123",
+            "role": "leader",
+            "status": "pending",
+            "agentType": "claude",
+            "agentName": "Leader",
+            "conversationType": "acp",
+            "cliPath": "claude"
+        });
+        let agent: TeamAgent = serde_json::from_value(raw).unwrap();
+        assert_eq!(agent.slot_id, "slot-abc");
+        assert_eq!(agent.conversation_id, "conv-123");
+        assert_eq!(agent.name, "Leader");
+        assert_eq!(agent.backend, "claude");
+        assert_eq!(agent.conversation_type.as_deref(), Some("acp"));
+        assert_eq!(agent.cli_path.as_deref(), Some("claude"));
     }
 
     // -- MailboxMessage from_row ----------------------------------------------

@@ -31,9 +31,12 @@ fn make_team(id: &str, name: &str) -> TeamRow {
         name: name.into(),
         workspace: String::new(),
         workspace_mode: "shared".into(),
-        agents: r#"[{"slotId":"a1","name":"Lead","role":"lead"}]"#.into(),
+        agents:
+            r#"[{"slot_id":"a1","name":"Lead","role":"lead","conversation_id":"conv-1","backend":"claude","model":""}]"#
+                .into(),
         lead_agent_id: Some("a1".into()),
         session_mode: None,
+        agents_version: "1.0.1".into(),
         created_at: now,
         updated_at: now,
     }

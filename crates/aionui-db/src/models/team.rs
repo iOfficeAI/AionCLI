@@ -15,6 +15,7 @@ pub struct TeamRow {
     pub agents: String,
     pub lead_agent_id: Option<String>,
     pub session_mode: Option<String>,
+    pub agents_version: String,
     pub created_at: TimestampMs,
     pub updated_at: TimestampMs,
 }
@@ -78,6 +79,7 @@ mod tests {
             agents: "[]".into(),
             lead_agent_id: None,
             session_mode: None,
+            agents_version: "1.0.1".into(),
             created_at: 0,
             updated_at: 0,
         };
