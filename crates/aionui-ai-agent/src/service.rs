@@ -5,16 +5,19 @@
 //! only extract inputs, call methods on this service, and wrap the
 //! result in `ApiResponse`. Methods will be added in Stage 2b–2f.
 
+use std::path::Component;
 use std::sync::Arc;
 
 use agent_client_protocol::schema::SessionModelState;
 use aionui_api_types::{
     AgentModeResponse, GetModelInfoResponse, ModelInfoEntry, ModelInfoPayload, SetConfigOptionRequest,
     SetConfigOptionsRequest, SetModeRequest, SetModelRequest, SideQuestionRequest, SideQuestionResponse,
-    SlashCommandItem,
+    SlashCommandItem, WorkspaceBrowseQuery, WorkspaceEntry,
 };
 use aionui_common::AppError;
 use aionui_db::IConversationRepository;
+
+const MAX_DIR_DEPTH: usize = 10;
 
 use crate::agent_task::AgentInstance;
 use crate::persistence::AcpSessionSyncService;
@@ -240,6 +243,118 @@ impl AgentService {
     pub async fn reload_context(&self, conversation_id: &str) -> Result<(), AppError> {
         let _instance = self.task(conversation_id)?;
         Ok(())
+    }
+
+    pub async fn browse_workspace(
+        &self,
+        conversation_id: &str,
+        query: WorkspaceBrowseQuery,
+    ) -> Result<Vec<WorkspaceEntry>, AppError> {
+        if query.path.trim().is_empty() {
+            return Err(AppError::BadRequest("path must not be empty".into()));
+        }
+
+        let row = self
+            .conversation_repo
+            .get(conversation_id)
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to load conversation: {e}")))?
+            .ok_or_else(|| AppError::NotFound(format!("Conversation '{conversation_id}' not found")))?;
+
+        let extra: serde_json::Value =
+            serde_json::from_str(&row.extra).map_err(|e| AppError::Internal(format!("Invalid extra JSON: {e}")))?;
+        let workspace = extra
+            .get("workspace")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_owned();
+        if workspace.is_empty() {
+            return Err(AppError::BadRequest("Conversation has no workspace assigned".into()));
+        }
+
+        let relative_path = query.path.trim_start_matches('/');
+        let relative_path_obj = std::path::Path::new(relative_path);
+        if relative_path_obj
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
+        {
+            return Err(AppError::BadRequest(
+                "Path traversal outside workspace is not allowed".into(),
+            ));
+        }
+
+        // Resolve the browsed path relative to the workspace root
+        let base = std::path::Path::new(&workspace);
+        let browse_path = if relative_path.is_empty() {
+            base.to_path_buf()
+        } else {
+            base.join(relative_path_obj)
+        };
+
+        // Security: reject direct traversal outside the workspace root, but allow
+        // symlinked directories mounted inside the workspace (e.g. native skill
+        // dirs that point at the builtin skills corpus under data-dir).
+        let canonical_base = base
+            .canonicalize()
+            .map_err(|e| AppError::Internal(format!("Failed to resolve workspace path: {e}")))?;
+        let canonical_browse = browse_path
+            .canonicalize()
+            .map_err(|_| AppError::NotFound("Directory not found".into()))?;
+        if !browse_path.starts_with(base) && !canonical_browse.starts_with(&canonical_base) {
+            return Err(AppError::BadRequest(
+                "Path traversal outside workspace is not allowed".into(),
+            ));
+        }
+
+        // Check depth limit
+        let depth = relative_path_obj.components().count();
+        if depth > MAX_DIR_DEPTH {
+            return Err(AppError::BadRequest(format!(
+                "Directory depth exceeds maximum of {MAX_DIR_DEPTH}"
+            )));
+        }
+
+        let mut entries = Vec::new();
+        let mut dir_reader = tokio::fs::read_dir(&canonical_browse)
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to read directory: {e}")))?;
+
+        while let Ok(Some(entry)) = dir_reader.next_entry().await {
+            let name = entry.file_name().to_string_lossy().into_owned();
+
+            // Apply search filter if provided
+            if let Some(ref search) = query.search
+                && !search.is_empty()
+                && !name.to_lowercase().contains(&search.to_lowercase())
+            {
+                continue;
+            }
+
+            let entry_path = entry.path();
+            let metadata = tokio::fs::metadata(&entry_path)
+                .await
+                .map_err(|e| AppError::Internal(format!("Failed to read entry metadata: {e}")))?;
+
+            let entry_type = if metadata.is_dir() { "directory" } else { "file" };
+
+            entries.push(WorkspaceEntry {
+                name,
+                entry_type: entry_type.into(),
+            });
+        }
+
+        // Sort: directories first, then alphabetically
+        entries.sort_by(|a, b| {
+            let type_cmp = a.entry_type.cmp(&b.entry_type);
+            if type_cmp == std::cmp::Ordering::Equal {
+                a.name.to_lowercase().cmp(&b.name.to_lowercase())
+            } else {
+                type_cmp
+            }
+        });
+
+        Ok(entries)
     }
 }
 
