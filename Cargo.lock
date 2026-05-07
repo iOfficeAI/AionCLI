@@ -304,7 +304,6 @@ dependencies = [
  "aionui-common",
  "aionui-db",
  "aionui-extension",
- "aionui-realtime",
  "aionui-system",
  "async-trait",
  "axum",
