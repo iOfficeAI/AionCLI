@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
 
-use aionui_common::{AgentKillReason, AgentType, AppError, Confirmation, ConversationStatus, TimestampMs, now_ms};
+use aionui_common::{AgentKillReason, AgentType, AppError, Confirmation, ConversationStatus, TimestampMs};
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, RwLock, broadcast};
 use tracing::{debug, error, info, warn};
 
+use crate::agent_runtime::AgentRuntime;
 use crate::capability::cli_process::CliAgentProcess;
 use crate::protocol::events::AgentStreamEvent;
 use crate::shared_kernel::approval_key;
@@ -33,7 +33,6 @@ const GATEWAY_READY_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const STOP_FINISH_FALLBACK_TIMEOUT: Duration = Duration::from_secs(5);
 
 struct OpenClawState {
-    status: Option<ConversationStatus>,
     session_key: Option<String>,
     confirmations: Vec<Confirmation>,
     has_messages: bool,
@@ -41,14 +40,11 @@ struct OpenClawState {
 }
 
 pub struct OpenClawAgentManager {
-    conversation_id: String,
-    workspace: String,
+    runtime: AgentRuntime,
     config: OpenClawBuildExtra,
     gateway_process: Option<Arc<CliAgentProcess>>,
     connection: Arc<OpenClawConnection>,
-    event_tx: broadcast::Sender<AgentStreamEvent>,
     state: Arc<RwLock<OpenClawState>>,
-    last_activity: AtomicI64,
     text_state: Mutex<TextFallbackState>,
 }
 
@@ -155,8 +151,6 @@ impl OpenClawAgentManager {
             "Connected to OpenClaw gateway via WebSocket"
         );
 
-        let (event_tx, _) = broadcast::channel(256);
-
         let has_resume_key = resume_session_key.is_some();
         if has_resume_key {
             info!(
@@ -165,21 +159,19 @@ impl OpenClawAgentManager {
             );
         }
 
+        let runtime = AgentRuntime::new(conversation_id, workspace, 256);
+
         let manager = Self {
-            conversation_id,
-            workspace,
+            runtime,
             config,
             gateway_process,
             connection: Arc::clone(&connection),
-            event_tx: event_tx.clone(),
             state: Arc::new(RwLock::new(OpenClawState {
-                status: None,
                 session_key: resume_session_key,
                 confirmations: Vec::new(),
                 has_messages: has_resume_key,
                 approval_memory: HashMap::new(),
             })),
-            last_activity: AtomicI64::new(now_ms()),
             text_state: Mutex::new(TextFallbackState::new()),
         };
 
@@ -199,7 +191,7 @@ impl OpenClawAgentManager {
         loop {
             match event_rx.recv().await {
                 Ok(event_frame) => {
-                    self.last_activity.store(now_ms(), Ordering::Relaxed);
+                    self.runtime.bump_activity();
 
                     let session_key = self.state.read().await.session_key.clone();
 
@@ -210,19 +202,19 @@ impl OpenClawAgentManager {
 
                     for stream_event in stream_events {
                         self.update_state_from_event(&stream_event).await;
-                        let _ = self.event_tx.send(stream_event);
+                        self.runtime.emit(stream_event);
                     }
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
                     warn!(
-                        conversation_id = %self.conversation_id,
+                        conversation_id = %self.runtime.conversation_id(),
                         lagged = n,
                         "OpenClaw event relay lagged"
                     );
                 }
                 Err(broadcast::error::RecvError::Closed) => {
                     debug!(
-                        conversation_id = %self.conversation_id,
+                        conversation_id = %self.runtime.conversation_id(),
                         "OpenClaw event channel closed"
                     );
                     break;
@@ -230,31 +222,30 @@ impl OpenClawAgentManager {
             }
         }
 
-        let mut state = self.state.write().await;
-        if state.status == Some(ConversationStatus::Running) {
-            state.status = Some(ConversationStatus::Finished);
+        // Channel closed without a terminal event; transition to Finished if still Running.
+        if self.runtime.status() == Some(ConversationStatus::Running) {
+            self.runtime.transition_to(ConversationStatus::Finished);
         }
     }
 
     async fn update_state_from_event(&self, event: &AgentStreamEvent) {
         match event {
             AgentStreamEvent::Start(data) => {
-                let mut state = self.state.write().await;
-                state.status = Some(ConversationStatus::Running);
+                self.runtime.transition_to(ConversationStatus::Running);
                 if let Some(ref sid) = data.session_id {
+                    let mut state = self.state.write().await;
                     state.session_key = Some(sid.clone());
                 }
             }
             AgentStreamEvent::Finish(data) => {
-                let mut state = self.state.write().await;
-                state.status = Some(ConversationStatus::Finished);
+                self.runtime.transition_to(ConversationStatus::Finished);
                 if let Some(ref sid) = data.session_id {
+                    let mut state = self.state.write().await;
                     state.session_key = Some(sid.clone());
                 }
             }
             AgentStreamEvent::Error(_) => {
-                let mut state = self.state.write().await;
-                state.status = Some(ConversationStatus::Finished);
+                self.runtime.transition_to(ConversationStatus::Finished);
             }
             AgentStreamEvent::AcpPermission(data) => {
                 if let Some(conf) = data.as_confirmation() {
@@ -319,7 +310,7 @@ impl OpenClawAgentManager {
                     let mut state = self.state.write().await;
                     state.session_key = Some(resp.key.clone());
                     info!(
-                        conversation_id = %self.conversation_id,
+                        conversation_id = %self.runtime.conversation_id(),
                         session_key = %resp.key,
                         "Resumed OpenClaw session via sessions.resolve"
                     );
@@ -327,7 +318,7 @@ impl OpenClawAgentManager {
                 }
                 Err(e) => {
                     warn!(
-                        conversation_id = %self.conversation_id,
+                        conversation_id = %self.runtime.conversation_id(),
                         error = %e,
                         "Failed to resume OpenClaw session, falling back to sessions.reset"
                     );
@@ -340,7 +331,7 @@ impl OpenClawAgentManager {
             .request(
                 "sessions.reset",
                 serde_json::to_value(SessionsResetParams {
-                    key: self.conversation_id.clone(),
+                    key: self.runtime.conversation_id().to_owned(),
                     reason: "new".into(),
                 })
                 .unwrap_or_default(),
@@ -361,13 +352,13 @@ impl OpenClawAgentManager {
         let port = self.config.gateway.port.unwrap_or(DEFAULT_GATEWAY_PORT);
 
         json!({
-            "workspace": self.workspace,
+            "workspace": self.runtime.workspace(),
             "backend": serde_json::to_value(&self.config.backend).unwrap_or_default(),
             "agentName": self.config.agent_name,
             "cliPath": self.config.gateway.cli_path,
             "gatewayHost": host,
             "gatewayPort": port,
-            "conversationId": self.conversation_id,
+            "conversationId": self.runtime.conversation_id(),
             "isConnected": self.connection.is_connected(),
             "hasActiveSession": state.session_key.is_some(),
             "sessionKey": state.session_key,
@@ -382,35 +373,35 @@ impl crate::agent_task::IAgentTask for OpenClawAgentManager {
     }
 
     fn conversation_id(&self) -> &str {
-        &self.conversation_id
+        self.runtime.conversation_id()
     }
 
     fn workspace(&self) -> &str {
-        &self.workspace
+        self.runtime.workspace()
     }
 
     fn status(&self) -> Option<ConversationStatus> {
-        self.state.try_read().ok().and_then(|g| g.status)
+        self.runtime.status()
     }
 
     fn last_activity_at(&self) -> TimestampMs {
-        self.last_activity.load(Ordering::Relaxed)
+        self.runtime.last_activity_at()
     }
 
     fn subscribe(&self) -> broadcast::Receiver<AgentStreamEvent> {
-        self.event_tx.subscribe()
+        self.runtime.subscribe()
     }
 
     async fn send_message(&self, data: SendMessageData) -> Result<(), AppError> {
-        self.last_activity.store(now_ms(), Ordering::Relaxed);
+        self.runtime.bump_activity();
 
         let is_first = {
             let mut state = self.state.write().await;
             let first = !state.has_messages;
             state.has_messages = true;
-            state.status = Some(ConversationStatus::Running);
             first
         };
+        self.runtime.transition_to(ConversationStatus::Running);
 
         {
             let mut text_state = self.text_state.lock().await;
@@ -420,21 +411,12 @@ impl crate::agent_task::IAgentTask for OpenClawAgentManager {
         let result = self.do_send_message(is_first, data).await;
         if let Err(ref e) = result {
             error!(
-                conversation_id = %self.conversation_id,
+                conversation_id = %self.runtime.conversation_id(),
                 error = %e,
                 "OpenClaw send_message failed, emitting Error+Finish"
             );
-            let _ = self
-                .event_tx
-                .send(AgentStreamEvent::Error(crate::protocol::events::ErrorEventData {
-                    message: format!("OpenClaw send failed: {e}"),
-                    code: None,
-                }));
-            let _ = self
-                .event_tx
-                .send(AgentStreamEvent::Finish(crate::protocol::events::FinishEventData {
-                    session_id: None,
-                }));
+            self.runtime.emit_error(format!("OpenClaw send failed: {e}"));
+            self.runtime.emit_finish(None);
         }
         result
     }
@@ -457,15 +439,12 @@ impl crate::agent_task::IAgentTask for OpenClawAgentManager {
             state.confirmations.clear();
         }
 
-        let state = Arc::clone(&self.state);
-        let event_tx = self.event_tx.clone();
-        let conversation_id = self.conversation_id.clone();
+        let runtime = self.runtime.clone();
+        let conversation_id = self.runtime.conversation_id().to_owned();
         tokio::spawn(async move {
             tokio::time::sleep(STOP_FINISH_FALLBACK_TIMEOUT).await;
-            let needs_fallback = state
-                .read()
-                .await
-                .status
+            let needs_fallback = runtime
+                .status()
                 .map(|s| s == ConversationStatus::Running)
                 .unwrap_or(false);
             if needs_fallback {
@@ -473,13 +452,8 @@ impl crate::agent_task::IAgentTask for OpenClawAgentManager {
                     conversation_id = %conversation_id,
                     "Gateway did not send abort event within timeout, emitting fallback Finish"
                 );
-                let _ = event_tx.send(AgentStreamEvent::Error(crate::protocol::events::ErrorEventData {
-                    message: "Stopped by user".into(),
-                    code: None,
-                }));
-                let _ = event_tx.send(AgentStreamEvent::Finish(crate::protocol::events::FinishEventData {
-                    session_id: None,
-                }));
+                runtime.emit_error("Stopped by user");
+                runtime.emit_finish(None);
             }
         });
 
@@ -488,7 +462,7 @@ impl crate::agent_task::IAgentTask for OpenClawAgentManager {
 
     fn kill(&self, reason: Option<AgentKillReason>) -> Result<(), AppError> {
         info!(
-            conversation_id = %self.conversation_id,
+            conversation_id = %self.runtime.conversation_id(),
             ?reason,
             "Killing OpenClaw agent"
         );
