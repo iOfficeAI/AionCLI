@@ -10,9 +10,8 @@ use tracing::{debug, error, info, warn};
 use crate::agent_runtime::AgentRuntime;
 use crate::capability::cli_process::CliAgentProcess;
 use crate::protocol::events::AgentStreamEvent;
-use crate::shared_kernel::approval_key;
 use crate::types::SendMessageData;
-use aionui_api_types::{OpenClawBuildExtra, OpenClawGatewayConfig};
+use aionui_api_types::OpenClawBuildExtra;
 
 use super::config::load_openclaw_config;
 use super::connection::{AuthConfig, OpenClawConnection};
@@ -23,28 +22,31 @@ use super::protocol::{
     SessionsResolveResponse, normalize_ws_url,
 };
 
-use aionui_common::{CommandSpec, EnvVar};
+mod confirmations;
+mod spawn_helpers;
+
+use spawn_helpers::{build_spawn_config, is_port_listening, wait_for_gateway_ready};
 
 pub const DEFAULT_GATEWAY_PORT: u16 = 18789;
 
 const OPENCLAW_KILL_GRACE_MS: u64 = 1000;
-const GATEWAY_READY_TIMEOUT: Duration = Duration::from_secs(10);
-const GATEWAY_READY_POLL_INTERVAL: Duration = Duration::from_millis(200);
+pub(super) const GATEWAY_READY_TIMEOUT: Duration = Duration::from_secs(10);
+pub(super) const GATEWAY_READY_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const STOP_FINISH_FALLBACK_TIMEOUT: Duration = Duration::from_secs(5);
 
-struct OpenClawState {
-    session_key: Option<String>,
-    confirmations: Vec<Confirmation>,
-    has_messages: bool,
-    approval_memory: HashMap<String, bool>,
+pub(super) struct OpenClawState {
+    pub(super) session_key: Option<String>,
+    pub(super) confirmations: Vec<Confirmation>,
+    pub(super) has_messages: bool,
+    pub(super) approval_memory: HashMap<String, bool>,
 }
 
 pub struct OpenClawAgentManager {
     runtime: AgentRuntime,
     config: OpenClawBuildExtra,
     gateway_process: Option<Arc<CliAgentProcess>>,
-    connection: Arc<OpenClawConnection>,
-    state: Arc<RwLock<OpenClawState>>,
+    pub(super) connection: Arc<OpenClawConnection>,
+    pub(super) state: Arc<RwLock<OpenClawState>>,
     text_state: Mutex<TextFallbackState>,
 }
 
@@ -483,166 +485,5 @@ impl crate::agent_task::IAgentTask for OpenClawAgentManager {
         }
 
         Ok(())
-    }
-}
-
-/// OpenClaw-specific operations reached through `AgentInstance::OpenClaw(..)`
-/// matches in the routes + services (e.g. `persist_session_key` uses
-/// `get_session_key`, and `get_openclaw_runtime` calls `get_diagnostics`).
-impl OpenClawAgentManager {
-    pub fn confirm(&self, _msg_id: &str, call_id: &str, _data: Value, always_allow: bool) -> Result<(), AppError> {
-        if let Ok(mut state) = self.state.try_write() {
-            if always_allow && let Some(conf) = state.confirmations.iter().find(|c| c.call_id == call_id) {
-                let key = approval_key(conf.action.as_deref(), conf.command_type.as_deref());
-                state.approval_memory.insert(key, true);
-            }
-            state.confirmations.retain(|c| c.call_id != call_id);
-        }
-
-        let connection = Arc::clone(&self.connection);
-        let call_id = call_id.to_owned();
-        let option_id = if always_allow { "allow_always" } else { "allow_once" };
-        let option_id = option_id.to_owned();
-        tokio::spawn(async move {
-            let params = json!({
-                "requestId": call_id,
-                "optionId": option_id,
-            });
-            if let Err(e) = connection.request::<Value>("exec.approval.respond", params).await {
-                warn!(error = %e, "Failed to send OpenClaw approval response");
-            }
-        });
-
-        Ok(())
-    }
-
-    pub fn get_confirmations(&self) -> Vec<Confirmation> {
-        self.state
-            .try_read()
-            .map(|g| g.confirmations.clone())
-            .unwrap_or_default()
-    }
-
-    pub fn check_approval(&self, action: &str, command_type: Option<&str>) -> bool {
-        self.state
-            .try_read()
-            .map(|g| {
-                let key = approval_key(Some(action), command_type);
-                g.approval_memory.get(&key).copied().unwrap_or(false)
-            })
-            .unwrap_or(false)
-    }
-
-    pub fn get_session_key(&self) -> Option<String> {
-        self.state.try_read().ok().and_then(|g| g.session_key.clone())
-    }
-}
-
-fn build_spawn_config(cli_path: &str, workspace: &str, gateway: &OpenClawGatewayConfig) -> CommandSpec {
-    let host = gateway.host.as_deref().unwrap_or("127.0.0.1");
-    let port = gateway.port.unwrap_or(DEFAULT_GATEWAY_PORT);
-
-    let mut env = vec![
-        EnvVar {
-            name: "OPENCLAW_GATEWAY_HOST".into(),
-            value: host.to_owned(),
-        },
-        EnvVar {
-            name: "OPENCLAW_GATEWAY_PORT".into(),
-            value: port.to_string(),
-        },
-    ];
-
-    if let Some(ref token) = gateway.token {
-        env.push(EnvVar {
-            name: "OPENCLAW_GATEWAY_TOKEN".into(),
-            value: token.clone(),
-        });
-    }
-    if let Some(ref password) = gateway.password {
-        env.push(EnvVar {
-            name: "OPENCLAW_GATEWAY_PASSWORD".into(),
-            value: password.clone(),
-        });
-    }
-
-    CommandSpec {
-        command: cli_path.into(),
-        args: vec!["gateway".into(), "--port".into(), port.to_string()],
-        env,
-        cwd: Some(workspace.to_owned()),
-    }
-}
-
-async fn is_port_listening(host: &str, port: u16) -> bool {
-    tokio::net::TcpStream::connect((host, port)).await.is_ok()
-}
-
-async fn wait_for_gateway_ready(host: &str, port: u16) -> Result<(), AppError> {
-    let start = tokio::time::Instant::now();
-    while start.elapsed() < GATEWAY_READY_TIMEOUT {
-        if is_port_listening(host, port).await {
-            return Ok(());
-        }
-        tokio::time::sleep(GATEWAY_READY_POLL_INTERVAL).await;
-    }
-    Err(AppError::Internal(format!(
-        "OpenClaw gateway did not become ready on {host}:{port} within {}s",
-        GATEWAY_READY_TIMEOUT.as_secs()
-    )))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn default_gateway_port_is_18789() {
-        assert_eq!(DEFAULT_GATEWAY_PORT, 18789);
-    }
-
-    fn env_val<'a>(config: &'a CommandSpec, name: &str) -> Option<&'a str> {
-        config.env.iter().find(|e| e.name == name).map(|e| e.value.as_str())
-    }
-
-    #[test]
-    fn build_spawn_config_with_defaults() {
-        let gateway = OpenClawGatewayConfig {
-            host: None,
-            port: None,
-            token: None,
-            password: None,
-            use_external_gateway: false,
-            cli_path: Some("/usr/bin/openclaw".into()),
-        };
-        let config = build_spawn_config("/usr/bin/openclaw", "/proj", &gateway);
-        assert_eq!(config.command.to_str().unwrap(), "/usr/bin/openclaw");
-        assert_eq!(env_val(&config, "OPENCLAW_GATEWAY_HOST").unwrap(), "127.0.0.1");
-        assert_eq!(env_val(&config, "OPENCLAW_GATEWAY_PORT").unwrap(), "18789");
-        assert!(env_val(&config, "OPENCLAW_GATEWAY_TOKEN").is_none());
-    }
-
-    #[test]
-    fn build_spawn_config_with_custom_gateway() {
-        let gateway = OpenClawGatewayConfig {
-            host: Some("remote.host".into()),
-            port: Some(9999),
-            token: Some("secret".into()),
-            password: Some("pass".into()),
-            use_external_gateway: true,
-            cli_path: Some("/usr/bin/openclaw".into()),
-        };
-        let config = build_spawn_config("/usr/bin/openclaw", "/proj", &gateway);
-        assert_eq!(env_val(&config, "OPENCLAW_GATEWAY_HOST").unwrap(), "remote.host");
-        assert_eq!(env_val(&config, "OPENCLAW_GATEWAY_PORT").unwrap(), "9999");
-        assert_eq!(env_val(&config, "OPENCLAW_GATEWAY_TOKEN").unwrap(), "secret");
-        assert_eq!(env_val(&config, "OPENCLAW_GATEWAY_PASSWORD").unwrap(), "pass");
-    }
-
-    #[test]
-    fn approval_key_formats_correctly() {
-        assert_eq!(approval_key(Some("edit"), Some("file")), "edit:file");
-        assert_eq!(approval_key(Some("edit"), None), "edit");
-        assert_eq!(approval_key(None, None), "");
     }
 }
