@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod catalog_forwarder;
 pub mod events;
+mod mode_normalize;
 pub mod permission_router;
 pub mod reconcile;
 pub mod session;
