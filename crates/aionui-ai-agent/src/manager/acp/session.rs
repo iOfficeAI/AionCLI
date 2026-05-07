@@ -535,4 +535,31 @@ mod tests {
         session.apply_advertised_models(SessionModelState::new("claude-4", Vec::new()));
         assert_eq!(session.observed_model(), Some("claude-4"));
     }
+
+    #[test]
+    fn set_desired_mode_plus_plan_reconcile_produces_set_mode_action() {
+        // This test documents the Stage 4 invariant: the manager's set_mode
+        // should only (a) call set_desired_mode on the aggregate and (b) delegate
+        // to plan_reconcile for the SDK call. Plan_reconcile should emit
+        // ReconcileAction::SetMode when desired and observed diverge.
+        let mut session = AcpSession::new(None, Default::default());
+        session.apply_advertised_modes(SessionModeState::new(
+            "default".to_owned(),
+            vec![SessionMode::new("default", "Default"), SessionMode::new("plan", "Plan")],
+        ));
+        session.apply_observed_mode(ModeId::new("default"));
+        assert_eq!(session.plan_reconcile(), vec![]);
+
+        // User chooses "plan" via set_desired_mode (what set_mode will do).
+        assert!(session.set_desired_mode(ModeId::new("plan")));
+
+        // Now reconcile should want to set CLI mode to "plan".
+        let actions = session.plan_reconcile();
+        assert_eq!(
+            actions,
+            vec![ReconcileAction::SetMode {
+                mode: ModeId::new("plan")
+            }]
+        );
+    }
 }

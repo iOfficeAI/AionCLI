@@ -666,19 +666,25 @@ impl AcpAgentManager {
         }
         let session_id = self.session.read().await.session_id().map(ToOwned::to_owned);
 
-        if let Some(sid) = session_id {
-            self.protocol
-                .set_mode(SetSessionModeRequest::new(SessionId::new(sid), normalized_mode.clone()))
-                .await
-                .map_err(AppError::from)?;
-            self.update_cached_mode(&normalized_mode).await;
+        // Write desired — the aggregate root's legitimate intent write-point.
+        {
             let mut session = self.session.write().await;
-            session.apply_observed_mode(ModeId::new(&normalized_mode));
+            session.set_desired_mode(ModeId::new(&normalized_mode));
+            self.commit_session_changes(&mut session).await;
         }
 
-        let mut session = self.session.write().await;
-        session.set_desired_mode(ModeId::new(normalized_mode));
-        self.commit_session_changes(&mut session).await;
+        // Optimistically update advertised.modes.current_mode_id so get_mode()
+        // reflects the user's choice immediately. reconcile_session pushes the
+        // actual SDK call; the advertised state is then confirmed (or corrected)
+        // when the CLI's next SessionNotification arrives via event_tracker.
+        self.update_cached_mode(&normalized_mode).await;
+
+        // If a session is open, reconcile to the CLI. After this change, this is
+        // the SOLE call-site of `protocol.set_mode` in the crate — the aggregate
+        // root's reconcile path owns SDK alignment end-to-end.
+        if let Some(sid) = session_id {
+            self.reconcile_session(&sid).await;
+        }
         Ok(())
     }
 }
