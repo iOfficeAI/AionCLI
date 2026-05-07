@@ -35,7 +35,6 @@ use aionui_auth::CurrentUser;
 use aionui_common::AppError;
 use serde::Deserialize;
 
-use crate::agent_task::AgentInstance;
 use crate::routes::SessionRouterState;
 
 #[derive(Debug, Deserialize)]
@@ -75,35 +74,9 @@ async fn side_question(
     Path(id): Path<String>,
     Json(req): Json<SideQuestionRequest>,
 ) -> Result<Json<ApiResponse<SideQuestionResponse>>, AppError> {
-    if req.question.trim().is_empty() {
-        return Err(AppError::BadRequest("question must not be empty".into()));
-    }
-
-    let instance = get_task(&state, &id)?;
-
-    let AgentInstance::Acp(acp) = &instance else {
-        return Ok(Json(ApiResponse::ok(SideQuestionResponse {
-            status: "unsupported".into(),
-            answer: None,
-        })));
-    };
-
-    // Side question is gated by the agent's behavior_policy flag.
-    if !acp.supports_side_question() {
-        return Ok(Json(ApiResponse::ok(SideQuestionResponse {
-            status: "unsupported".into(),
-            answer: None,
-        })));
-    }
-
-    // Side question is implemented by sending a special message to the ACP CLI.
-    // The actual implementation requires forking the ACP session, which will
-    // be fully wired in Phase 6.15 App Integration.
-    // For now, return a placeholder indicating the feature exists but is pending integration.
-    Ok(Json(ApiResponse::ok(SideQuestionResponse {
-        status: "ok".into(),
-        answer: Some("Side question support will be fully wired in app integration phase.".into()),
-    })))
+    Ok(Json(ApiResponse::ok(
+        state.service.handle_side_question(&id, req).await?,
+    )))
 }
 
 async fn get_slash_commands(
@@ -111,16 +84,7 @@ async fn get_slash_commands(
     Extension(_user): Extension<CurrentUser>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<Vec<SlashCommandItem>>>, AppError> {
-    let instance = get_task(&state, &id)?;
-
-    // Only ACP agents have slash commands; other agent types return an
-    // empty list rather than an error — the UI renders "no commands".
-    let AgentInstance::Acp(acp) = &instance else {
-        return Ok(Json(ApiResponse::ok(Vec::new())));
-    };
-
-    let commands = acp.load_slash_commands().await?;
-    Ok(Json(ApiResponse::ok(commands)))
+    Ok(Json(ApiResponse::ok(state.service.get_slash_commands(&id).await?)))
 }
 
 async fn get_mode(
@@ -209,14 +173,7 @@ async fn get_usage(
     Extension(_user): Extension<CurrentUser>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<Option<UsageUpdate>>>, AppError> {
-    let instance = get_task(&state, &id)?;
-    let AgentInstance::Acp(acp) = &instance else {
-        return Err(AppError::BadRequest(
-            "Usage stats are only available for ACP agents".into(),
-        ));
-    };
-    let usage = acp.usage().await;
-    Ok(Json(ApiResponse::ok(usage)))
+    Ok(Json(ApiResponse::ok(state.service.get_usage(&id).await?)))
 }
 
 async fn get_agent_capabilities(
@@ -224,14 +181,7 @@ async fn get_agent_capabilities(
     Extension(_user): Extension<CurrentUser>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<Option<AgentCapabilities>>>, AppError> {
-    let instance = get_task(&state, &id)?;
-    let AgentInstance::Acp(acp) = &instance else {
-        return Err(AppError::BadRequest(
-            "Agent capabilities are only available for ACP agents".into(),
-        ));
-    };
-    let capabilities = acp.agent_capabilities().await;
-    Ok(Json(ApiResponse::ok(capabilities)))
+    Ok(Json(ApiResponse::ok(state.service.get_agent_capabilities(&id).await?)))
 }
 
 async fn get_openclaw_runtime(
@@ -239,22 +189,5 @@ async fn get_openclaw_runtime(
     Extension(_user): Extension<CurrentUser>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
-    let instance = get_task(&state, &id)?;
-    let AgentInstance::OpenClaw(openclaw) = &instance else {
-        return Err(AppError::BadRequest(
-            "This endpoint is only available for OpenClaw agents".into(),
-        ));
-    };
-
-    let diagnostics = openclaw.get_diagnostics().await;
-    Ok(Json(ApiResponse::ok(diagnostics)))
-}
-
-// ── Helpers ────────────────────────────────────────────────────────
-
-fn get_task(state: &SessionRouterState, conversation_id: &str) -> Result<AgentInstance, AppError> {
-    state
-        .worker_task_manager
-        .get_task(conversation_id)
-        .ok_or_else(|| AppError::NotFound(format!("No active agent for conversation '{conversation_id}'")))
+    Ok(Json(ApiResponse::ok(state.service.get_openclaw_runtime(&id).await?)))
 }

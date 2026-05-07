@@ -16,7 +16,6 @@ use aionui_api_types::{ApiResponse, WorkspaceBrowseQuery, WorkspaceEntry};
 use aionui_auth::CurrentUser;
 use aionui_common::AppError;
 
-use crate::agent_task::AgentInstance;
 use crate::routes::SessionRouterState;
 
 // ── Max depth for workspace traversal ──────────────────────────────
@@ -151,15 +150,6 @@ async fn reload_context(
     Extension(_user): Extension<CurrentUser>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<()>>, AppError> {
-    // Confirm an active agent exists for this conversation, but do not
-    // branch on its variant — reload semantics are agent-type-agnostic.
-    let _instance: AgentInstance = state
-        .worker_task_manager
-        .get_task(&id)
-        .ok_or_else(|| AppError::NotFound(format!("No active agent for conversation '{id}'")))?;
-
-    // Context reload triggers re-discovery of skills and workspace state.
-    // The specific reload behavior varies by agent type and will be
-    // fully integrated in Phase 6.15. For now, acknowledge the request.
+    state.service.reload_context(&id).await?;
     Ok(Json(ApiResponse::success()))
 }
