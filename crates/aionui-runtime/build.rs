@@ -60,7 +60,7 @@ fn main() {
     // Step 1: ensure decompressed bun is cached.
     if !bun_exe_path.is_file() {
         let url = build_support::download_url(&version, &asset);
-        println!("cargo:warning=Downloading {url}");
+        println!("cargo:info=Downloading {url}");
         let zip_path = cache_root.join(&asset);
         download(&url, &zip_path);
         unzip_bun(&zip_path, &cache_root, build_support::bun_exe_name(&target));

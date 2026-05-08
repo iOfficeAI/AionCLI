@@ -30,7 +30,7 @@ impl CliAgentProcess {
         if let Some(ref cwd) = config.cwd {
             cmd.current_dir(cwd);
         }
-
+        debug!("Spawning CLI process (SDK mode) with command: {:?}", &cmd);
         let mut child: Child = cmd.spawn().map_err(|e| {
             error!(command = %config.command.display(), error = %e, "Failed to spawn CLI process");
             AppError::Internal(format!(

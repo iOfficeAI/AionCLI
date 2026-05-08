@@ -39,8 +39,16 @@ enum Mode {
 
 pub struct Builder {
     inner: Command,
-    #[allow(dead_code)] // kept for future diagnostics / debug impl
     mode: Mode,
+}
+
+impl std::fmt::Debug for Builder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Builder")
+            .field("mode", &self.mode)
+            .field("command", self.inner.as_std())
+            .finish()
+    }
 }
 
 impl Builder {
