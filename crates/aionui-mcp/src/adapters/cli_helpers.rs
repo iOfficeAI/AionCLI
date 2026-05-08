@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use aionui_runtime::Builder as CmdBuilder;
 use tokio::process::Command;
 
 use crate::adapter::DetectedServer;
@@ -29,15 +30,9 @@ pub async fn is_cli_installed(name: &str) -> Result<bool, McpError> {
 /// Returns `(stdout, stderr)` on success. Returns an error if the command
 /// fails to start, times out, or exits with a non-zero status.
 pub async fn run_cli(program: &str, args: &[&str], timeout: Duration) -> Result<(String, String), McpError> {
-    let result = tokio::time::timeout(timeout, {
-        Command::new(program)
-            .args(args)
-            .env("NODE_OPTIONS", "")
-            .env("TERM", "dumb")
-            .env("NO_COLOR", "1")
-            .output()
-    })
-    .await;
+    let mut builder = CmdBuilder::clean_cli(program);
+    builder.args(args);
+    let result = tokio::time::timeout(timeout, builder.output()).await;
 
     let output = match result {
         Ok(Ok(output)) => output,
@@ -64,15 +59,9 @@ pub async fn run_cli(program: &str, args: &[&str], timeout: Duration) -> Result<
 
 /// Run a CLI command and require zero exit status.
 pub async fn run_cli_strict(program: &str, args: &[&str], timeout: Duration) -> Result<String, McpError> {
-    let result = tokio::time::timeout(timeout, {
-        Command::new(program)
-            .args(args)
-            .env("NODE_OPTIONS", "")
-            .env("TERM", "dumb")
-            .env("NO_COLOR", "1")
-            .output()
-    })
-    .await;
+    let mut builder = CmdBuilder::clean_cli(program);
+    builder.args(args);
+    let result = tokio::time::timeout(timeout, builder.output()).await;
 
     let output = match result {
         Ok(Ok(output)) => output,

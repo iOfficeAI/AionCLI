@@ -13,6 +13,8 @@ mod shell_env;
 
 pub use resolver::{ResolveError, bun_bin_dir, resolve_bun};
 pub use shell_env::enhance_process_path;
+mod spawn;
+pub use spawn::Builder;
 
 #[cfg(test)]
 #[path = "../build_support.rs"]

@@ -1,8 +1,8 @@
-use std::sync::Arc;
-
 use aionui_common::{AppError, CommandSpec};
+use aionui_runtime::Builder as CmdBuilder;
+use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::{Child, Command};
+use tokio::process::Child;
 use tokio::sync::{Mutex, broadcast, watch};
 use tracing::{debug, error, warn};
 
@@ -19,18 +19,13 @@ impl CliAgentProcess {
     /// - stderr buffering
     /// - Process exit monitoring
     pub async fn spawn_for_sdk(config: CommandSpec) -> Result<Self, AppError> {
-        let mut cmd = Command::new(&config.command);
+        let mut cmd = CmdBuilder::agent(&config.command);
         cmd.args(&config.args)
             .envs(config.env.iter().map(|e| (&e.name, &e.value)))
             .envs(Self::agent_spawn_env())
-            .env_remove("CLAUDECODE")
-            .env_remove("NODE_OPTIONS")
-            .env_remove("NODE_INSPECT")
-            .env_remove("NODE_DEBUG")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true);
+            .stderr(std::process::Stdio::piped());
 
         if let Some(ref cwd) = config.cwd {
             cmd.current_dir(cwd);
@@ -134,11 +129,9 @@ impl CliAgentProcess {
             ("BUN_TMPDIR".into(), bun_tmp.to_string_lossy().into_owned()),
         ];
 
-        if let Some(bun_dir) = aionui_runtime::bun_bin_dir() {
-            let sep = if cfg!(windows) { ";" } else { ":" };
-            let current = std::env::var("PATH").unwrap_or_default();
-            env.push(("PATH".into(), format!("{}{}{}", bun_dir.display(), sep, current)));
-        }
+        // PATH enrichment (including bundled bun dir) is handled globally by
+        // `aionui_runtime::enhance_process_path` during startup; children
+        // inherit it automatically. No per-spawn injection needed.
 
         if let Some(claude_path) = Self::find_native_claude() {
             env.push(("CLAUDE_CODE_EXECUTABLE".into(), claude_path));

@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use aionui_common::{AppError, CommandSpec};
+use aionui_runtime::Builder as CmdBuilder;
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::{Child, Command};
+use tokio::process::Child;
 use tokio::sync::{Mutex, broadcast, watch};
 use tracing::{debug, error, trace, warn};
 
@@ -19,13 +20,13 @@ impl CliAgentProcess {
     ///
     /// This is used by Gemini, OpenClaw, Nanobot agents.
     pub async fn spawn(config: CommandSpec) -> Result<Self, AppError> {
-        let mut cmd = Command::new(&config.command);
-        cmd.args(&config.args)
+        let mut cmd = CmdBuilder::agent(&config.command);
+        cmd
+            .args(&config.args)
             .envs(config.env.iter().map(|e| (&e.name, &e.value)))
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true);
+            .stderr(std::process::Stdio::piped());
 
         if let Some(ref cwd) = config.cwd {
             cmd.current_dir(cwd);

@@ -149,6 +149,21 @@ satisfy the invariant. A `startup: PATH ready path_segments=… path_len=…`
 info log confirms the enhancement at each run (no full PATH content is
 logged at `info` level).
 
+### Subprocess Spawn Builder
+
+New subprocess spawn sites should go through
+`aionui_runtime::Builder::agent(program)` (for long-running agent CLIs
+whose stdio the caller owns) or `aionui_runtime::Builder::clean_cli(program)`
+(for short-lived tools whose output we parse). Both set
+`kill_on_drop(true)` and strip `NODE_OPTIONS`/`NODE_INSPECT`/`NODE_DEBUG`/
+`CLAUDECODE` so debug-profile env doesn't leak into the child.
+`clean_cli` additionally pipes stdio and sets `NO_COLOR=1` + `TERM=dumb`
+to keep ANSI codes out of captured output.
+
+Do NOT manually re-implement these behaviours with raw
+`tokio::process::Command` — the centralised builder is the one place to
+update policies (e.g. future `CARGO_*` cleanup, sandbox flags).
+
 ### Pushing Code
 
 Always use `just push` instead of `git push`.
