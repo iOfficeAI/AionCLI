@@ -20,7 +20,7 @@ use super::protocol::{
 };
 use super::tools::{
     RenameAgentInput, SendMessageInput, ShutdownAgentInput, SpawnAgentInput, TaskCreateInput, TaskUpdateInput,
-    all_tool_descriptors, handle_team_describe_assistant, handle_team_list_models, is_whitelisted_backend,
+    all_tool_descriptors, handle_team_describe_assistant, handle_team_list_models,
 };
 
 // ---------------------------------------------------------------------------
@@ -587,19 +587,8 @@ async fn exec_spawn_agent(
     // caller) is accepted.
     let agent_type = input.agent_type.or(input.backend);
 
-    // Dispatch-layer whitelist gate for explicitly provided backends. Keeps
-    // the "not allowed" user-visible phrasing that existing clients depend
-    // on and avoids a pointless round-trip into the session for obvious
-    // bad input. `TeamSession::spawn_agent` re-checks (including the
-    // empty/unset-inherits-from-caller path) so this is pure defense-in-depth.
-    if let Some(bk) = agent_type.as_deref()
-        && !is_whitelisted_backend(bk)
-    {
-        return Err(format!(
-            "Backend '{bk}' not allowed. Whitelist: {}",
-            crate::guide::capability::TEAM_CAPABLE_BACKENDS.join(", ")
-        ));
-    }
+    // Dynamic capability check happens in `TeamSession::spawn_agent` which
+    // queries both the hard whitelist and persisted MCP capabilities.
 
     let req = SpawnAgentRequest {
         name: requested_name.clone(),

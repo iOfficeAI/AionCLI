@@ -14,12 +14,7 @@
 //! (`leader_label = None`). The preset-assistant label branch does not apply
 //! to Wave 5 solo-agent injection.
 
-/// Vendor backends for which the solo Team Guide prompt is injected. Matches
-/// `TEAM_CAPABLE_BACKENDS` in `crates/aionui-team/src/guide/capability.rs` at
-/// the time of W5-D28b. Kept as a local copy to avoid a crate-dependency
-/// cycle (see module docs); when a new backend is whitelisted for team
-/// membership it must be added in **both** places.
-const TEAM_GUIDE_CAPABLE_BACKENDS: &[&str] = &["claude", "codex", "gemini", "aionrs", "codebuddy"];
+use aionui_common::constants::TEAM_CAPABLE_BACKENDS;
 
 const EXPLICIT_TEAM_REQUEST_CRITERIA: &str = "\
 - The user explicitly asks to create a Team
@@ -76,16 +71,8 @@ Before team creation: use **only** `aion_create_team` and `aion_list_models`. Af
 /// Return `true` iff the given backend is a known team-capable backend. An
 /// empty or unrecognized backend returns `false`; solo agents with unknown
 /// backends do not receive the Team Guide prompt.
-///
-/// The `mcp_stdio_capable` dynamic escape hatch that `aionui_team` exposes is
-/// intentionally omitted here — at session/new time in the factory we have
-/// no general way to probe MCP capability across all 20+ vendor CLIs, and
-/// the team-audit authority (aionui-audit §8) only requires the whitelist
-/// to gate prompt injection. Extend this list in lockstep with
-/// `aionui_team::guide::capability::TEAM_CAPABLE_BACKENDS` if the policy
-/// changes.
 pub(crate) fn is_solo_team_guide_backend(backend: &str) -> bool {
-    TEAM_GUIDE_CAPABLE_BACKENDS.contains(&backend)
+    TEAM_CAPABLE_BACKENDS.contains(&backend)
 }
 
 /// Build the Team Guide prompt for a solo agent with the given backend label.

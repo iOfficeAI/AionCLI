@@ -1,5 +1,6 @@
 use super::*;
 use aionui_common::AgentType;
+use aionui_common::constants::{TEAM_CAPABLE_BACKENDS, has_mcp_capability};
 
 /// Known ACP vendor labels. Kept in lockstep with the `agent_metadata`
 /// seed in `005_agent_metadata.sql` — a caller hitting an unknown
@@ -52,6 +53,61 @@ pub(crate) fn resolve_full_auto_mode(backend: &str) -> &'static str {
 }
 
 impl TeamSessionService {
+    /// Check if a backend is allowed to participate in team mode.
+    /// Hard whitelist passes immediately; otherwise queries the persisted
+    /// `agent_capabilities` from `agent_metadata` for MCP transport declarations.
+    pub(crate) async fn is_backend_team_capable(&self, backend: &str) -> bool {
+        if TEAM_CAPABLE_BACKENDS.contains(&backend) {
+            return true;
+        }
+        let Ok(Some(row)) = self.agent_metadata_repo.find_builtin_by_backend(backend).await else {
+            return false;
+        };
+        let caps = row
+            .agent_capabilities
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
+        has_mcp_capability(caps.as_ref())
+    }
+
+    /// Return all backends currently team-capable (hard whitelist + dynamically detected).
+    /// Used to build the Lead prompt's `available_agent_types` list.
+    pub(crate) async fn list_team_capable_backends(&self) -> Vec<(String, String)> {
+        let Ok(rows) = self.agent_metadata_repo.list_all().await else {
+            return TEAM_CAPABLE_BACKENDS
+                .iter()
+                .map(|b| (b.to_string(), capitalize(b)))
+                .collect();
+        };
+        let mut result: Vec<(String, String)> = Vec::new();
+        for row in &rows {
+            if !row.enabled {
+                continue;
+            }
+            let Some(backend) = row.backend.as_deref() else {
+                continue;
+            };
+            if TEAM_CAPABLE_BACKENDS.contains(&backend) {
+                result.push((backend.to_string(), row.name.clone()));
+                continue;
+            }
+            let caps = row
+                .agent_capabilities
+                .as_deref()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
+            if has_mcp_capability(caps.as_ref()) {
+                result.push((backend.to_string(), row.name.clone()));
+            }
+        }
+        // Ensure hard whitelist entries are present even if not in DB
+        for &b in TEAM_CAPABLE_BACKENDS {
+            if !result.iter().any(|(bk, _)| bk == b) {
+                result.push((b.to_string(), capitalize(b)));
+            }
+        }
+        result
+    }
+
     pub async fn spawn_agent_in_session(
         &self,
         team_id: &str,
@@ -158,6 +214,14 @@ impl TeamSessionService {
             .await?;
 
         Ok(agent)
+    }
+}
+
+fn capitalize(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        None => String::new(),
+        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
     }
 }
 

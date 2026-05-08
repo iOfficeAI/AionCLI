@@ -206,14 +206,20 @@ impl TeamSession {
         let first_message = if needs_role_prompt {
             let role_prompt = match agent.role {
                 TeammateRole::Lead => {
-                    // TODO(W5+): source display names from the dynamic backend registry
-                    // once it exposes a public listing. For now, hard-code the
-                    // team-capable whitelist from `guide::capability::TEAM_CAPABLE_BACKENDS`.
-                    let available_agent_types: Vec<(String, String)> = vec![
-                        ("claude".into(), "Claude".into()),
-                        ("codex".into(), "Codex".into()),
-                        ("gemini".into(), "Gemini".into()),
-                    ];
+                    let available_agent_types = match self.service.upgrade() {
+                        Some(svc) => svc.list_team_capable_backends().await,
+                        None => crate::guide::capability::TEAM_CAPABLE_BACKENDS
+                            .iter()
+                            .map(|b| {
+                                let mut c = b.chars();
+                                let display = match c.next() {
+                                    None => String::new(),
+                                    Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                                };
+                                (b.to_string(), display)
+                            })
+                            .collect(),
+                    };
                     build_lead_prompt(
                         &self.team.name,
                         &self.scheduler.list_agents().await,
@@ -704,9 +710,8 @@ impl TeamSession {
             return Err(TeamError::DuplicateAgentName(requested_name));
         }
 
-        // Step 3: backend whitelist. Canonical list lives in
-        // guide::capability::TEAM_CAPABLE_BACKENDS.
-        let spawn_backend_whitelist = crate::guide::capability::TEAM_CAPABLE_BACKENDS;
+        // Step 3: backend capability check. Hard whitelist passes immediately;
+        // otherwise query persisted agent_capabilities for MCP support.
         let backend = req
             .agent_type
             .as_deref()
@@ -714,19 +719,21 @@ impl TeamSession {
             .filter(|s| !s.is_empty())
             .unwrap_or(caller.backend.as_str())
             .to_owned();
-        if !spawn_backend_whitelist.contains(&backend.as_str()) {
-            return Err(TeamError::BackendNotAllowed(backend));
+        if !crate::guide::capability::TEAM_CAPABLE_BACKENDS.contains(&backend.as_str()) {
+            let capable = match self.service.upgrade() {
+                Some(svc) => svc.is_backend_team_capable(&backend).await,
+                None => false,
+            };
+            if !capable {
+                return Err(TeamError::BackendNotAllowed(backend));
+            }
         }
 
-        // Step 4: DB side-effects (new conversation + persisted agent slot)
-        // happen inside TeamSessionService where the conversation service and
-        // the per-team add_agent lock live. Unit tests with no service wire
-        // cannot reach this path.
+        // Step 4: DB side-effects (new conversation + persisted agent slot).
         let service = self
             .service
             .upgrade()
             .ok_or_else(|| TeamError::InvalidRequest("spawn_agent requires a live TeamSessionService".into()))?;
-
         let model = req.model.as_deref().unwrap_or(&caller.model).to_owned();
         let new_agent = service
             .persist_spawned_agent(

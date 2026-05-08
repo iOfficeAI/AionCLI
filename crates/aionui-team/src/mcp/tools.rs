@@ -246,13 +246,12 @@ pub struct ShutdownAgentInput {
 }
 
 // ---------------------------------------------------------------------------
-// Backend whitelist for spawn_agent
+// Backend whitelist for spawn_agent (hard whitelist only — synchronous fast-path).
+// Dynamic capability check (MCP-based) happens in TeamSession::spawn_agent.
 // ---------------------------------------------------------------------------
 
-const SPAWN_BACKEND_WHITELIST: &[&str] = crate::guide::capability::TEAM_CAPABLE_BACKENDS;
-
 pub fn is_whitelisted_backend(backend: &str) -> bool {
-    SPAWN_BACKEND_WHITELIST.contains(&backend)
+    aionui_common::constants::TEAM_CAPABLE_BACKENDS.contains(&backend)
 }
 
 // ---------------------------------------------------------------------------
@@ -286,9 +285,9 @@ pub fn parse_tool_call(
                 .ok_or_else(|| "Missing 'agent_type' (or legacy 'backend') for team_spawn_agent".to_string())?;
             if !is_whitelisted_backend(&backend) {
                 return Err(format!(
-                    "Backend '{}' not allowed. Whitelist: {}",
+                    "Backend '{}' not in hard whitelist. Whitelist: {}",
                     backend,
-                    SPAWN_BACKEND_WHITELIST.join(", ")
+                    aionui_common::constants::TEAM_CAPABLE_BACKENDS.join(", ")
                 ));
             }
             Ok(SchedulerAction::SpawnAgent {
@@ -439,7 +438,7 @@ mod tests {
         let args = json!({"name": "X", "backend": "malicious"});
         let result = parse_tool_call("team_spawn_agent", &args, TeammateRole::Lead);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("not allowed"));
+        assert!(result.unwrap_err().contains("not in hard whitelist"));
     }
 
     #[test]

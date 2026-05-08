@@ -5,8 +5,7 @@ use aionui_api_types::AgentMetadata;
 use aionui_api_types::{AcpBuildExtra, GuideMcpConfig, TeamMcpStdioConfig};
 use aionui_common::CommandSpec;
 
-/// Backends for which solo conversations receive the Guide MCP server.
-const TEAM_CAPABLE_BACKENDS: &[&str] = &["claude", "codex", "gemini", "aionrs", "codebuddy"];
+use aionui_common::constants::TEAM_CAPABLE_BACKENDS;
 
 /// Pre-computed workspace information.
 #[derive(Debug, Clone)]
