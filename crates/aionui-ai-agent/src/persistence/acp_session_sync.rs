@@ -1,9 +1,15 @@
 //! Per-session persistence consumer driven by domain events.
 //!
 //! Subscribes to `mpsc::Receiver<AcpSessionEvent>` (not the UI broadcast)
-//! and writes user *intent* changes to `acp_session.session_config.runtime`.
-//! This eliminates the previous anti-pattern of reverse-engineering desired
-//! state from CLI observation events (`currentModeId` in `AcpModeInfo`).
+//! and writes CLI-observed state to `acp_session.session_config.runtime`.
+//!
+//! The consumer listens to `Observed*` events (mode, model, config,
+//! context_usage). The `session_config.runtime` columns record what the
+//! session last had — i.e. what resume needs to restore — which is by
+//! definition observation-shaped, not intent-shaped. Desired events are
+//! kept inside the aggregate for reconcile/UI broadcast only; they are
+//! intentionally not persisted so that an invalid user pick (which the
+//! CLI rejects) does not leave stale desired values in the DB.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -152,11 +158,15 @@ impl PendingUpdate {
 
     fn merge_from_domain_event(&mut self, event: &AcpSessionEvent) -> bool {
         match event {
-            AcpSessionEvent::DesiredModeChanged { mode } => {
+            AcpSessionEvent::ObservedModeSynced { mode } => {
                 self.current_mode_id = Some(Some(mode.as_str().to_owned()));
                 true
             }
-            AcpSessionEvent::DesiredConfigChanged { selections } => {
+            AcpSessionEvent::ObservedModelSynced { model } => {
+                self.current_model_id = Some(Some(model.as_str().to_owned()));
+                true
+            }
+            AcpSessionEvent::ObservedConfigSynced { selections } => {
                 let string_map: HashMap<String, String> = selections
                     .iter()
                     .map(|(k, v)| (k.as_str().to_owned(), v.as_str().to_owned()))
@@ -165,8 +175,8 @@ impl PendingUpdate {
                 self.config_selections_json = Some(Some(json));
                 true
             }
-            AcpSessionEvent::DesiredModelChanged { model } => {
-                self.current_model_id = Some(Some(model.as_str().to_owned()));
+            AcpSessionEvent::ObservedContextUsageChanged { usage_json } => {
+                self.context_usage_json = Some(Some(usage_json.clone()));
                 true
             }
             _ => false,
@@ -294,7 +304,7 @@ mod tests {
         assert_eq!(state.current_mode_id.as_deref(), Some("plan"));
     }
 
-    /// Domain event DesiredModeChanged flushes after debounce.
+    /// Domain event ObservedModeSynced flushes after debounce.
     #[tokio::test(flavor = "current_thread")]
     async fn domain_event_flushes_after_debounce() {
         let (_svc, repo) = setup().await;
@@ -303,7 +313,7 @@ mod tests {
         let cid = "conv-1".to_owned();
         tokio::spawn(domain_event_consumer(cid, rx, repo.clone()));
 
-        tx.send(AcpSessionEvent::DesiredModeChanged { mode: "plan".into() })
+        tx.send(AcpSessionEvent::ObservedModeSynced { mode: "plan".into() })
             .await
             .unwrap();
 
@@ -326,7 +336,7 @@ mod tests {
         tokio::spawn(domain_event_consumer(cid, rx, repo.clone()));
 
         for label in ["code", "plan", "ask"] {
-            tx.send(AcpSessionEvent::DesiredModeChanged { mode: label.into() })
+            tx.send(AcpSessionEvent::ObservedModeSynced { mode: label.into() })
                 .await
                 .unwrap();
             sleep(Duration::from_millis(100)).await;
@@ -362,7 +372,7 @@ mod tests {
         let cid = "conv-1".to_owned();
         tokio::spawn(domain_event_consumer(cid, rx, repo.clone()));
 
-        tx.send(AcpSessionEvent::DesiredModeChanged { mode: "plan".into() })
+        tx.send(AcpSessionEvent::ObservedModeSynced { mode: "plan".into() })
             .await
             .unwrap();
         drop(tx);
@@ -376,30 +386,13 @@ mod tests {
         );
     }
 
-    /// DesiredModelChanged drives current_model_id persistence (mirrors
-    /// DesiredModeChanged). ObservedModelSynced must NOT write the DB —
-    /// persistence only reflects user intent, never CLI observation.
+    /// ObservedModelSynced drives current_model_id persistence (mirrors
+    /// ObservedModeSynced). DesiredModelChanged must NOT write the DB —
+    /// the DB stores what the CLI actually ran with, not what the user
+    /// asked for (an invalid desired value the CLI rejects must not
+    /// leave a stale row).
     #[tokio::test(flavor = "current_thread")]
-    async fn desired_model_changed_persists_current_model_id() {
-        let (_svc, repo) = setup().await;
-        let (tx, rx) = mpsc::channel(64);
-
-        let cid = "conv-1".to_owned();
-        tokio::spawn(domain_event_consumer(cid, rx, repo.clone()));
-
-        tx.send(AcpSessionEvent::DesiredModelChanged {
-            model: "claude-opus-4".into(),
-        })
-        .await
-        .unwrap();
-
-        sleep(Duration::from_millis(700)).await;
-        let state = repo.load_runtime_state("conv-1").await.unwrap().unwrap();
-        assert_eq!(state.current_model_id.as_deref(), Some("claude-opus-4"));
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn observed_model_synced_does_not_persist() {
+    async fn observed_model_synced_persists_current_model_id() {
         let (_svc, repo) = setup().await;
         let (tx, rx) = mpsc::channel(64);
 
@@ -414,14 +407,58 @@ mod tests {
 
         sleep(Duration::from_millis(700)).await;
         let state = repo.load_runtime_state("conv-1").await.unwrap().unwrap();
+        assert_eq!(state.current_model_id.as_deref(), Some("claude-opus-4"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn desired_model_changed_does_not_persist() {
+        let (_svc, repo) = setup().await;
+        let (tx, rx) = mpsc::channel(64);
+
+        let cid = "conv-1".to_owned();
+        tokio::spawn(domain_event_consumer(cid, rx, repo.clone()));
+
+        tx.send(AcpSessionEvent::DesiredModelChanged {
+            model: "claude-opus-4".into(),
+        })
+        .await
+        .unwrap();
+
+        sleep(Duration::from_millis(700)).await;
+        let state = repo.load_runtime_state("conv-1").await.unwrap().unwrap();
         assert!(
             state.current_model_id.is_none(),
-            "ObservedModelSynced is UI-only; persistence must only come from DesiredModelChanged",
+            "DesiredModelChanged is reconcile/UI-only; persistence only follows Observed*",
         );
     }
 
+    /// ObservedContextUsageChanged persists the usage blob so resume
+    /// paths can preload `advertised.context_usage` before the CLI's
+    /// first notification arrives.
+    #[tokio::test(flavor = "current_thread")]
+    async fn observed_context_usage_persists() {
+        let (_svc, repo) = setup().await;
+        let (tx, rx) = mpsc::channel(64);
+
+        let cid = "conv-1".to_owned();
+        tokio::spawn(domain_event_consumer(cid, rx, repo.clone()));
+
+        tx.send(AcpSessionEvent::ObservedContextUsageChanged {
+            usage_json: r#"{"used":12345,"size":200000}"#.to_owned(),
+        })
+        .await
+        .unwrap();
+
+        sleep(Duration::from_millis(700)).await;
+        let state = repo.load_runtime_state("conv-1").await.unwrap().unwrap();
+        let raw = state.context_usage_json.expect("usage must be persisted");
+        let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(parsed["used"], 12345);
+        assert_eq!(parsed["size"], 200000);
+    }
+
     /// SessionAssigned must write the session_id immediately, bypassing
-    /// the debounce window used for desired-state updates.
+    /// the debounce window used for runtime-state updates.
     #[tokio::test(flavor = "current_thread")]
     async fn session_assigned_writes_session_id_immediately() {
         let (_svc, repo) = setup().await;

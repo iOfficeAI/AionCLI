@@ -1004,7 +1004,7 @@ mod tests {
             let _ = approval_key(Some(action), command_type);
             false
         }
-        async fn get_mode(&self) -> Result<AgentModeResponse, AppError> {
+        async fn mode(&self) -> Result<AgentModeResponse, AppError> {
             Ok(AgentModeResponse {
                 mode: "default".into(),
                 initialized: false,

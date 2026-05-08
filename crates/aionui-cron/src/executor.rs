@@ -2114,7 +2114,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl IMockAgent for RecordingAgent {
-        async fn get_mode(&self) -> Result<AgentModeResponse, aionui_common::AppError> {
+        async fn mode(&self) -> Result<AgentModeResponse, aionui_common::AppError> {
             Ok(AgentModeResponse {
                 mode: self.mode().await,
                 initialized: self.initialized,

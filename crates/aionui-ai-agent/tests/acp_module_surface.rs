@@ -8,9 +8,7 @@
 //! moved function bodies and by the stage's new targeted tests.
 #![allow(dead_code, unused_imports)]
 
-use aionui_ai_agent::manager::acp::{
-    AcpSession, AcpSessionEvent, CatalogForwarder, PermissionRouter, ReconcileAction,
-};
+use aionui_ai_agent::manager::acp::{AcpSession, AcpSessionEvent, CatalogForwarder, PermissionRouter, ReconcileAction};
 use aionui_ai_agent::shared_kernel::PersistedSessionState;
 
 fn _surface_probe() {

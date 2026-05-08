@@ -7,6 +7,11 @@ use crate::shared_kernel::{ConfigKey, ConfigValue, ModeId, ModelId, SessionId};
 /// These capture *intent* changes (user wants mode X) and *observation*
 /// arrivals (CLI reported mode Y) separately — persistence consumers can
 /// decide which to write to DB without re-interpreting UI stream events.
+///
+/// `context_usage_json` travels as a pre-serialised string so the event
+/// type can keep `Eq` (SDK's `UsageUpdate` only derives `PartialEq`) and
+/// so the persistence consumer can forward it to the DB without another
+/// round-trip through serde.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AcpSessionEvent {
     SessionOpened,
@@ -30,6 +35,9 @@ pub enum AcpSessionEvent {
     },
     ObservedConfigSynced {
         selections: HashMap<ConfigKey, ConfigValue>,
+    },
+    ObservedContextUsageChanged {
+        usage_json: String,
     },
 }
 

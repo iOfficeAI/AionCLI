@@ -68,8 +68,8 @@ impl AionrsAgentManager {
             project_dir: Some(PathBuf::from(&workspace)),
         };
 
-        let mut config = Config::resolve(&cli_args)
-            .map_err(|e| AppError::Internal(format!("Config resolve failed: {e}")))?;
+        let mut config =
+            Config::resolve(&cli_args).map_err(|e| AppError::Internal(format!("Config resolve failed: {e}")))?;
 
         // Backend-specific overrides
         config.session.enabled = true;
@@ -282,7 +282,7 @@ impl AionrsAgentManager {
         self.approval_manager.is_auto_approved(action)
     }
 
-    pub async fn get_mode(&self) -> Result<AgentModeResponse, AppError> {
+    pub async fn mode(&self) -> Result<AgentModeResponse, AppError> {
         Ok(AgentModeResponse {
             mode: self.approval_manager.current_mode(),
             initialized: true,

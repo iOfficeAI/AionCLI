@@ -77,7 +77,7 @@ impl AgentService {
                 "Model info is only available for ACP agents".into(),
             ));
         };
-        let sdk_model = acp.model_info().await;
+        let sdk_model = acp.model().await;
         let model_info = sdk_model.map(map_sdk_model_to_payload);
         Ok(GetModelInfoResponse { model_info })
     }
@@ -92,7 +92,7 @@ impl AgentService {
                 "Model switching is not supported for this agent type".into(),
             ));
         };
-        acp.set_model_info(&req.model_id).await
+        acp.set_model(&req.model_id).await
     }
 
     pub async fn get_config(

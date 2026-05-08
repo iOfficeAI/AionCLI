@@ -172,7 +172,7 @@ impl IMockAgent for RecordingAgent {
     fn confirm(&self, _: &str, _: &str, _: Value, _: bool) -> Result<(), AppError> {
         Ok(())
     }
-    async fn get_mode(&self) -> Result<AgentModeResponse, AppError> {
+    async fn mode(&self) -> Result<AgentModeResponse, AppError> {
         Ok(AgentModeResponse {
             mode: "default".to_owned(),
             initialized: false,

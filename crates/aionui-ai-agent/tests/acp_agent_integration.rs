@@ -299,7 +299,7 @@ async fn acp_agent_model_info_captured() {
 
     wait_for_event(&mut rx, |e| matches!(e, AgentStreamEvent::AcpModelInfo(_))).await;
 
-    let info = agent.model_info().await;
+    let info = agent.model().await;
     assert!(info.is_some(), "Model info should be captured");
     let info = info.unwrap();
     assert_eq!(&*info.current_model_id.0, "claude-sonnet-4");

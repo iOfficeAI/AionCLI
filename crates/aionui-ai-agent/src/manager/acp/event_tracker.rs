@@ -1,4 +1,4 @@
-use crate::manager::acp::AcpAgentManager;
+use crate::manager::acp::{AcpAgentManager, AcpSession};
 use crate::protocol::events::AgentStreamEvent;
 use crate::shared_kernel::ModeId;
 use agent_client_protocol::schema::{
@@ -78,9 +78,24 @@ impl AcpAgentManager {
                 if let Ok(update) = serde_json::from_value::<UsageUpdate>(value.clone()) {
                     let mut s = self.session.write().await;
                     s.apply_context_usage(update);
+                    self.commit_session_changes(&mut s).await;
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Start the permission handler loop. Must be called after the manager
+    /// is wrapped in Arc. Delegates to `PermissionRouter::start`.
+    pub fn start_permission_handler(self: &Arc<Self>) {
+        self.permission_router.start(self.runtime.clone());
+    }
+
+    /// Drain pending domain events from the session aggregate and
+    /// forward them to the persistence consumer via the mpsc channel.
+    pub(super) async fn commit_session_changes(&self, session: &mut AcpSession) {
+        for event in session.drain_events() {
+            let _ = self.domain_event_tx.send(event).await;
         }
     }
 }
@@ -135,20 +150,28 @@ mod tests {
     }
 
     #[test]
-    fn apply_advertised_modes_does_not_produce_pending_events() {
-        // apply_advertised_modes writes to `advertised` and `observed.mode_id`
-        // but does NOT push to `pending_events` (unlike apply_observed_mode).
-        // This is intentional: the advertised layer is not tracked as a domain
-        // event. Verify this so we know what the old tracker loop was NOT doing.
+    fn apply_advertised_modes_emits_observed_synced_when_observed_changes() {
+        // `apply_advertised_modes` writes the CLI's advertised snapshot,
+        // which also moves `observed.mode_id` to `current_mode_id`. When
+        // that shifts the observed value, one `ObservedModeSynced` event
+        // is emitted so the persistence consumer writes the new value to
+        // `session_config.runtime`. Re-applying with the same current id
+        // is a no-op.
         let mut session = AcpSession::new(None, None, Default::default());
         let modes = SessionModeState::new("plan".to_owned(), vec![]);
-        session.apply_advertised_modes(modes);
+        session.apply_advertised_modes(modes.clone());
         let events = session.drain_events();
+        assert_eq!(events.len(), 1);
         assert_eq!(
-            events.len(),
-            0,
-            "apply_advertised_modes must not produce pending domain events, got: {events:?}"
+            events[0],
+            AcpSessionEvent::ObservedModeSynced {
+                mode: ModeId::new("plan")
+            }
         );
+
+        // Idempotent re-apply: same current id — no new event.
+        session.apply_advertised_modes(modes);
+        assert_eq!(session.drain_events().len(), 0);
     }
 
     #[test]

@@ -43,7 +43,7 @@ impl AcpAgentManager {
             if let Some(config_options) = session_response.config_options {
                 session.apply_advertised_config_options(config_options);
             }
-            session.assign_session_id(DomainSessionId::new(sid.clone()));
+            session.set_session_id(DomainSessionId::new(sid.clone()));
             self.commit_session_changes(&mut session).await;
         }
         self.emit_snapshot_events().await;
@@ -138,7 +138,7 @@ impl AcpAgentManager {
                     if let Some(config_options) = session_response.config_options {
                         session.apply_advertised_config_options(config_options);
                     }
-                    session.assign_session_id(DomainSessionId::new(new_sid.clone()));
+                    session.set_session_id(DomainSessionId::new(new_sid.clone()));
                     self.commit_session_changes(&mut session).await;
                 }
                 self.emit_snapshot_events().await;
@@ -190,7 +190,7 @@ impl AcpAgentManager {
         if let Some(sid) = session_id {
             {
                 let mut session = self.session.write().await;
-                session.assign_session_id(DomainSessionId::new(sid));
+                session.set_session_id(DomainSessionId::new(sid));
                 self.commit_session_changes(&mut session).await;
             }
             self.reconcile_session(sid).await;

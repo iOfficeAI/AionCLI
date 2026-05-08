@@ -78,7 +78,7 @@ impl AcpSession {
     }
 }
 
-// ─── Getters ───────────────────────────────────────────────────────
+// ─── Session Id and Session Opened ───────────────────────────────────────────────────────
 impl AcpSession {
     pub fn session_id(&self) -> Option<&str> {
         self.session_id.as_ref().map(SessionId::as_str)
@@ -88,12 +88,33 @@ impl AcpSession {
         self.session_id.as_ref()
     }
 
+    /// Assign (or restore) a session ID. Idempotent: re-assigning the same
+    /// ID is a no-op. Assigning a *different* ID after one is already set
+    /// is an invariant violation (the aggregate must be recreated).
+    pub fn set_session_id(&mut self, sid: SessionId) {
+        if let Some(existing) = &self.session_id {
+            debug_assert_eq!(existing, &sid, "session_id reassignment attempted");
+            return;
+        }
+        self.session_id = Some(sid.clone());
+        self.pending_events
+            .push(AcpSessionEvent::SessionAssigned { session_id: sid });
+    }
+
     pub fn is_opened(&self) -> bool {
         self.opened
     }
+
+    /// Mark the session as opened with the CLI (first turn handshake complete).
+    pub fn mark_opened(&mut self) {
+        if !self.opened {
+            self.opened = true;
+            self.pending_events.push(AcpSessionEvent::SessionOpened);
+        }
+    }
 }
 
-// ─── Getters desired ───────────────────────────────────────────────────────
+// ─── Getters Setters desired ───────────────────────────────────────────────────────
 impl AcpSession {
     pub fn desired_mode(&self) -> Option<&str> {
         self.desired.mode_id.as_ref().map(ModeId::as_str)
@@ -113,6 +134,53 @@ impl AcpSession {
 
     pub fn desired_config_selections(&self) -> &HashMap<ConfigKey, ConfigValue> {
         &self.desired.config_selections
+    }
+
+    /// Set the user's desired mode. Emits `DesiredModeChanged` if the
+    /// value actually changed. When advertised modes are known, the mode
+    /// must be in the list (otherwise the call is a no-op).
+    pub fn set_desired_mode(&mut self, mode: ModeId) -> bool {
+        if mode.as_str().is_empty() {
+            return false;
+        }
+        if !self.is_mode_valid(mode.as_str()) {
+            return false;
+        }
+        if self.desired.mode_id.as_ref() == Some(&mode) {
+            return false;
+        }
+        self.desired.mode_id = Some(mode.clone());
+        self.pending_events.push(AcpSessionEvent::DesiredModeChanged { mode });
+        true
+    }
+
+    /// Set the user's desired model. Emits `DesiredModelChanged` if the
+    /// value actually changed. When advertised models are known, the model
+    /// must be in the list (otherwise the call is a no-op).
+    pub fn set_desired_model(&mut self, model: ModelId) -> bool {
+        if model.as_str().is_empty() {
+            return false;
+        }
+        if !self.is_model_valid(model.as_str()) {
+            return false;
+        }
+        if self.desired.model_id.as_ref() == Some(&model) {
+            return false;
+        }
+        self.desired.model_id = Some(model.clone());
+        self.pending_events.push(AcpSessionEvent::DesiredModelChanged { model });
+        true
+    }
+
+    /// Set a user's desired config selection.
+    pub fn set_desired_config(&mut self, key: ConfigKey, value: ConfigValue) {
+        let changed = self.desired.config_selections.get(&key) != Some(&value);
+        self.desired.config_selections.insert(key, value);
+        if changed {
+            let selections = self.desired.config_selections.clone();
+            self.pending_events
+                .push(AcpSessionEvent::DesiredConfigChanged { selections });
+        }
     }
 }
 
@@ -174,77 +242,6 @@ impl AcpSession {
     }
 }
 
-// ─── Commands (mutate + emit events) ───────────────────────────────
-impl AcpSession {
-    /// Assign (or restore) a session ID. Idempotent: re-assigning the same
-    /// ID is a no-op. Assigning a *different* ID after one is already set
-    /// is an invariant violation (the aggregate must be recreated).
-    pub fn assign_session_id(&mut self, sid: SessionId) {
-        if let Some(existing) = &self.session_id {
-            debug_assert_eq!(existing, &sid, "session_id reassignment attempted");
-            return;
-        }
-        self.session_id = Some(sid.clone());
-        self.pending_events
-            .push(AcpSessionEvent::SessionAssigned { session_id: sid });
-    }
-
-    /// Mark the session as opened with the CLI (first turn handshake complete).
-    pub fn mark_opened(&mut self) {
-        if !self.opened {
-            self.opened = true;
-            self.pending_events.push(AcpSessionEvent::SessionOpened);
-        }
-    }
-
-    /// Set the user's desired mode. Emits `DesiredModeChanged` if the
-    /// value actually changed. When advertised modes are known, the mode
-    /// must be in the list (otherwise the call is a no-op).
-    pub fn set_desired_mode(&mut self, mode: ModeId) -> bool {
-        if mode.as_str().is_empty() {
-            return false;
-        }
-        if !self.is_mode_valid(mode.as_str()) {
-            return false;
-        }
-        if self.desired.mode_id.as_ref() == Some(&mode) {
-            return false;
-        }
-        self.desired.mode_id = Some(mode.clone());
-        self.pending_events.push(AcpSessionEvent::DesiredModeChanged { mode });
-        true
-    }
-
-    /// Set the user's desired model. Emits `DesiredModelChanged` if the
-    /// value actually changed. When advertised models are known, the model
-    /// must be in the list (otherwise the call is a no-op).
-    pub fn set_desired_model(&mut self, model: ModelId) -> bool {
-        if model.as_str().is_empty() {
-            return false;
-        }
-        if !self.is_model_valid(model.as_str()) {
-            return false;
-        }
-        if self.desired.model_id.as_ref() == Some(&model) {
-            return false;
-        }
-        self.desired.model_id = Some(model.clone());
-        self.pending_events.push(AcpSessionEvent::DesiredModelChanged { model });
-        true
-    }
-
-    /// Set a user's desired config selection.
-    pub fn set_desired_config(&mut self, key: ConfigKey, value: ConfigValue) {
-        let changed = self.desired.config_selections.get(&key) != Some(&value);
-        self.desired.config_selections.insert(key, value);
-        if changed {
-            let selections = self.desired.config_selections.clone();
-            self.pending_events
-                .push(AcpSessionEvent::DesiredConfigChanged { selections });
-        }
-    }
-}
-
 // ─── Observations (from CLI responses/notifications) ───────────────
 impl AcpSession {
     /// Record the CLI's current mode. Updates both `observed.mode_id` and
@@ -299,13 +296,25 @@ impl AcpSession {
     }
 
     pub fn apply_advertised_modes(&mut self, modes: SessionModeState) {
-        self.observed.mode_id = Some(ModeId::new(modes.current_mode_id.to_string()));
+        let new_id = ModeId::new(modes.current_mode_id.to_string());
+        let changed = self.observed.mode_id.as_ref() != Some(&new_id);
+        self.observed.mode_id = Some(new_id.clone());
         self.advertised.modes = Some(modes);
+        if changed {
+            self.pending_events
+                .push(AcpSessionEvent::ObservedModeSynced { mode: new_id });
+        }
     }
 
     pub fn apply_advertised_models(&mut self, models: SessionModelState) {
-        self.observed.model_id = Some(ModelId::new(models.current_model_id.to_string()));
+        let new_id = ModelId::new(models.current_model_id.to_string());
+        let changed = self.observed.model_id.as_ref() != Some(&new_id);
+        self.observed.model_id = Some(new_id.clone());
         self.advertised.models = Some(models);
+        if changed {
+            self.pending_events
+                .push(AcpSessionEvent::ObservedModelSynced { model: new_id });
+        }
     }
 
     pub fn apply_advertised_config_options(&mut self, options: Vec<SessionConfigOption>) {
@@ -339,8 +348,18 @@ impl AcpSession {
         self.advertised.available_commands = Some(commands);
     }
 
+    /// Record the CLI's latest context usage. Diff-driven: emits
+    /// `ObservedContextUsageChanged` only when the usage payload differs
+    /// from what we last cached, so the persistence consumer can debounce
+    /// a stream of token updates into one DB write per turn.
     pub fn apply_context_usage(&mut self, usage: UsageUpdate) {
-        self.advertised.context_usage = Some(usage);
+        let changed = self.advertised.context_usage.as_ref() != Some(&usage);
+        self.advertised.context_usage = Some(usage.clone());
+        if changed {
+            let usage_json = serde_json::to_string(&usage).unwrap_or_default();
+            self.pending_events
+                .push(AcpSessionEvent::ObservedContextUsageChanged { usage_json });
+        }
     }
 }
 
@@ -449,7 +468,7 @@ mod tests {
     #[test]
     fn assign_session_id_emits_event() {
         let mut session = make_session();
-        session.assign_session_id(SessionId::new("sess-1"));
+        session.set_session_id(SessionId::new("sess-1"));
         assert_eq!(session.session_id(), Some("sess-1"));
         let events = session.drain_events();
         assert_eq!(events.len(), 1);
@@ -464,9 +483,9 @@ mod tests {
     #[test]
     fn assign_session_id_is_idempotent() {
         let mut session = make_session();
-        session.assign_session_id(SessionId::new("sess-1"));
+        session.set_session_id(SessionId::new("sess-1"));
         session.drain_events();
-        session.assign_session_id(SessionId::new("sess-1"));
+        session.set_session_id(SessionId::new("sess-1"));
         assert!(session.drain_events().is_empty());
     }
 
@@ -687,7 +706,7 @@ mod tests {
     #[test]
     fn drain_events_clears_buffer() {
         let mut session = make_session();
-        session.assign_session_id(SessionId::new("s1"));
+        session.set_session_id(SessionId::new("s1"));
         session.mark_opened();
         assert_eq!(session.drain_events().len(), 2);
         assert!(session.drain_events().is_empty());

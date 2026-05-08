@@ -100,7 +100,7 @@ pub trait IMockAgent: IAgentTask {
     fn get_session_key(&self) -> Option<String> {
         None
     }
-    async fn get_mode(&self) -> Result<aionui_api_types::AgentModeResponse, AppError> {
+    async fn mode(&self) -> Result<aionui_api_types::AgentModeResponse, AppError> {
         Ok(aionui_api_types::AgentModeResponse {
             mode: "default".into(),
             initialized: false,
@@ -279,14 +279,14 @@ impl AgentInstance {
     /// so cron / UI can skip mode reconciliation.
     pub async fn get_mode(&self) -> Result<aionui_api_types::AgentModeResponse, AppError> {
         match self {
-            Self::Acp(m) => m.get_mode().await,
-            Self::Aionrs(m) => m.get_mode().await,
+            Self::Acp(m) => m.mode().await,
+            Self::Aionrs(m) => m.mode().await,
             Self::OpenClaw(_) | Self::Nanobot(_) | Self::Remote(_) => Ok(aionui_api_types::AgentModeResponse {
                 mode: "default".into(),
                 initialized: false,
             }),
             #[cfg(any(test, feature = "test-support"))]
-            Self::Mock(m) => m.get_mode().await,
+            Self::Mock(m) => m.mode().await,
         }
     }
 
