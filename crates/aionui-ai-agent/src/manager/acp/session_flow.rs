@@ -8,30 +8,21 @@ use crate::types::SendMessageData;
 use agent_client_protocol::schema::{ContentBlock, LoadSessionRequest, PromptRequest, SessionId};
 use aionui_common::AppError;
 use serde_json::Value;
-use tracing::info;
 
 use super::agent::sdk_to_snake_value;
 
 impl AcpAgentManager {
-    /// Create a new ACP session and send the first prompt.
-    pub(super) async fn session_new_and_prompt(&self, data: &SendMessageData) -> Result<(), AppError> {
-        // Emit Start event
-        self.runtime
-            .emit(AgentStreamEvent::Start(StartEventData { session_id: None }));
-
+    /// Establish a fresh ACP session (session/new) and apply desired
+    /// mode/model/config via reconcile. Does NOT send a prompt and
+    /// does NOT emit Start/Finish — callers wrap that around if needed.
+    ///
+    /// Returns the CLI-assigned session id.
+    pub(super) async fn open_session_new(&self) -> Result<String, AppError> {
         let req = self.params.new_session_request();
-        tracing::info!(
-            has_team_mcp = self.params.config.team_mcp_stdio_config.is_some(),
-            has_guide_mcp = self.params.config.guide_mcp_config.is_some(),
-            guide_mcp_port = self.params.config.guide_mcp_config.as_ref().map(|c| c.port),
-            mcp_servers_count = req.mcp_servers.len(),
-            "session_new_and_prompt: sending session/new"
-        );
         let session_response = self.protocol.new_session(req).await.map_err(AppError::from)?;
 
         let sid = session_response.session_id.to_string();
 
-        // Populate the session aggregate from the session response
         {
             let mut session = self.session.write().await;
             if let Some(models) = session_response.models {
@@ -48,15 +39,23 @@ impl AcpAgentManager {
         }
         self.emit_snapshot_events().await;
 
-        // Notify subscribers (e.g. session_sync consumer) so the new id is
-        // persisted into `acp_session.session_id` — resume can then
-        // choose `session/load` instead of a fresh `session/new`.
+        // Notify session_sync consumer so the new id hits the DB and
+        // future rebuilds can take the resume path.
         self.runtime
             .emit(AgentStreamEvent::SessionAssigned(SessionAssignedEventData {
                 session_id: sid.clone(),
             }));
 
         self.reconcile_session(&sid).await;
+        Ok(sid)
+    }
+
+    /// Create a new ACP session and send the first prompt.
+    pub(super) async fn session_new_and_prompt(&self, data: &SendMessageData) -> Result<(), AppError> {
+        self.runtime
+            .emit(AgentStreamEvent::Start(StartEventData { session_id: None }));
+
+        let sid = self.open_session_new().await?;
 
         let injected_content = inject_first_message_prefix(
             &data.content,
@@ -70,7 +69,6 @@ impl AcpAgentManager {
         )
         .await;
 
-        // Send the prompt
         self.protocol
             .prompt(PromptRequest::new(
                 SessionId::new(sid.clone()),
@@ -79,7 +77,6 @@ impl AcpAgentManager {
             .await
             .map_err(AppError::from)?;
 
-        // Emit Finish event when prompt completes
         self.runtime
             .emit(AgentStreamEvent::Finish(FinishEventData { session_id: Some(sid) }));
 
@@ -113,18 +110,11 @@ impl AcpAgentManager {
                 claude_code.insert("options".into(), Value::Object(options));
                 meta.insert("claudeCode".into(), Value::Object(claude_code));
 
-                let req = self.params.new_session_request().meta(meta);
-
-                info!(
-                    session_id = %sid,
-                    has_team_mcp = self.params.config.team_mcp_stdio_config.is_some(),
-                    has_guide_mcp = self.params.config.guide_mcp_config.is_some(),
-                    guide_mcp_port = self.params.config.guide_mcp_config.as_ref().map(|c| c.port),
-                    mcp_servers_count = req.mcp_servers.len(),
-                    "session_resume: using session/new with claudeCode.options.resume"
-                );
-
-                let session_response = self.protocol.new_session(req).await.map_err(AppError::from)?;
+                let session_response = self
+                    .protocol
+                    .new_session(self.params.new_session_request().meta(meta))
+                    .await
+                    .map_err(AppError::from)?;
 
                 let new_sid = session_response.session_id.to_string();
                 {

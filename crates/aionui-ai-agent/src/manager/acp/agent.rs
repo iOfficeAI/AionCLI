@@ -61,11 +61,13 @@ pub(super) fn sdk_to_snake_value<T: serde::Serialize>(value: &T) -> Option<Value
 pub struct AcpAgentManager {
     /// Pre-computed, immutable session parameters assembled by the factory.
     pub(super) params: Arc<AcpSessionParams>,
+
     /// Session aggregate root — owns desired/observed/advertised state.
     /// Single in-memory source of truth for session lifecycle, modes,
     /// models, config, and all runtime data previously split across
     /// `AcpRuntimeSnapshot` and `AcpState`.
     pub(super) session: RwLock<AcpSession>,
+
     /// Shared runtime holding status, last_activity, and the event
     /// broadcast channel. `pub(super)` so sibling modules (session_flow,
     /// event_tracker) can call `self.runtime.emit(...)` directly.
@@ -75,20 +77,26 @@ pub struct AcpAgentManager {
     /// `emit_finish` / `emit_error` are idempotent in the Finished
     /// absorbing state — multiple calls are safe.
     pub(super) runtime: AgentRuntime,
-    /// Underlying CLI process (for lifecycle management: kill, is_running).
-    process: Arc<CliAgentProcess>,
+
     /// ACP protocol handle (SDK connection).
     pub(super) protocol: AcpProtocol,
-    /// Mutex for serializing session operations (new/load/send).
-    session_lock: Mutex<()>,
+
     /// Routes permission requests from the protocol layer to the user
     /// and back. Owns the receiver channel, pending map, and closing flag.
     pub(super) permission_router: Arc<PermissionRouter>,
+
     /// Shared skill manager — used to discover skills for first-message injection.
     pub(super) skill_manager: Arc<AcpSkillManager>,
+
     /// Domain event sender — session aggregate events are forwarded here
     /// for the persistence consumer (`AcpSessionSyncService`).
     pub(super) domain_event_tx: mpsc::Sender<AcpSessionEvent>,
+
+    /// Underlying CLI process (for lifecycle management: kill, is_running).
+    process: Arc<CliAgentProcess>,
+
+    /// Mutex for serializing session operations (new/load/send).
+    session_lock: Mutex<()>,
 }
 
 impl AcpAgentManager {
@@ -100,7 +108,7 @@ impl AcpAgentManager {
     /// MPSC sender used for the one-shot initialize handshake write;
     /// session-driven fields flow through the `CatalogForwarder` the
     /// factory spawns after construction.
-    pub async fn new(
+    pub async fn build(
         params: Arc<AcpSessionParams>,
         skill_manager: Arc<AcpSkillManager>,
         catalog_tx: &CatalogSender,
@@ -112,21 +120,35 @@ impl AcpAgentManager {
         ),
         AppError,
     > {
-        let process = CliAgentProcess::spawn_for_sdk(params.command_spec.clone()).await?;
+        let (this, domain_event_rx, notification_rx) = AcpAgentManager::new(params, skill_manager).await?;
+        this.init(catalog_tx).await;
+        Ok((this, domain_event_rx, notification_rx))
+    }
 
-        // Take raw stdio for the SDK transport
+    async fn new(
+        params: Arc<AcpSessionParams>,
+        skill_manager: Arc<AcpSkillManager>,
+    ) -> Result<
+        (
+            Self,
+            mpsc::Receiver<AcpSessionEvent>,
+            mpsc::Receiver<SessionNotification>,
+        ),
+        AppError,
+    > {
+        let process = CliAgentProcess::spawn_for_sdk(params.command_spec.clone()).await?;
         let (stdin, stdout) = process
             .take_stdio()
             .await
             .ok_or_else(|| AppError::Internal("Failed to take stdio from CLI process".into()))?;
 
-        let runtime = AgentRuntime::new(params.conversation_id.clone(), params.workspace.path.clone(), 256);
-        let (permission_tx, permission_rx) = mpsc::channel(32);
-        let (domain_event_tx, domain_event_rx) = mpsc::channel(256);
         // Dedicated channel for raw SDK SessionNotifications → session tracker.
         // This channel is separate from event_tx so the tracker never re-applies
         // events that were broadcast for the UI (e.g. from emit_snapshot_events).
         let (notification_tx, notification_rx) = mpsc::channel::<SessionNotification>(256);
+        let (domain_event_tx, domain_event_rx) = mpsc::channel(256);
+        let (permission_tx, permission_rx) = mpsc::channel(32);
+        let runtime = AgentRuntime::new(params.conversation_id.clone(), params.workspace.path.clone(), 256);
 
         let protocol = AcpProtocol::connect(stdin, stdout, runtime.event_sender(), permission_tx, notification_tx)
             .await
@@ -138,55 +160,31 @@ impl AcpAgentManager {
                 );
                 AppError::from(e)
             })?;
-
-        let init_handshake = AgentHandshake {
-            agent_capabilities: protocol.agent_capabilities().and_then(|c| sdk_to_snake_value(&c)),
-            auth_methods: protocol.auth_methods().and_then(|m| sdk_to_snake_value(&m)),
-            ..Default::default()
-        };
-        if init_handshake.agent_capabilities.is_some() || init_handshake.auth_methods.is_some() {
-            catalog_tx.send_partial(params.metadata.id.clone(), init_handshake);
-        }
+        let permission_router = Arc::new(PermissionRouter::new(permission_rx));
 
         let snapshot = params.session_snapshot.as_ref();
 
         // Prefer the last-persisted mode; for brand-new conversations
         // fall back to `AcpBuildExtra::session_mode` so the first turn
         // still honours the caller's choice.
-        let initial_mode = snapshot
-            .and_then(|s| s.current_mode_id.as_ref())
-            .map(|m| normalize_requested_mode(&params.metadata, m.as_str()))
-            .or_else(|| {
-                params
-                    .config
-                    .session_mode
-                    .as_ref()
-                    .map(|m| normalize_requested_mode(&params.metadata, m))
-            })
-            .filter(|m| !m.is_empty())
-            .map(ModeId::new);
+        let (initial_mode, initial_model, initial_config) = (
+            snapshot
+                .and_then(|s| s.current_mode_id.as_ref())
+                .map(|m| normalize_requested_mode(&params.metadata, m.as_str()))
+                .or_else(|| {
+                    params
+                        .config
+                        .session_mode
+                        .as_ref()
+                        .map(|m| normalize_requested_mode(&params.metadata, m))
+                })
+                .filter(|m| !m.is_empty())
+                .map(ModeId::new),
+            snapshot.and_then(|s| s.current_model_id.clone()),
+            snapshot.map(|s| s.config_selections.clone()).unwrap_or_default(),
+        );
 
-        let initial_model = snapshot.and_then(|s| s.current_model_id.clone());
-        let initial_config = snapshot.map(|s| s.config_selections.clone()).unwrap_or_default();
-
-        let mut session = AcpSession::new(initial_mode, initial_model, initial_config);
-        // Seed the observed/advertised layers (observed mode/model, cached
-        // context_usage) from the persisted snapshot. Desired fields are
-        // already populated via `AcpSession::new`.
-        if let Some(snapshot) = snapshot {
-            session.preload_persisted(snapshot);
-            // Preload did not come from the user this turn — drain so the
-            // persistence consumer doesn't echo the DB back into itself.
-            session.drain_events();
-        }
-        if let Some(agent_capabilities) = protocol.agent_capabilities() {
-            session.apply_advertised_capabilities(agent_capabilities);
-        }
-        if let Some(auth_methods) = protocol.auth_methods() {
-            session.apply_advertised_auth_methods(auth_methods);
-        }
-
-        let permission_router = Arc::new(PermissionRouter::new(permission_rx));
+        let session = AcpSession::new(initial_mode, initial_model, initial_config);
 
         let manager = Self {
             params,
@@ -199,8 +197,37 @@ impl AcpAgentManager {
             skill_manager,
             domain_event_tx,
         };
-
         Ok((manager, domain_event_rx, notification_rx))
+    }
+
+    async fn init(&self, catalog_tx: &CatalogSender) {
+        let init_handshake = AgentHandshake {
+            agent_capabilities: self.protocol.agent_capabilities().and_then(|c| sdk_to_snake_value(&c)),
+            auth_methods: self.protocol.auth_methods().and_then(|m| sdk_to_snake_value(&m)),
+            ..Default::default()
+        };
+        if init_handshake.agent_capabilities.is_some() || init_handshake.auth_methods.is_some() {
+            catalog_tx.send_partial(self.params.metadata.id.clone(), init_handshake);
+        }
+
+        // Seed the observed/advertised layers (observed mode/model, cached
+        // context_usage) from the persisted snapshot. Desired fields are
+        // already populated via `AcpSession::new`.
+        if let Some(snapshot) = self.params.session_snapshot.as_ref() {
+            let mut session = self.session.write().await;
+            session.preload_persisted(snapshot);
+            // Preload did not come from the user this turn — drain so the
+            // persistence consumer doesn't echo the DB back into itself.
+            session.drain_events();
+        }
+        if let Some(agent_capabilities) = self.protocol.agent_capabilities() {
+            let mut session = self.session.write().await;
+            session.apply_advertised_capabilities(agent_capabilities);
+        }
+        if let Some(auth_methods) = self.protocol.auth_methods() {
+            let mut session = self.session.write().await;
+            session.apply_advertised_auth_methods(auth_methods);
+        }
     }
 }
 
