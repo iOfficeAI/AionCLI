@@ -83,64 +83,56 @@ impl AcpAgentManager {
         Ok(())
     }
 
-    /// Resume an existing session and send a message.
+    /// Resume an existing ACP session and apply desired mode/model/config.
+    /// Does NOT send a prompt. Returns the (possibly rewritten) session id.
     ///
-    /// The session aggregate is seeded during `AcpAgentManager::new`
-    /// from `params.session_snapshot` — on resume paths it already
-    /// carries `current_mode_id` / `current_model_id` from
-    /// `acp_session.session_config.runtime`. When the CLI's
-    /// `session/load` response arrives, we merge it in but keep the
-    /// preloaded `current_*` values because they reflect the user's
-    /// last explicit choice; the CLI's own `current_*` is only used
-    /// when the aggregate has nothing yet.
-    pub(super) async fn session_resume_and_send(
-        &self,
-        data: &SendMessageData,
-        session_id: Option<&str>,
-    ) -> Result<(), AppError> {
+    /// - Claude-meta-resume backends: `session/new` with
+    ///   `_meta.claudeCode.options.resume`. The CLI may assign a new session id,
+    ///   which we persist via `SessionAssigned`.
+    /// - `session/load`-capable backends (e.g. Codex): `session/load`, keep id.
+    /// - Backends that support neither: seed the aggregate and hope the CLI
+    ///   still recognises the id (legacy behaviour — matches pre-refactor).
+    pub(super) async fn open_session_resume(&self, session_id: &str) -> Result<String, AppError> {
         if self.uses_claude_meta_resume() {
-            // Claude backend: use session/new with _meta.claudeCode.options.resume
-            // instead of session/load. This matches AionUi frontend behavior and
-            // ensures mcpServers are re-injected on resume.
-            if let Some(sid) = session_id {
-                let mut meta = serde_json::Map::new();
-                let mut claude_code = serde_json::Map::new();
-                let mut options = serde_json::Map::new();
-                options.insert("resume".into(), Value::String(sid.to_owned()));
-                claude_code.insert("options".into(), Value::Object(options));
-                meta.insert("claudeCode".into(), Value::Object(claude_code));
+            let mut meta = serde_json::Map::new();
+            let mut claude_code = serde_json::Map::new();
+            let mut options = serde_json::Map::new();
+            options.insert("resume".into(), Value::String(session_id.to_owned()));
+            claude_code.insert("options".into(), Value::Object(options));
+            meta.insert("claudeCode".into(), Value::Object(claude_code));
 
-                let session_response = self
-                    .protocol
-                    .new_session(self.params.new_session_request().meta(meta))
-                    .await
-                    .map_err(AppError::from)?;
+            let req = self.params.new_session_request().meta(meta);
+            let session_response = self.protocol.new_session(req).await.map_err(AppError::from)?;
+            let new_sid = session_response.session_id.to_string();
 
-                let new_sid = session_response.session_id.to_string();
-                {
-                    let mut session = self.session.write().await;
-                    if let Some(models) = session_response.models {
-                        session.apply_advertised_models(models);
-                    }
-                    if let Some(modes) = session_response.modes {
-                        session.apply_advertised_modes(modes);
-                    }
-                    if let Some(config_options) = session_response.config_options {
-                        session.apply_advertised_config_options(config_options);
-                    }
-                    session.set_session_id(DomainSessionId::new(new_sid.clone()));
-                    self.commit_session_changes(&mut session).await;
+            {
+                let mut session = self.session.write().await;
+                if let Some(models) = session_response.models {
+                    session.apply_advertised_models(models);
                 }
-                self.emit_snapshot_events().await;
-
-                self.reconcile_session(&new_sid).await;
-
-                return self.prompt_existing_session(data, Some(&new_sid)).await;
+                if let Some(modes) = session_response.modes {
+                    session.apply_advertised_modes(modes);
+                }
+                if let Some(config_options) = session_response.config_options {
+                    session.apply_advertised_config_options(config_options);
+                }
+                session.set_session_id(DomainSessionId::new(new_sid.clone()));
+                self.commit_session_changes(&mut session).await;
             }
-        } else if self.supports_session_load()
-            && let Some(sid) = session_id
-        {
-            // Non-Claude backends (e.g. Codex): use session/load
+            self.emit_snapshot_events().await;
+
+            if new_sid != session_id {
+                self.runtime
+                    .emit(AgentStreamEvent::SessionAssigned(SessionAssignedEventData {
+                        session_id: new_sid.clone(),
+                    }));
+            }
+
+            self.reconcile_session(&new_sid).await;
+            return Ok(new_sid);
+        }
+
+        if self.supports_session_load() {
             let (preloaded_mode, preloaded_model) = {
                 let session = self.session.read().await;
                 (
@@ -149,44 +141,63 @@ impl AcpAgentManager {
                 )
             };
 
-            let mut load_req = LoadSessionRequest::new(SessionId::new(sid), &self.params.workspace.path);
+            let mut load_req = LoadSessionRequest::new(SessionId::new(session_id), &self.params.workspace.path);
             if !self.params.mcp_servers.is_empty() {
                 load_req = load_req.mcp_servers(self.params.mcp_servers.clone());
             }
             let resp = self.protocol.load_session(load_req).await.map_err(AppError::from)?;
 
-            let mut session = self.session.write().await;
-            if let Some(mut models) = resp.models {
-                if let Some(db_current) = preloaded_model {
-                    models.current_model_id = db_current.into();
-                }
-                session.apply_advertised_models(models);
-            }
-            if let Some(mut modes) = resp.modes {
-                if let Some(db_current) = preloaded_mode {
-                    modes.current_mode_id = db_current.into();
-                }
-                session.apply_advertised_modes(modes);
-            }
-            if let Some(config_options) = resp.config_options {
-                session.apply_advertised_config_options(config_options);
-            }
-            drop(session);
-        }
-
-        self.emit_snapshot_events().await;
-
-        // Seed the session aggregate and reconcile.
-        if let Some(sid) = session_id {
             {
                 let mut session = self.session.write().await;
-                session.set_session_id(DomainSessionId::new(sid));
+                if let Some(mut models) = resp.models {
+                    if let Some(db_current) = preloaded_model {
+                        models.current_model_id = db_current.into();
+                    }
+                    session.apply_advertised_models(models);
+                }
+                if let Some(mut modes) = resp.modes {
+                    if let Some(db_current) = preloaded_mode {
+                        modes.current_mode_id = db_current.into();
+                    }
+                    session.apply_advertised_modes(modes);
+                }
+                if let Some(config_options) = resp.config_options {
+                    session.apply_advertised_config_options(config_options);
+                }
+                session.set_session_id(DomainSessionId::new(session_id.to_owned()));
                 self.commit_session_changes(&mut session).await;
             }
-            self.reconcile_session(sid).await;
+            self.emit_snapshot_events().await;
+            self.reconcile_session(session_id).await;
+            return Ok(session_id.to_owned());
         }
 
-        self.prompt_existing_session(data, session_id).await
+        // Legacy path: backend advertised neither claude-meta-resume nor
+        // session/load. Seed the aggregate with the stored id and let the
+        // caller prompt — matches pre-refactor behaviour.
+        {
+            let mut session = self.session.write().await;
+            session.set_session_id(DomainSessionId::new(session_id.to_owned()));
+            self.commit_session_changes(&mut session).await;
+        }
+        self.emit_snapshot_events().await;
+        self.reconcile_session(session_id).await;
+        Ok(session_id.to_owned())
+    }
+
+    /// Resume an existing session and send a message.
+    pub(super) async fn session_resume_and_send(
+        &self,
+        data: &SendMessageData,
+        session_id: Option<&str>,
+    ) -> Result<(), AppError> {
+        let Some(sid) = session_id else {
+            // No id to resume — caller should have taken the new path.
+            return self.prompt_existing_session(data, None).await;
+        };
+
+        let new_sid = self.open_session_resume(sid).await?;
+        self.prompt_existing_session(data, Some(&new_sid)).await
     }
 
     /// Send a prompt to an already-established session.
