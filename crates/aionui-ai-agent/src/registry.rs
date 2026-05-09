@@ -157,6 +157,19 @@ impl AgentRegistry {
         }
     }
 
+    /// Refetch every row from the repository, then re-resolve PATH.
+    ///
+    /// Called after any mutation that changed the set of rows on disk
+    /// (create/delete) or the spawn command of an existing row
+    /// (update). Pure refresh with no DB writes — just rebuilds the
+    /// in-memory snapshot so `list_all()` and `get()` return the latest
+    /// catalog state without waiting for the next process restart.
+    pub async fn invalidate_and_rehydrate(&self) -> Result<(), AppError> {
+        self.hydrate().await?;
+        self.refresh_availability().await;
+        Ok(())
+    }
+
     pub async fn get(&self, id: &str) -> Option<AgentMetadata> {
         self.by_id.read().await.get(id).cloned()
     }
@@ -212,6 +225,13 @@ impl AgentRegistry {
         let mut rows: Vec<AgentMetadata> = self.by_id.read().await.values().cloned().collect();
         rows.sort_by(|a, b| a.sort_order.cmp(&b.sort_order).then_with(|| a.name.cmp(&b.name)));
         rows
+    }
+
+    /// Clone-cheap handle to the underlying repo, for service-layer
+    /// helpers that need direct CRUD access without going through the
+    /// registry cache.
+    pub fn repo_handle(&self) -> &Arc<dyn IAgentMetadataRepository> {
+        &self.repo
     }
 }
 
