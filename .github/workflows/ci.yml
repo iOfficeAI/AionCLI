@@ -74,22 +74,6 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.95.0"
-      - uses: Swatinem/rust-cache@v2
-        with:
-          prefix-key: v1-rust
-      - name: Verify ignored crates are not compiled
-        run: |
-          # rsa is ignored in audit.toml because it only exists in Cargo.lock
-          # via sqlx-mysql (optional). Fail if it ever enters the real build tree.
-          output=$(cargo tree -p aionui-app -i rsa 2>&1)
-          if ! echo "$output" | grep -q "nothing to print"; then
-            echo "::error::rsa crate is now in the dependency tree! Remove the audit ignore and fix the vulnerability."
-            echo "$output"
-            exit 1
-          fi
       - uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}

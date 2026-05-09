@@ -1,7 +1,0 @@
-[advisories]
-ignore = [
-    # rsa is only present in Cargo.lock via sqlx-mysql (optional dep of sqlx).
-    # We only use sqlx with sqlite — rsa is never compiled into the binary.
-    # CI verifies this with `cargo tree -i rsa` (must print nothing).
-    "RUSTSEC-2023-0071",
-]
