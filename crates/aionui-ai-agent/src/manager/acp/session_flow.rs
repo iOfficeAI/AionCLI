@@ -1,4 +1,3 @@
-use crate::capability::first_message_injector::{InjectionConfig, inject_first_message_prefix};
 use crate::manager::acp::AcpAgentManager;
 use crate::protocol::events::{
     AgentStreamEvent, AvailableCommandsEventData, FinishEventData, SessionAssignedEventData, StartEventData,
@@ -48,40 +47,6 @@ impl AcpAgentManager {
 
         self.reconcile_session(&sid).await;
         Ok(sid)
-    }
-
-    /// Create a new ACP session and send the first prompt.
-    #[allow(dead_code)]
-    pub(super) async fn session_new_and_prompt(&self, data: &SendMessageData) -> Result<(), AppError> {
-        self.runtime
-            .emit(AgentStreamEvent::Start(StartEventData { session_id: None }));
-
-        let sid = self.open_session_new().await?;
-
-        let injected_content = inject_first_message_prefix(
-            &data.content,
-            &self.skill_manager,
-            InjectionConfig {
-                preset_context: self.params.preset_context.as_deref(),
-                skills: &self.params.config.skills,
-                native_skill_support: self.native_skill_support(),
-                custom_workspace: self.params.workspace.is_custom,
-            },
-        )
-        .await;
-
-        self.protocol
-            .prompt(PromptRequest::new(
-                SessionId::new(sid.clone()),
-                vec![ContentBlock::from(injected_content)],
-            ))
-            .await
-            .map_err(AppError::from)?;
-
-        self.runtime
-            .emit(AgentStreamEvent::Finish(FinishEventData { session_id: Some(sid) }));
-
-        Ok(())
     }
 
     /// Resume an existing ACP session and apply desired mode/model/config.
@@ -184,22 +149,6 @@ impl AcpAgentManager {
         self.emit_snapshot_events().await;
         self.reconcile_session(session_id).await;
         Ok(session_id.to_owned())
-    }
-
-    /// Resume an existing session and send a message.
-    #[allow(dead_code)]
-    pub(super) async fn session_resume_and_send(
-        &self,
-        data: &SendMessageData,
-        session_id: Option<&str>,
-    ) -> Result<(), AppError> {
-        let Some(sid) = session_id else {
-            // No id to resume — caller should have taken the new path.
-            return self.prompt_existing_session(data, None).await;
-        };
-
-        let new_sid = self.open_session_resume(sid).await?;
-        self.prompt_existing_session(data, Some(&new_sid)).await
     }
 
     /// Send a prompt to an already-established session.
