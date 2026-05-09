@@ -1,5 +1,6 @@
 use crate::agent_runtime::AgentRuntime;
 use crate::capability::cli_process::CliAgentProcess;
+use crate::capability::first_message_injector::{InjectionConfig, inject_first_message_prefix};
 use crate::capability::skill_manager::AcpSkillManager;
 use crate::factory::acp_assembler::AcpSessionParams;
 use crate::manager::acp::{AcpSession, AcpSessionEvent, PermissionRouter};
@@ -538,10 +539,40 @@ impl AcpAgentManager {
     }
 
     /// Initialize or resume a session, then send the user message.
+    ///
+    /// For brand-new sessions (no prior session id and CLI has not opened
+    /// one) the first prompt is augmented with `[Assistant Rules]` /
+    /// skill-index injection. Resume paths skip injection — the prior
+    /// context is already present in the CLI session.
     async fn ensure_session_and_send(&self, data: &SendMessageData) -> Result<(), AppError> {
+        let is_brand_new = {
+            let s = self.session.read().await;
+            s.session_id().is_none() && !s.is_opened()
+        };
+
         let sid = self.ensure_session_opened().await?;
         self.runtime.transition_to(ConversationStatus::Running);
-        self.prompt_existing_session(data, Some(&sid)).await
+
+        if is_brand_new {
+            let injected_content = inject_first_message_prefix(
+                &data.content,
+                &self.skill_manager,
+                InjectionConfig {
+                    preset_context: self.params.preset_context.as_deref(),
+                    skills: &self.params.config.skills,
+                    native_skill_support: self.native_skill_support(),
+                    custom_workspace: self.params.workspace.is_custom,
+                },
+            )
+            .await;
+            let injected = SendMessageData {
+                content: injected_content,
+                ..data.clone()
+            };
+            self.prompt_existing_session(&injected, Some(&sid)).await
+        } else {
+            self.prompt_existing_session(data, Some(&sid)).await
+        }
     }
 
     /// Pre-open the ACP session without sending a prompt. Called by the
