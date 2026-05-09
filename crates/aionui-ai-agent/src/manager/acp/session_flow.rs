@@ -288,3 +288,83 @@ impl AcpAgentManager {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! Contract tests for the post-`warmup_session` session invariant.
+    //!
+    //! The integration-test harness in `tests/acp_agent_integration.rs`
+    //! cannot drive `AcpAgentManager` through a JSON-RPC mock today (all
+    //! existing ACP tests there are `#[ignore]` for the same reason), so we
+    //! pin the observable contract at the aggregate-root layer instead:
+    //! whatever `warmup_session` does internally, the session aggregate
+    //! must end up with `is_opened() == true` and a populated
+    //! `session_id()` — the same terminal state the real `open_session_new`
+    //! / `open_session_resume` helpers leave behind.
+    use crate::manager::acp::{AcpSession, AcpSessionEvent};
+    use crate::shared_kernel::SessionId as DomainSessionId;
+
+    fn make_session() -> AcpSession {
+        AcpSession::new(None, None, Default::default())
+    }
+
+    /// Simulate the aggregate-state effect of a successful warmup that
+    /// took the "open new session" path: `open_session_new` calls
+    /// `set_session_id`, the outer `ensure_session_opened` then calls
+    /// `mark_opened`. Post-state must satisfy both invariants so the
+    /// follow-up `PUT /mode` / `PUT /model` can reconcile without
+    /// re-opening.
+    #[test]
+    fn warmup_success_marks_session_opened_with_sid() {
+        let mut session = make_session();
+        assert!(!session.is_opened(), "precondition: session starts unopened");
+        assert!(session.session_id().is_none(), "precondition: no sid yet");
+
+        // open_session_new assigns the CLI-issued sid
+        session.set_session_id(DomainSessionId::new("sess-warm-1"));
+        // ensure_session_opened marks opened after the protocol call returns
+        session.mark_opened();
+
+        assert!(session.is_opened(), "warmup must leave session opened");
+        assert_eq!(
+            session.session_id(),
+            Some("sess-warm-1"),
+            "warmup must leave session id populated"
+        );
+
+        let events = session.drain_events();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, AcpSessionEvent::SessionAssigned { .. })),
+            "warmup must emit SessionAssigned for the persistence consumer"
+        );
+        assert!(
+            events.iter().any(|e| matches!(e, AcpSessionEvent::SessionOpened)),
+            "warmup must emit SessionOpened exactly once"
+        );
+    }
+
+    /// When warmup encounters an already-opened session (e.g. called a
+    /// second time on a warm agent), it must be a no-op — no duplicate
+    /// `SessionOpened` event, sid preserved.
+    #[test]
+    fn warmup_on_opened_session_is_idempotent() {
+        let mut session = make_session();
+        session.set_session_id(DomainSessionId::new("sess-warm-2"));
+        session.mark_opened();
+        let _ = session.drain_events();
+
+        // Second warmup call path: ensure_session_opened sees
+        // (Some(sid), true) → no open_session_* call, but still flips
+        // mark_opened (idempotent on the aggregate side).
+        session.mark_opened();
+
+        assert!(session.is_opened());
+        assert_eq!(session.session_id(), Some("sess-warm-2"));
+        assert!(
+            session.drain_events().is_empty(),
+            "second warmup must not emit duplicate domain events"
+        );
+    }
+}

@@ -544,6 +544,14 @@ impl AcpAgentManager {
         self.prompt_existing_session(data, Some(&sid)).await
     }
 
+    /// Pre-open the ACP session without sending a prompt. Called by the
+    /// factory after `AcpAgentManager::build` so `POST /warmup` returns
+    /// only after the session is ready to accept `set_mode` / `set_model`
+    /// / `prompt`. Idempotent — if already opened, returns immediately.
+    pub async fn warmup_session(&self) -> Result<(), AppError> {
+        self.ensure_session_opened().await.map(|_sid| ())
+    }
+
     /// Whether the agent supports `session/load` — read from the ACP
     /// handshake's `agent_capabilities.load_session` bool. `false` until
     /// initialization completes; `false` for agents that advertise no
@@ -730,6 +738,20 @@ impl AcpAgentManager {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Compile-time contract: `AcpAgentManager` must expose a public
+    /// `warmup_session(&self) -> Result<(), AppError>` so the factory can
+    /// eagerly open the ACP session before returning the agent instance.
+    /// If this never-called async block fails to type-check, the public
+    /// surface has drifted (method missing / wrong signature / not `pub`
+    /// / wrong return type).
+    #[test]
+    fn warmup_session_has_public_contract() {
+        #[allow(dead_code, unreachable_code)]
+        async fn _probe(m: &AcpAgentManager) -> Result<(), AppError> {
+            m.warmup_session().await
+        }
+    }
 
     #[test]
     fn confirm_option_id_accepts_string_or_object() {
