@@ -106,7 +106,7 @@ pub(super) async fn build(
     arc.start_permission_handler();
     arc.start_session_event_tracker(notification_rx);
     CatalogForwarder::spawn(
-        arc.agent_metadata_id().to_owned(),
+        arc.agent_id().to_owned(),
         crate::IAgentTask::subscribe(arc.as_ref()),
         catalog_tx,
     );
@@ -116,7 +116,7 @@ pub(super) async fn build(
     // loaded here so the first turn after a task rebuild takes the resume
     // path.
     if let Some(sid) = deps.acp_agent_service.load_session_id(&ctx.conversation_id).await {
-        arc.restore_session_id(sid).await;
+        arc.set_session_id(sid).await;
     }
 
     // Open the ACP session eagerly so `POST /warmup` returns only after

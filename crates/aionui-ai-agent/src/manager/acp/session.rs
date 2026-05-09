@@ -5,8 +5,8 @@ use agent_client_protocol::schema::{
     SessionModelState, UsageUpdate,
 };
 
-use super::events::AcpSessionEvent;
-use super::reconcile::ReconcileAction;
+use super::agent_event_tracker::AcpSessionEvent;
+use super::agent_reconcile::ReconcileAction;
 use crate::shared_kernel::{ConfigKey, ConfigValue, ModeId, ModelId, PersistedSessionState, SessionId};
 
 /// What the user wants the session to be (intent).

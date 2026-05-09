@@ -66,7 +66,7 @@ lint:
     cargo clippy --workspace -- -D warnings
 
 lint-fix:
-    cargo clippy --workspace --fix --allow-dirty --allow-staged
+    cargo fix --allow-dirty --allow-staged
 
 # Format code
 fmt:
@@ -88,10 +88,7 @@ run-release *ARGS:
     cargo run --release --bin aionui-backend -- {{ARGS}}
 
 # Pre-push gate: format, lint, test, then push
-push *ARGS:
-    cargo fmt --all
-    cargo clippy --workspace -- -D warnings
-    cargo nextest run --workspace
+push *ARGS: lint-fix fmt test
     git push {{ ARGS }}
 
 # Update aionrs dependency (e.g. just update-aionrs or just update-aionrs v0.1.19)
