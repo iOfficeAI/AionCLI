@@ -3,7 +3,7 @@
 //!
 //! Two construction flavours are provided:
 //!
-//! * [`Builder::agent`] — for long-running agent CLIs whose stdio is owned
+//! * [`Builder::new`] — for long-running agent CLIs whose stdio is owned
 //!   by the caller (e.g. ACP SDK). Defaults to inherited stdio. Callers
 //!   typically override to `piped()` to capture the streams.
 //!
@@ -33,7 +33,7 @@ use tokio::process::{Child, Command};
 /// Construction mode — determines default stdio + env extras.
 #[derive(Debug, Clone, Copy)]
 enum Mode {
-    Agent,
+    Default,
     CleanCli,
 }
 
@@ -65,7 +65,7 @@ impl Builder {
         strip_pollution(&mut inner);
         Self {
             inner,
-            mode: Mode::Agent,
+            mode: Mode::Default,
         }
     }
 

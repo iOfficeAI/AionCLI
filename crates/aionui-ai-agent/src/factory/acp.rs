@@ -29,7 +29,15 @@ pub(super) async fn build(
     }
     .ok_or_else(|| AppError::BadRequest("ACP agent requires either agent_id or backend in extra".into()))?;
 
-    if config.backend.is_none() {
+    // Trust the catalog row over the client-supplied `backend` when an
+    // `agent_id` was provided. The frontend collapses row-scoped rows
+    // (custom ACP / remote) to a shared `custom`/`remote` slot string,
+    // which downstream consumers (MCP injection, preset-context
+    // composition) would mis-interpret. When the caller only supplied a
+    // vendor label (builtin path), we preserve it as-is.
+    if config.agent_id.is_some() {
+        config.backend.clone_from(&meta.backend);
+    } else if config.backend.is_none() {
         config.backend.clone_from(&meta.backend);
     }
 
