@@ -104,15 +104,22 @@ async fn test_custom_agent_nonexistent_command() {
     let (mut app, services) = build_app().await;
     let (token, csrf) = setup_and_login(&mut app, &services, "user1", "pass123").await;
 
+    // Endpoint was renamed from /api/agents/test to /api/agents/custom/try-connect
+    // when the custom-agent CRUD routes were introduced.  The new endpoint always
+    // returns HTTP 200 and encodes failure in the JSON body (step = "fail_cli" or
+    // "fail_acp"), so we assert on the body rather than the HTTP status.
     let req = json_with_token(
         "POST",
-        "/api/agents/test",
+        "/api/agents/custom/try-connect",
         json!({ "command": "/nonexistent/path/to/agent" }),
         &token,
         &csrf,
     );
     let resp = app.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = common::body_json(resp).await;
+    assert_eq!(json["success"], true);
+    assert_eq!(json["data"]["step"], "fail_cli");
 }
 
 #[tokio::test]
