@@ -160,16 +160,35 @@ impl AcpAgentManager {
     ) -> Result<(), AppError> {
         let sid = session_id.ok_or_else(|| AppError::Internal("Cannot prompt: no session ID available".into()))?;
 
+        // Take the pending model notice (if any) under the session write
+        // lock so the next prompt after this one does not re-inject it.
+        // No `.await` inside the block — the guard must be released
+        // before we call `protocol.prompt`.
+        let notice_label = {
+            let mut session = self.session.write().await;
+            session.take_pending_model_notice().map(|id| {
+                // Prefer the advertised label (human-readable) over the raw id.
+                session
+                    .model_info()
+                    .and_then(|m| {
+                        m.available_models
+                            .iter()
+                            .find(|am| am.model_id.0.as_ref() == id.as_str())
+                            .map(|am| am.name.clone())
+                    })
+                    .unwrap_or_else(|| id.as_str().to_owned())
+            })
+        };
+
+        let content = render_prompt_content(&data.content, notice_label.as_deref());
+
         // Emit Start event
         self.runtime.emit(AgentStreamEvent::Start(StartEventData {
             session_id: Some(sid.to_owned()),
         }));
 
         self.protocol
-            .prompt(PromptRequest::new(
-                SessionId::new(sid),
-                vec![ContentBlock::from(data.content.clone())],
-            ))
+            .prompt(PromptRequest::new(SessionId::new(sid), vec![ContentBlock::from(content)]))
             .await
             .map_err(AppError::from)?;
 
@@ -250,6 +269,20 @@ impl AcpAgentManager {
     }
 }
 
+/// Prepend a model-identity reminder to the user content if a notice
+/// is pending. Used by `prompt_existing_session` before sending so the
+/// CLI-hosted LLM answers with the user-selected model rather than the
+/// stale identity baked into its cached system prompt at launch.
+fn render_prompt_content(content: &str, pending_model_notice: Option<&str>) -> String {
+    match pending_model_notice {
+        Some(label) => {
+            let reminder = crate::capability::model_identity_reminder::render_model_identity_reminder(label);
+            format!("{reminder}{content}")
+        }
+        None => content.to_owned(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! Contract tests for the post-`warmup_session` session invariant.
@@ -327,5 +360,14 @@ mod tests {
             session.drain_events().is_empty(),
             "second warmup must not emit duplicate domain events"
         );
+    }
+
+    #[test]
+    fn render_prepends_reminder_when_notice_present_and_passthrough_otherwise() {
+        let with_notice = super::render_prompt_content("hello", Some("opus"));
+        assert!(with_notice.starts_with("<system-reminder>"));
+        assert!(with_notice.ends_with("hello"));
+        let without = super::render_prompt_content("hello", None);
+        assert_eq!(without, "hello");
     }
 }

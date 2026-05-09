@@ -83,7 +83,11 @@ impl AcpAgentManager {
                     // SDK does not push a CurrentModelUpdate notification —
                     // sync observed/advertised ourselves.
                     let mut session = self.session.write().await;
+                    let model_for_notice = model.clone();
                     session.apply_observed_model(model);
+                    if self.params.metadata.behavior_policy.self_identity_sticky {
+                        session.set_pending_model_notice(model_for_notice);
+                    }
                     self.commit_session_changes(&mut session).await;
                 }
                 ReconcileAction::SetConfigOption { key, value } => {
