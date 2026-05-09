@@ -1,6 +1,3 @@
-// Task 6/7 will import these; silence dead_code until then.
-#![allow(dead_code)]
-
 //! Two-step probe for custom ACP agents.
 //!
 //! Step 1: `which`/`where` — resolve the first token of `command` on

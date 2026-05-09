@@ -141,8 +141,13 @@ impl AgentRegistry {
             };
             map.insert(meta.id.clone(), meta);
         }
+        // Capture len before the write-lock await so the debug! macro arg
+        // doesn't hold a RwLockReadGuard / Arguments<'_> across an await
+        // point (both !Send, which would poison handler futures via
+        // invalidate_and_rehydrate).
+        let row_count = map.len();
         *self.by_id.write().await = map;
-        debug!(rows = self.by_id.read().await.len(), "AgentRegistry hydrated");
+        debug!(rows = row_count, "AgentRegistry hydrated");
         Ok(())
     }
 

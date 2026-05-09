@@ -2,10 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use aionui_api_types::{
-    AcpEnvResponse, AcpHealthCheckResponse, AgentMetadata, DetectCliResponse, TryConnectCustomAgentResponse,
-};
-use aionui_common::AppError;
+use aionui_api_types::{AcpEnvResponse, AcpHealthCheckResponse, AgentMetadata, DetectCliResponse};
 use tracing::debug;
 
 use crate::registry::AgentRegistry;
@@ -86,23 +83,6 @@ pub(crate) fn get_env() -> AcpEnvResponse {
     AcpEnvResponse { env }
 }
 
-/// Test a custom ACP agent by verifying the command exists.
-///
-/// Legacy Step-1-only probe retained for its unit test. The real two-step
-/// probe now lives in `custom_agent_probe::try_connect_custom_agent`.
-/// Removed from production call sites in Task 6; will be cleaned up in Task 7.
-#[allow(dead_code)]
-pub(crate) fn test_custom_agent(
-    command: &str,
-    _acp_args: &[String],
-    _env: &HashMap<String, String>,
-) -> Result<TryConnectCustomAgentResponse, AppError> {
-    resolve_for_detect(command)
-        .ok_or_else(|| AppError::BadRequest(format!("Command '{command}' not found in PATH")))?;
-
-    Ok(TryConnectCustomAgentResponse::Success)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,11 +91,5 @@ mod tests {
     fn get_env_returns_at_least_path() {
         let resp = get_env();
         assert!(resp.env.contains_key("PATH") || resp.env.contains_key("HOME"));
-    }
-
-    #[test]
-    fn test_custom_agent_nonexistent_command() {
-        let result = test_custom_agent("/nonexistent/path/to/agent", &[], &HashMap::new());
-        assert!(result.is_err());
     }
 }
