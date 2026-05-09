@@ -13,7 +13,7 @@ use axum::extract::rejection::JsonRejection;
 use axum::extract::{Extension, Json, State};
 use axum::routing::{get, post};
 
-use aionui_api_types::{AgentMetadata, ApiResponse, TestCustomAgentRequest, TestCustomAgentResponse};
+use aionui_api_types::{AgentMetadata, ApiResponse, TryConnectCustomAgentRequest, TryConnectCustomAgentResponse};
 use aionui_auth::CurrentUser;
 use aionui_common::AppError;
 
@@ -50,8 +50,10 @@ async fn refresh_agents(
 async fn test_custom_agent(
     State(state): State<AgentRouterState>,
     Extension(_user): Extension<CurrentUser>,
-    body: Result<Json<TestCustomAgentRequest>, JsonRejection>,
-) -> Result<Json<ApiResponse<TestCustomAgentResponse>>, AppError> {
+    body: Result<Json<TryConnectCustomAgentRequest>, JsonRejection>,
+) -> Result<Json<ApiResponse<TryConnectCustomAgentResponse>>, AppError> {
     let Json(req) = body.map_err(|e| AppError::BadRequest(e.to_string()))?;
-    Ok(Json(ApiResponse::ok(state.service.test_custom_agent(req)?)))
+    Ok(Json(ApiResponse::ok(
+        state.service.try_connect_custom_agent_legacy_passthrough(req)?,
+    )))
 }

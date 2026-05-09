@@ -28,7 +28,8 @@ pub use acp::{
     AcpEnvResponse, AcpHealthCheckRequest, AcpHealthCheckResponse, AgentModeResponse, DetectCliRequest,
     DetectCliResponse, GetModelInfoResponse, ModelInfoEntry, ModelInfoPayload, ProbeModelRequest,
     SessionConfigOptionUpdate, SetConfigOptionRequest, SetConfigOptionsRequest, SetModeRequest, SetModelRequest,
-    SideQuestionRequest, SideQuestionResponse, TestCustomAgentRequest, TestCustomAgentResponse, WorkspaceBrowseQuery,
+    SideQuestionRequest, SideQuestionResponse, TryConnectCustomAgentRequest, TryConnectCustomAgentResponse,
+    WorkspaceBrowseQuery,
     WorkspaceEntry,
 };
 pub use agent_build_extra::{

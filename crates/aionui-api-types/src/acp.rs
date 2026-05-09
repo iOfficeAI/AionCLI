@@ -110,9 +110,14 @@ pub struct SetConfigOptionsRequest {
     pub config_options: Vec<SessionConfigOptionUpdate>,
 }
 
-/// Request body for testing a custom ACP agent.
-#[derive(Debug, Deserialize)]
-pub struct TestCustomAgentRequest {
+/// Request body for probing a custom ACP agent.
+///
+/// Two-step check: Step 1 resolves `command` on `$PATH`; Step 2 spawns
+/// the CLI and performs an ACP `initialize` handshake. The same
+/// function is called from the dedicated endpoint (manual test button)
+/// and from the create/update path (test-on-save).
+#[derive(Debug, Clone, Deserialize)]
+pub struct TryConnectCustomAgentRequest {
     pub command: String,
     #[serde(default)]
     pub acp_args: Vec<String>,
@@ -120,10 +125,18 @@ pub struct TestCustomAgentRequest {
     pub env: HashMap<String, String>,
 }
 
-/// Response for testing a custom ACP agent.
-#[derive(Debug, Serialize)]
-pub struct TestCustomAgentResponse {
-    pub step: String,
+/// Outcome of [`TryConnectCustomAgentRequest`].
+///
+/// Tagged enum: `step` distinguishes the three states the frontend's
+/// Alert component renders (success → green, fail_cli → red,
+/// fail_acp → yellow). `error` carries a human-readable reason for the
+/// two failure variants.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "step", rename_all = "snake_case")]
+pub enum TryConnectCustomAgentResponse {
+    Success,
+    FailCli { error: String },
+    FailAcp { error: String },
 }
 
 /// Query parameters for workspace browse.
@@ -245,24 +258,37 @@ mod tests {
     }
 
     #[test]
-    fn test_custom_agent_request_serde() {
+    fn try_connect_custom_agent_request_serde() {
         let json = json!({
             "command": "/path/to/agent",
             "acp_args": ["--flag"],
             "env": { "KEY": "value" }
         });
-        let req: TestCustomAgentRequest = serde_json::from_value(json).unwrap();
+        let req: TryConnectCustomAgentRequest = serde_json::from_value(json).unwrap();
         assert_eq!(req.command, "/path/to/agent");
         assert_eq!(req.acp_args, vec!["--flag"]);
         assert_eq!(req.env.get("KEY"), Some(&"value".into()));
     }
 
     #[test]
-    fn test_custom_agent_request_defaults() {
+    fn try_connect_custom_agent_request_defaults() {
         let json = json!({ "command": "/bin/test" });
-        let req: TestCustomAgentRequest = serde_json::from_value(json).unwrap();
+        let req: TryConnectCustomAgentRequest = serde_json::from_value(json).unwrap();
         assert!(req.acp_args.is_empty());
         assert!(req.env.is_empty());
+    }
+
+    #[test]
+    fn try_connect_response_tag_serializes() {
+        use super::TryConnectCustomAgentResponse;
+        let ok = TryConnectCustomAgentResponse::Success;
+        assert_eq!(serde_json::to_value(&ok).unwrap(), serde_json::json!({"step":"success"}));
+
+        let fail = TryConnectCustomAgentResponse::FailCli { error: "not found".into() };
+        assert_eq!(
+            serde_json::to_value(&fail).unwrap(),
+            serde_json::json!({"step":"fail_cli","error":"not found"})
+        );
     }
 
     #[test]

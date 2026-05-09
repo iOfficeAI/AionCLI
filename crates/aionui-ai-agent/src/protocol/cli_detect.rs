@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use aionui_api_types::{
-    AcpEnvResponse, AcpHealthCheckResponse, AgentMetadata, DetectCliResponse, TestCustomAgentResponse,
+    AcpEnvResponse, AcpHealthCheckResponse, AgentMetadata, DetectCliResponse, TryConnectCustomAgentResponse,
 };
 use aionui_common::AppError;
 use tracing::debug;
@@ -91,13 +91,11 @@ pub(crate) fn test_custom_agent(
     command: &str,
     _acp_args: &[String],
     _env: &HashMap<String, String>,
-) -> Result<TestCustomAgentResponse, AppError> {
+) -> Result<TryConnectCustomAgentResponse, AppError> {
     resolve_for_detect(command)
         .ok_or_else(|| AppError::BadRequest(format!("Command '{command}' not found in PATH")))?;
 
-    Ok(TestCustomAgentResponse {
-        step: "completed".into(),
-    })
+    Ok(TryConnectCustomAgentResponse::Success)
 }
 
 #[cfg(test)]
