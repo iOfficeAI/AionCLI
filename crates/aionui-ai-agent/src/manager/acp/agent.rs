@@ -1,5 +1,6 @@
 use crate::agent_runtime::AgentRuntime;
 use crate::capability::cli_process::CliAgentProcess;
+use crate::capability::first_message_injector::{InjectionConfig, inject_first_message_prefix};
 use crate::capability::skill_manager::AcpSkillManager;
 use crate::factory::acp_assembler::AcpSessionParams;
 use crate::manager::acp::{AcpSession, AcpSessionEvent, PermissionRouter};
@@ -10,12 +11,11 @@ use crate::shared_kernel::{ModeId, ModelId, SessionId as DomainSessionId};
 use crate::types::SendMessageData;
 use agent_client_protocol::schema::{
     AgentCapabilities, AuthMethod, AvailableCommand, CancelNotification, SessionConfigOption, SessionId,
-    SessionModelState, SessionNotification, SetSessionConfigOptionRequest, SetSessionModeRequest,
-    SetSessionModelRequest, UsageUpdate,
+    SessionModelState, SessionNotification, SetSessionConfigOptionRequest, UsageUpdate,
 };
 use aionui_api_types::{AgentHandshake, SlashCommandItem};
 use aionui_common::{
-    AgentKillReason, AgentType, AppError, Confirmation, ConversationStatus, TimestampMs, normalize_keys_to_snake_case,
+    AgentKillReason, AgentType, AppError, ConversationStatus, TimestampMs, normalize_keys_to_snake_case,
 };
 use serde_json::Value;
 use std::sync::Arc;
@@ -23,7 +23,7 @@ use std::time::Duration;
 use tokio::sync::{Mutex, RwLock, broadcast, mpsc};
 use tracing::{error, info};
 
-use super::mode_normalize::{agent_metadata_uses_claude_meta_resume, normalize_requested_mode};
+use super::mode_normalize::normalize_requested_mode;
 
 /// Grace period before force-killing an ACP process (ms).
 const ACP_KILL_GRACE_MS: u64 = 500;
@@ -232,104 +232,6 @@ impl AcpAgentManager {
 }
 
 impl AcpAgentManager {
-    /// Execute reconcile actions produced by `AcpSession::plan_reconcile`.
-    ///
-    /// Compares the aggregate's desired state against what the CLI has
-    /// reported as current, then issues the minimal set of SDK calls
-    /// (set_mode, set_config_option) to bring the CLI into alignment.
-    /// Best-effort: individual failures are logged but do not abort.
-    pub(super) async fn reconcile_session(&self, session_id: &str) {
-        use crate::manager::acp::ReconcileAction;
-
-        let actions = {
-            let session = self.session.read().await;
-            session.plan_reconcile()
-        };
-
-        for action in actions {
-            match action {
-                ReconcileAction::SetMode { mode } => {
-                    let normalized = normalize_requested_mode(&self.params.metadata, mode.as_str());
-                    if normalized.is_empty() {
-                        continue;
-                    }
-                    if let Err(e) = self
-                        .protocol
-                        .set_mode(SetSessionModeRequest::new(
-                            SessionId::new(session_id),
-                            normalized.clone(),
-                        ))
-                        .await
-                    {
-                        error!(
-                            conversation_id = %self.params.conversation_id,
-                            mode_id = %normalized,
-                            error = %e,
-                            "reconcile_session: set_mode failed"
-                        );
-                        continue;
-                    }
-                    // SDK does not push a notification after a successful
-                    // set_mode — sync observed/advertised ourselves so the
-                    // next plan_reconcile is a no-op.
-                    let mut session = self.session.write().await;
-                    session.apply_observed_mode(ModeId::new(normalized));
-                    self.commit_session_changes(&mut session).await;
-                }
-                ReconcileAction::SetModel { model } => {
-                    if let Err(e) = self
-                        .protocol
-                        .set_model(SetSessionModelRequest::new(
-                            SessionId::new(session_id),
-                            model.as_str().to_owned(),
-                        ))
-                        .await
-                    {
-                        error!(
-                            conversation_id = %self.params.conversation_id,
-                            model_id = %model,
-                            error = %e,
-                            "reconcile_session: set_model failed"
-                        );
-                        continue;
-                    }
-                    // SDK does not push a CurrentModelUpdate notification —
-                    // sync observed/advertised ourselves.
-                    let mut session = self.session.write().await;
-                    session.apply_observed_model(model);
-                    self.commit_session_changes(&mut session).await;
-                }
-                ReconcileAction::SetConfigOption { key, value } => {
-                    if let Err(err) = self
-                        .protocol
-                        .set_config_option(SetSessionConfigOptionRequest::new(
-                            SessionId::new(session_id),
-                            key.as_str().to_owned(),
-                            value.as_str().to_owned(),
-                        ))
-                        .await
-                    {
-                        info!(
-                            config_id = %key,
-                            desired = %value,
-                            error = %err,
-                            "reconcile_session: set_config_option failed; skipping"
-                        );
-                        continue;
-                    }
-                    // Sync observed ourselves so the next plan_reconcile
-                    // does not replay this action. CLI does not push a
-                    // config-update notification after set_config_option.
-                    let mut session = self.session.write().await;
-                    session.apply_observed_config(key, value);
-                    self.commit_session_changes(&mut session).await;
-                }
-            }
-        }
-    }
-}
-
-impl AcpAgentManager {
     pub async fn mode(&self) -> Result<aionui_api_types::AgentModeResponse, AppError> {
         let desired = self
             .session
@@ -439,7 +341,13 @@ impl AcpAgentManager {
 
     /// Set a session configuration option.
     pub async fn set_config_option(&self, config_id: &str, value: &str) -> Result<(), AppError> {
-        let sid = self.require_session_id().await?;
+        let sid = self
+            .session
+            .read()
+            .await
+            .session_id()
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| AppError::BadRequest("No active session".into()))?;
 
         self.protocol
             .set_config_option(SetSessionConfigOptionRequest::new(
@@ -483,7 +391,7 @@ impl AcpAgentManager {
     /// brand new and still needs `session/load` (or claude-meta-resume) to
     /// re-attach to the persisted session before the next prompt. Subsequent
     /// turns — once the resume handshake has run — take the short path.
-    pub async fn restore_session_id(&self, sid: String) {
+    pub async fn set_session_id(&self, sid: String) {
         let mut session = self.session.write().await;
         session.set_session_id(DomainSessionId::new(sid));
         // Discarded — the session_id already came from DB, no need to re-persist.
@@ -496,7 +404,7 @@ impl AcpAgentManager {
     }
 
     /// Agent metadata id this session was spawned from.
-    pub fn agent_metadata_id(&self) -> &str {
+    pub fn agent_id(&self) -> &str {
         &self.params.metadata.id
     }
 
@@ -507,19 +415,15 @@ impl AcpAgentManager {
 }
 
 impl AcpAgentManager {
-    /// Initialize or resume a session, then send the user message.
+    /// Ensure the ACP session is opened with the CLI. Does not send a
+    /// prompt. Returns the session id that subsequent prompts should use
+    /// (may differ from the input when claude-meta-resume rewrites it).
     ///
-    /// Three paths:
-    /// 1. **No session_id at all** → `session/new` + first prompt.
-    /// 2. **Have session_id but this instance has not yet opened it with the
-    ///    CLI** → `session/load` (or claude-meta-resume) + prompt. This
-    ///    happens on the first turn after a task rebuild or after
-    ///    `restore_session_id` seeded the id from the DB.
-    /// 3. **Session already opened by this instance** → plain `prompt`. No
-    ///    `session/load` — the CLI child process still owns the session in
-    ///    memory, re-loading every turn would both waste a round-trip and
-    ///    (on some backends) reset config options.
-    async fn ensure_session_and_send(&self, data: &SendMessageData) -> Result<(), AppError> {
+    /// Three paths mirror `ensure_session_and_send`:
+    /// 1. No sid at all → `open_session_new`
+    /// 2. Sid present but CLI has not opened it (fresh task) → `open_session_resume`
+    /// 3. Already opened → noop, return the existing sid
+    async fn ensure_session_opened(&self) -> Result<String, AppError> {
         let _lock = self.session_lock.lock().await;
 
         let (session_id, opened) = {
@@ -527,75 +431,68 @@ impl AcpAgentManager {
             (s.session_id().map(ToOwned::to_owned), s.is_opened())
         };
 
-        match (session_id.as_deref(), opened) {
-            (None, _) => {
-                // Path 1: first turn in a brand-new conversation.
-                self.session_new_and_prompt(data).await?;
-            }
-            (Some(sid), false) => {
-                // Path 2: we have a persisted id but this process has not
-                // opened it with the CLI yet. Needs backend-appropriate
-                // resume handshake before the prompt.
-                self.session_resume_and_send(data, Some(sid)).await?;
-            }
-            (Some(sid), true) => {
-                // Path 3: session is live with the CLI; just prompt.
-                self.prompt_existing_session(data, Some(sid)).await?;
-            }
-        }
+        let sid = match (session_id, opened) {
+            (None, _) => self.open_session_new().await?,
+            (Some(sid), false) => self.open_session_resume(&sid).await?,
+            (Some(sid), true) => sid,
+        };
 
         {
             let mut s = self.session.write().await;
             s.mark_opened();
             self.commit_session_changes(&mut s).await;
         }
+        Ok(sid)
+    }
+
+    /// Initialize or resume a session, then send the user message.
+    ///
+    /// For brand-new sessions (no prior session id and CLI has not opened
+    /// one) the first prompt is augmented with `[Assistant Rules]` /
+    /// skill-index injection. Resume paths skip injection — the prior
+    /// context is already present in the CLI session.
+    async fn ensure_session_and_send(&self, data: &SendMessageData) -> Result<(), AppError> {
+        let is_brand_new = {
+            let s = self.session.read().await;
+            s.session_id().is_none() && !s.is_opened()
+        };
+
+        let sid = self.ensure_session_opened().await?;
         self.runtime.transition_to(ConversationStatus::Running);
 
-        Ok(())
+        if is_brand_new {
+            let injected_content = inject_first_message_prefix(
+                &data.content,
+                &self.skill_manager,
+                InjectionConfig {
+                    preset_context: self.params.preset_context.as_deref(),
+                    skills: &self.params.config.skills,
+                    custom_workspace: self.params.workspace.is_custom,
+                    native_skill_support: self
+                        .params
+                        .metadata
+                        .native_skills_dirs
+                        .as_ref()
+                        .is_some_and(|v: &Vec<String>| !v.is_empty()),
+                },
+            )
+            .await;
+            let injected = SendMessageData {
+                content: injected_content,
+                ..data.clone()
+            };
+            self.prompt_existing_session(&injected, Some(&sid)).await
+        } else {
+            self.prompt_existing_session(data, Some(&sid)).await
+        }
     }
 
-    /// Whether the agent supports `session/load` — read from the ACP
-    /// handshake's `agent_capabilities.load_session` bool. `false` until
-    /// initialization completes; `false` for agents that advertise no
-    /// load-session capability.
-    ///
-    /// The raw ACP wire field is `loadSession` (camelCase); we store
-    /// the snake_case form because every handshake blob is normalised
-    /// before being persisted (see `sdk_to_snake_value`).
-    /// Whether this agent uses Claude-style meta resume (session/new with
-    /// `_meta.claudeCode.options.resume`) instead of session/load.
-    /// Matches AionUi frontend: `useClaudeMetaResume = backend === 'claude' || !!caps?._meta?.claudeCode`
-    pub(super) fn uses_claude_meta_resume(&self) -> bool {
-        agent_metadata_uses_claude_meta_resume(&self.params.metadata)
-    }
-
-    pub(super) fn supports_session_load(&self) -> bool {
-        self.params
-            .metadata
-            .handshake
-            .agent_capabilities
-            .as_ref()
-            .and_then(|caps: &Value| caps.get("load_session"))
-            .and_then(|v: &Value| v.as_bool())
-            .unwrap_or(false)
-    }
-
-    pub(super) fn native_skill_support(&self) -> bool {
-        self.params
-            .metadata
-            .native_skills_dirs
-            .as_ref()
-            .is_some_and(|v: &Vec<String>| !v.is_empty())
-    }
-
-    /// Return the active session id or a `BadRequest` error.
-    async fn require_session_id(&self) -> Result<String, AppError> {
-        self.session
-            .read()
-            .await
-            .session_id()
-            .map(ToOwned::to_owned)
-            .ok_or_else(|| AppError::BadRequest("No active session".into()))
+    /// Pre-open the ACP session without sending a prompt. Called by the
+    /// factory after `AcpAgentManager::build` so `POST /warmup` returns
+    /// only after the session is ready to accept `set_mode` / `set_model`
+    /// / `prompt`. Idempotent — if already opened, returns immediately.
+    pub async fn warmup_session(&self) -> Result<(), AppError> {
+        self.ensure_session_opened().await.map(|_sid| ())
     }
 }
 
@@ -699,10 +596,6 @@ impl crate::agent_task::IAgentTask for AcpAgentManager {
     }
 }
 
-/// ACP-specific operations that used to live on `IAgentManager` and are
-/// now reached through `AgentInstance::Acp(..)` matches in the routes +
-/// services. Kept as inherent methods so the enum-match callsite reads
-/// `m.get_mode()` with no trait import.
 impl AcpAgentManager {
     /// Submit a permission response for a pending tool call. ACP confirms
     /// always carry an `option_id`; `always_allow` is consumed by the CLI
@@ -720,40 +613,5 @@ impl AcpAgentManager {
 
         self.permission_router
             .confirm(call_id, option_id, &self.params.conversation_id)
-    }
-
-    /// ACP tracks pending permission prompts through the permission
-    /// router, not through a surfaced confirmation list, so the enum-
-    /// level helper returns empty when the variant is ACP.
-    pub fn get_confirmations(&self) -> Vec<Confirmation> {
-        Vec::new()
-    }
-
-    /// Approval memory is not tracked at the manager level for ACP —
-    /// every tool request round-trips through the CLI.
-    pub fn check_approval(&self, _action: &str, _command_type: Option<&str>) -> bool {
-        false
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn confirm_option_id_accepts_string_or_object() {
-        assert_eq!(
-            confirm_option_id(&Value::String("allow_once".into())).as_deref(),
-            Some("allow_once")
-        );
-        assert_eq!(
-            confirm_option_id(&json!({ "option_id": "reject_once" })).as_deref(),
-            Some("reject_once")
-        );
-        assert_eq!(
-            confirm_option_id(&json!({ "value": "allow_always" })).as_deref(),
-            Some("allow_always")
-        );
     }
 }

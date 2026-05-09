@@ -5,8 +5,8 @@ use agent_client_protocol::schema::{
     SessionModelState, UsageUpdate,
 };
 
-use super::events::AcpSessionEvent;
-use super::reconcile::ReconcileAction;
+use super::agent_event_tracker::AcpSessionEvent;
+use super::agent_reconcile::ReconcileAction;
 use crate::shared_kernel::{ConfigKey, ConfigValue, ModeId, ModelId, PersistedSessionState, SessionId};
 
 /// What the user wants the session to be (intent).
@@ -55,6 +55,13 @@ pub struct AcpSession {
     observed: Observed,
     advertised: Advertised,
     pending_events: Vec<AcpSessionEvent>,
+    /// Model id the next prompt should announce to the CLI via an
+    /// injected `<system-reminder>`. Written when the CLI bakes
+    /// model identity into its cached system prompt (see
+    /// `BehaviorPolicy::self_identity_sticky`) and `session/set_model`
+    /// therefore does not refresh the LLM's self-description.
+    /// Taken (drained) on the next prompt.
+    pending_model_notice: Option<ModelId>,
 }
 
 impl AcpSession {
@@ -74,6 +81,7 @@ impl AcpSession {
             observed: Observed::default(),
             advertised: Advertised::default(),
             pending_events: Vec::new(),
+            pending_model_notice: None,
         }
     }
 }
@@ -424,6 +432,19 @@ impl AcpSession {
     /// Consume and return all pending domain events.
     pub fn drain_events(&mut self) -> Vec<AcpSessionEvent> {
         std::mem::take(&mut self.pending_events)
+    }
+
+    /// Record the model id that the next prompt should announce to the
+    /// CLI via a `<system-reminder>`. See `pending_model_notice` for the
+    /// motivating invariant.
+    pub fn set_pending_model_notice(&mut self, model: ModelId) {
+        self.pending_model_notice = Some(model);
+    }
+
+    /// Drain the pending model notice (if any). Callers consume the
+    /// value before sending the next prompt so it is not re-injected.
+    pub fn take_pending_model_notice(&mut self) -> Option<ModelId> {
+        self.pending_model_notice.take()
     }
 
     // ─── Private helpers ───────────────────────────────────────────────
@@ -863,6 +884,21 @@ mod tests {
             events.is_empty(),
             "no ObservedConfigSynced when observed unchanged, got {events:?}"
         );
+    }
+
+    #[test]
+    fn pending_model_notice_roundtrip_and_take_once() {
+        use crate::shared_kernel::ModelId;
+
+        let mut s = AcpSession::new(None, None, HashMap::new());
+        assert!(s.take_pending_model_notice().is_none(), "default is None");
+
+        s.set_pending_model_notice(ModelId::new("opus"));
+        let taken = s.take_pending_model_notice();
+        assert_eq!(taken.as_ref().map(|m| m.as_str()), Some("opus"));
+
+        // Take is destructive — the second take must see None.
+        assert!(s.take_pending_model_notice().is_none());
     }
 
     #[test]

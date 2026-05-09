@@ -1,3 +1,11 @@
+//! Agent-related API routes.
+//!
+//! Endpoints:
+//!
+//! - `GET  /api/agents`         — list available agents
+//! - `POST /api/agents/refresh` — refresh agent list (e.g. after new agent is added to the system)
+//! - `POST /api/agents/test`    — test custom agent configuration (e.g. LLM connection)
+
 use std::sync::Arc;
 
 use axum::Router;

@@ -30,27 +30,15 @@ pub(super) fn normalize_requested_mode(metadata: &AgentMetadata, mode: &str) -> 
     trimmed.to_owned()
 }
 
-/// Whether the agent described by `metadata` uses Claude-style meta resume
-/// (`session/new` with `_meta.claudeCode.options.resume`) instead of the
-/// generic `session/load` path.
+/// Whether the agent resumes a session by calling `session/new` again
+/// with a vendor-specific `_meta.<vendor>.options.resume` field, instead
+/// of the generic ACP `session/load` method.
 ///
-/// Mirrors the AionUi frontend rule
-/// `useClaudeMetaResume = backend === 'claude' || !!caps?._meta?.claudeCode`.
-///
-/// Handshake blobs persisted by the backend are normalised to snake_case
-/// (see `sdk_to_snake_value`), so the lookup prefers `claude_code` and
-/// falls back to `claudeCode` for any blob that bypassed normalisation.
-pub(super) fn agent_metadata_uses_claude_meta_resume(metadata: &AgentMetadata) -> bool {
-    if metadata.backend.as_deref() == Some("claude") {
-        return true;
-    }
-    metadata
-        .handshake
-        .agent_capabilities
-        .as_ref()
-        .and_then(|caps| caps.get("_meta"))
-        .and_then(|meta| meta.get("claude_code").or_else(|| meta.get("claudeCode")))
-        .is_some()
+/// Returns the bool on `metadata.behavior_policy` verbatim — the
+/// catalog row is the single source of truth. No backend-name
+/// sniffing, no handshake blob inspection.
+pub(super) fn agent_metadata_uses_meta_resume(metadata: &AgentMetadata) -> bool {
+    metadata.behavior_policy.session_load_via_meta_field
 }
 
 #[cfg(test)]
@@ -58,7 +46,6 @@ mod tests {
     use super::*;
     use aionui_api_types::AgentHandshake;
     use aionui_common::AgentType;
-    use serde_json::json;
 
     fn metadata_with_yolo_id(yolo_id: Option<&str>) -> AgentMetadata {
         use aionui_api_types::{AgentSource, AgentSourceInfo, BehaviorPolicy};
@@ -152,67 +139,32 @@ mod tests {
         assert_eq!(normalize_requested_mode(&other, "autoEdit"), "autoEdit");
     }
 
-    /// Claude backend must take the `session/new` + `_meta.claudeCode.options.resume`
-    /// path so `mcpServers` are re-injected on resume. `backend == "claude"`
-    /// alone is enough — we don't need the handshake to advertise `_meta`.
     #[test]
-    fn uses_claude_meta_resume_true_for_claude_backend() {
+    fn uses_meta_resume_true_when_policy_flag_set() {
+        use aionui_api_types::BehaviorPolicy;
         let mut meta = metadata_with_yolo_id(None);
         meta.backend = Some("claude".into());
-        assert!(agent_metadata_uses_claude_meta_resume(&meta));
+        meta.behavior_policy = BehaviorPolicy {
+            session_load_via_meta_field: true,
+            ..BehaviorPolicy::default()
+        };
+        assert!(agent_metadata_uses_meta_resume(&meta));
     }
 
-    /// A non-Claude-labelled backend that still advertises
-    /// `agent_capabilities._meta.claudeCode` (snake_case, as persisted by
-    /// `sdk_to_snake_value`) must also follow the Claude resume path —
-    /// this matches the frontend's `!!caps?._meta?.claudeCode` check.
     #[test]
-    fn uses_claude_meta_resume_true_for_meta_claude_code() {
+    fn uses_meta_resume_false_when_policy_flag_unset_even_for_claude_backend() {
+        // Hardening test: previously hardcoded `backend == "claude"`. Now
+        // the policy is the sole source of truth — a catalog row with
+        // backend=claude but no session_load_via_meta_field must return false.
         let mut meta = metadata_with_yolo_id(None);
-        meta.backend = Some("custom-claude-wrapper".into());
-        meta.handshake.agent_capabilities = Some(json!({
-            "_meta": {
-                "claude_code": { "some": "flag" }
-            }
-        }));
-        assert!(agent_metadata_uses_claude_meta_resume(&meta));
-
-        // A handshake that bypassed snake_case normalisation (camelCase
-        // `claudeCode`) must still be recognised.
-        let mut camel_meta = metadata_with_yolo_id(None);
-        camel_meta.backend = Some("custom-claude-wrapper".into());
-        camel_meta.handshake.agent_capabilities = Some(json!({
-            "_meta": {
-                "claudeCode": { "some": "flag" }
-            }
-        }));
-        assert!(agent_metadata_uses_claude_meta_resume(&camel_meta));
+        meta.backend = Some("claude".into());
+        assert!(!agent_metadata_uses_meta_resume(&meta));
     }
 
-    /// Codex (and any non-Claude backend without the `_meta.claudeCode`
-    /// marker) must fall through to the `session/load` branch.
     #[test]
-    fn uses_claude_meta_resume_false_for_codex() {
-        let mut meta = metadata_with_yolo_id(Some("full-access"));
-        meta.backend = Some("codex".into());
-        assert!(!agent_metadata_uses_claude_meta_resume(&meta));
-
-        // Codex with unrelated capability keys must still be false.
-        meta.handshake.agent_capabilities = Some(json!({
-            "load_session": true,
-            "_meta": { "codex": { "whatever": true } }
-        }));
-        assert!(!agent_metadata_uses_claude_meta_resume(&meta));
-    }
-
-    /// Metadata with no `backend` label and no handshake capabilities
-    /// must not opt into the Claude resume path.
-    #[test]
-    fn uses_claude_meta_resume_false_for_empty() {
+    fn uses_meta_resume_false_for_default_metadata() {
         let meta = metadata_with_yolo_id(None);
-        assert!(meta.backend.is_none());
-        assert!(meta.handshake.agent_capabilities.is_none());
-        assert!(!agent_metadata_uses_claude_meta_resume(&meta));
+        assert!(!agent_metadata_uses_meta_resume(&meta));
     }
 
     #[test]
