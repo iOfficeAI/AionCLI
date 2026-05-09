@@ -188,7 +188,10 @@ impl AcpAgentManager {
         }));
 
         self.protocol
-            .prompt(PromptRequest::new(SessionId::new(sid), vec![ContentBlock::from(content)]))
+            .prompt(PromptRequest::new(
+                SessionId::new(sid),
+                vec![ContentBlock::from(content)],
+            ))
             .await
             .map_err(AppError::from)?;
 

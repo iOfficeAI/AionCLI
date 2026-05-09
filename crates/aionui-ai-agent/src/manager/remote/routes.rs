@@ -1,3 +1,15 @@
+//! Remote agent management API routes.
+//!
+//! Endpoints:
+//!
+//! - `GET  /api/remote-agents`                    — list remote agents
+//! - `POST /api/remote-agents`                    — create new remote agent
+//! - `GET  /api/remote-agents/{id}`                 — get remote agent details
+//! - `PUT  /api/remote-agents/{id}`                 — update remote agent
+//! - `DELETE /api/remote-agents/{id}`                 — delete remote agent
+//! - `POST /api/remote-agents/test-connection`          — test connection to remote agent (without saving it)
+//! - `POST /api/remote-agents/{id}/handshake`          — perform handshake with the remote agent to verify connectivity and retrieve agent info
+
 use axum::Router;
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Extension, Json, Path, State};
