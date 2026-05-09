@@ -1,4 +1,4 @@
--- 012_agent_metadata_drop_name_unique.sql
+-- 013_agent_metadata_drop_name_unique.sql
 -- Drop UNIQUE(agent_source, name) to allow multiple custom agents with the
 -- same display name (PRD F-CAGENT-12: no duplicate-name validation).
 -- Uniqueness is enforced solely by PRIMARY KEY(id).

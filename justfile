@@ -67,6 +67,7 @@ lint:
 
 lint-fix:
     cargo fix --allow-dirty --allow-staged
+    cargo clippy --fix --workspace --allow-dirty --allow-staged -- -D warnings
 
 # Format code
 fmt:

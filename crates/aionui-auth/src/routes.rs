@@ -711,9 +711,7 @@ async fn webui_change_username_handler(
             .map_err(|e| AppError::Internal(format!("Database error: {e}")))?;
     }
 
-    Ok(Json(ApiResponse::ok(WebuiChangeUsernameResponse {
-        username: trimmed,
-    })))
+    Ok(Json(ApiResponse::ok(WebuiChangeUsernameResponse { username: trimmed })))
 }
 
 // ---------------------------------------------------------------------------

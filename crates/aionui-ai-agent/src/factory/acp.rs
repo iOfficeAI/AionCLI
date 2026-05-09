@@ -35,9 +35,7 @@ pub(super) async fn build(
     // which downstream consumers (MCP injection, preset-context
     // composition) would mis-interpret. When the caller only supplied a
     // vendor label (builtin path), we preserve it as-is.
-    if config.agent_id.is_some() {
-        config.backend.clone_from(&meta.backend);
-    } else if config.backend.is_none() {
+    if config.agent_id.is_some() || config.backend.is_none() {
         config.backend.clone_from(&meta.backend);
     }
 
