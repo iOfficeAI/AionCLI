@@ -97,6 +97,24 @@ impl ChannelStreamRelay {
                     }
                     Some(StreamAction::Thinking(_)) => {}
                     Some(StreamAction::ToolCall { name, .. }) => {
+                        // Weixin parity with TS commit 406a62665: before rendering
+                        // a silent/non-text event (tool call), flush any pending
+                        // assistant text to the user as an independent message so
+                        // it doesn't get overwritten or deferred until Finish.
+                        if is_weixin_platform(self.config.platform)
+                            && has_content
+                            && !text_buffer.trim().is_empty()
+                        {
+                            let formatted = format_text_for_platform(&text_buffer, self.config.platform);
+                            let flush_msg = ChannelMessageService::build_streaming_message(&formatted);
+                            let _ = self
+                                .sender
+                                .send_message(&self.config.plugin_id, &self.config.chat_id, flush_msg)
+                                .await;
+                            text_buffer.clear();
+                            has_content = false;
+                            last_edit = Instant::now();
+                        }
                         let msg = ChannelMessageService::build_streaming_message(&format!("\u{23f3} {name}..."));
                         let _ = self
                             .sender
@@ -168,6 +186,14 @@ impl ChannelStreamRelay {
                 .await;
         }
     }
+}
+
+/// WeChat / WeCom channels cannot edit messages in place — each reply must be
+/// a new send. The relay uses this predicate to flush pending assistant text
+/// before rendering silent/non-text events (tool calls etc.) to avoid either
+/// overwriting it with a tool-status indicator or deferring it until Finish.
+fn is_weixin_platform(platform: PluginType) -> bool {
+    matches!(platform, PluginType::Weixin)
 }
 
 // ── Test helpers (pub so integration tests can use them) ─────────

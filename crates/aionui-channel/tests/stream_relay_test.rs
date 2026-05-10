@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use aionui_ai_agent::AgentStreamEvent;
-use aionui_ai_agent::protocol::events::{ErrorEventData, FinishEventData, TextEventData};
+use aionui_ai_agent::protocol::events::{
+    ErrorEventData, FinishEventData, TextEventData, ToolCallEventData, ToolCallStatus,
+};
 use aionui_channel::stream_relay::{ChannelStreamRelay, MessageRecorder, RelayConfig};
 use aionui_channel::types::PluginType;
 use tokio::sync::broadcast;
@@ -89,6 +91,141 @@ async fn relay_handles_error_event() {
     let edits = recorder.take_edits();
     let last = edits.last().unwrap();
     assert!(last.text.as_deref().unwrap().contains("timeout"));
+}
+
+#[tokio::test]
+async fn weixin_flushes_pending_text_before_tool_call() {
+    // Port of AionUi TS fix `406a62665` to the backend relay layer. On
+    // WeChat, in-place editing is not supported, so a tool-status update
+    // would otherwise overwrite any assistant text the user hasn't yet
+    // seen. The relay should flush buffered text as an independent
+    // send_message before rendering the tool-call indicator, matching the
+    // TS WeixinPlugin.sendTextNow draft-flush behaviour.
+    let (event_tx, _) = broadcast::channel::<AgentStreamEvent>(64);
+    let recorder = Arc::new(MessageRecorder::new());
+
+    let config = RelayConfig {
+        platform: PluginType::Weixin,
+        plugin_id: "weixin".into(),
+        chat_id: "chat_1".into(),
+        throttle_ms: 10_000, // large throttle so the mid-stream edit doesn't fire
+    };
+    let relay = ChannelStreamRelay::new(config, recorder.clone());
+    let rx = event_tx.subscribe();
+
+    event_tx
+        .send(AgentStreamEvent::Text(TextEventData {
+            content: "Here is the plan:".into(),
+        }))
+        .unwrap();
+    event_tx
+        .send(AgentStreamEvent::ToolCall(ToolCallEventData {
+            call_id: "call-1".into(),
+            name: "read_file".into(),
+            args: serde_json::Value::Null,
+            status: ToolCallStatus::Running,
+            description: None,
+            input: None,
+            output: None,
+        }))
+        .unwrap();
+    event_tx
+        .send(AgentStreamEvent::Finish(FinishEventData { session_id: None }))
+        .unwrap();
+
+    relay.run(rx).await;
+
+    let sends = recorder.take_sends();
+    // First send is the "Thinking..." placeholder; the second must be the
+    // flushed assistant text triggered by the ToolCall silent event.
+    assert!(sends.len() >= 2, "expected flush send_message, got {:?}", sends);
+    assert!(sends[0].text.as_deref().unwrap().contains("Thinking"));
+    let flushed = &sends[1];
+    assert!(
+        flushed.text.as_deref().unwrap().contains("Here is the plan"),
+        "expected flushed text, got {:?}",
+        flushed.text
+    );
+}
+
+#[tokio::test]
+async fn telegram_does_not_flush_text_before_tool_call() {
+    // Non-WeChat platforms support edit_message, so the TS flush rule does
+    // not apply — the relay should continue to edit the placeholder in
+    // place without issuing a new send_message for the buffered text.
+    let (event_tx, _) = broadcast::channel::<AgentStreamEvent>(64);
+    let recorder = Arc::new(MessageRecorder::new());
+
+    let config = RelayConfig {
+        platform: PluginType::Telegram,
+        plugin_id: "telegram".into(),
+        chat_id: "chat_1".into(),
+        throttle_ms: 10_000,
+    };
+    let relay = ChannelStreamRelay::new(config, recorder.clone());
+    let rx = event_tx.subscribe();
+
+    event_tx
+        .send(AgentStreamEvent::Text(TextEventData {
+            content: "Here is the plan:".into(),
+        }))
+        .unwrap();
+    event_tx
+        .send(AgentStreamEvent::ToolCall(ToolCallEventData {
+            call_id: "call-1".into(),
+            name: "read_file".into(),
+            args: serde_json::Value::Null,
+            status: ToolCallStatus::Running,
+            description: None,
+            input: None,
+            output: None,
+        }))
+        .unwrap();
+    event_tx
+        .send(AgentStreamEvent::Finish(FinishEventData { session_id: None }))
+        .unwrap();
+
+    relay.run(rx).await;
+
+    let sends = recorder.take_sends();
+    // Only the "Thinking..." placeholder is sent — no flush on non-WeChat.
+    assert_eq!(sends.len(), 1, "unexpected extra sends: {:?}", sends);
+}
+
+#[tokio::test]
+async fn weixin_skips_flush_when_buffer_is_empty() {
+    // Tool call before any assistant text should not trigger a blank flush.
+    let (event_tx, _) = broadcast::channel::<AgentStreamEvent>(64);
+    let recorder = Arc::new(MessageRecorder::new());
+
+    let config = RelayConfig {
+        platform: PluginType::Weixin,
+        plugin_id: "weixin".into(),
+        chat_id: "chat_1".into(),
+        throttle_ms: 10_000,
+    };
+    let relay = ChannelStreamRelay::new(config, recorder.clone());
+    let rx = event_tx.subscribe();
+
+    event_tx
+        .send(AgentStreamEvent::ToolCall(ToolCallEventData {
+            call_id: "call-1".into(),
+            name: "read_file".into(),
+            args: serde_json::Value::Null,
+            status: ToolCallStatus::Running,
+            description: None,
+            input: None,
+            output: None,
+        }))
+        .unwrap();
+    event_tx
+        .send(AgentStreamEvent::Finish(FinishEventData { session_id: None }))
+        .unwrap();
+
+    relay.run(rx).await;
+
+    let sends = recorder.take_sends();
+    assert_eq!(sends.len(), 1, "only Thinking placeholder expected: {:?}", sends);
 }
 
 #[tokio::test]
