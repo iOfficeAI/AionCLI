@@ -218,6 +218,13 @@ async fn login_handler(
         .map_err(|e| AppError::Internal(format!("Database error: {e}")))?;
 
     let (found_user, password_valid) = match user {
+        Some(u) if u.password_hash.trim().is_empty() => {
+            // Seeded user with no password yet (first-run local mode).
+            // Treat as invalid credentials; run dummy verify for timing symmetry
+            // and to avoid bcrypt error on empty hash leaking as a 500.
+            let _ = verify_password_timed(&req.password, dummy_password_hash()).await;
+            (None, false)
+        }
         Some(u) => {
             let valid = verify_password_timed(&req.password, &u.password_hash).await?;
             (Some(u), valid)

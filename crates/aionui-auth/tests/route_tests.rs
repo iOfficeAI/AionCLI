@@ -213,6 +213,21 @@ async fn t4_4_login_missing_fields() {
 }
 
 #[tokio::test]
+async fn t4_5_login_empty_password_hash_returns_401() {
+    // Regression: when the seeded system user has an empty password_hash
+    // (first-run local mode), POST /login must return 401, not 500.
+    let (app, _ctx) = test_app_with_local(true).await;
+
+    let req = json_post("/login", r#"{"username":"admin","password":"anything"}"#);
+    let resp = app.oneshot(req).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    let json = body_json(resp).await;
+    assert_eq!(json["success"], false);
+    assert_eq!(json["code"], "UNAUTHORIZED");
+}
+
+#[tokio::test]
 async fn t4_6_login_username_too_long() {
     let (app, _ctx) = test_app().await;
 
