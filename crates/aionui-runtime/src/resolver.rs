@@ -1,11 +1,17 @@
 //! Public API for the bundled bun runtime.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use crate::cache;
 use crate::embed::{EmbeddedBun, ProductionEmbed};
 use crate::extract::{self, ExtractError};
+
+/// Max time to wait for a freshly-extracted `bun` binary to become
+/// observable via `Path::is_file()` after `extract_into()` returns.
+const BUN_OBSERVABLE_TIMEOUT: Duration = Duration::from_secs(2);
+const BUN_OBSERVABLE_POLL: Duration = Duration::from_millis(100);
 
 #[derive(Debug, thiserror::Error)]
 pub enum ResolveError {
@@ -65,25 +71,46 @@ fn resolve_with<E: EmbeddedBun>(embed: &E) -> Result<PathBuf, ResolveError> {
         return which::which("bun").map_err(|_| ResolveError::NotFound);
     }
     let dir = cache::bun_dir(embed.version(), embed.sha256()).ok_or(ResolveError::NotFound)?;
+    let bun_path = dir.join(extract::bun_filename());
 
-    if extract::is_fresh(&dir, embed.sha256(), embed.version()) {
-        return Ok(dir.join(extract::bun_filename()));
+    // Stamp says fresh AND the executable is actually on disk: fast path.
+    if extract::is_fresh(&dir, embed.sha256(), embed.version()) && bun_path.is_file() {
+        return Ok(bun_path);
     }
 
     // One retry on checksum mismatch: wipe dir and re-extract.
-    match extract::extract_into(&dir, embed.blob(), embed.sha256(), embed.version()) {
-        Ok(p) => Ok(p),
+    let extracted = match extract::extract_into(&dir, embed.blob(), embed.sha256(), embed.version()) {
+        Ok(p) => p,
         Err(ExtractError::ChecksumMismatch { .. }) => {
             tracing::warn!("bun cache checksum mismatch; wiping and retrying");
             let _ = std::fs::remove_dir_all(&dir);
-            Ok(extract::extract_into(
-                &dir,
-                embed.blob(),
-                embed.sha256(),
-                embed.version(),
-            )?)
+            extract::extract_into(&dir, embed.blob(), embed.sha256(), embed.version())?
         }
-        Err(e) => Err(e.into()),
+        Err(e) => return Err(e.into()),
+    };
+
+    // Guard against returning a phantom path: wait until the executable
+    // is observable on disk. Without this, a caller that immediately
+    // spawns the returned path can race with the OS file-cache flush and
+    // see ENOENT, as seen on cold start right after first extract.
+    wait_until_observable(&extracted)?;
+    Ok(extracted)
+}
+
+fn wait_until_observable(path: &Path) -> Result<(), ResolveError> {
+    let deadline = Instant::now() + BUN_OBSERVABLE_TIMEOUT;
+    loop {
+        if path.is_file() {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            tracing::warn!(
+                path = %path.display(),
+                "extracted bun path not observable after timeout"
+            );
+            return Err(ResolveError::NotFound);
+        }
+        std::thread::sleep(BUN_OBSERVABLE_POLL);
     }
 }
 
@@ -109,7 +136,7 @@ fn env_override() -> Option<PathBuf> {
 /// user's `$PATH` via `which::which`.
 pub fn resolve_command_path(cmd: &str) -> Option<PathBuf> {
     match cmd {
-        "bun" => resolve_bun().ok(),
+        "bun" => resolve_bun().ok().or_else(|| which::which("bun").ok()),
         "bunx" => {
             let bunx_name = if cfg!(windows) { "bunx.exe" } else { "bunx" };
             if let Some(dir) = bun_bin_dir() {
@@ -192,6 +219,26 @@ mod tests {
         // SAFETY: single-threaded test cleanup.
         unsafe {
             std::env::remove_var("AIONUI_BUN_PATH");
+        }
+    }
+
+    #[test]
+    fn wait_until_observable_returns_immediately_when_present() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        // File exists, so this must be cheap.
+        let start = Instant::now();
+        wait_until_observable(tmp.path()).unwrap();
+        assert!(start.elapsed() < Duration::from_millis(500));
+    }
+
+    #[test]
+    fn wait_until_observable_errors_when_path_never_appears() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let phantom = tmp.path().join("does-not-exist");
+        let res = wait_until_observable(&phantom);
+        match res {
+            Err(ResolveError::NotFound) => {}
+            other => panic!("expected NotFound, got {other:?}"),
         }
     }
 
