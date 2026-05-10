@@ -165,7 +165,6 @@ struct TaskUpdateParams {
     blocked_by: Option<Vec<String>>,
 }
 
-
 #[derive(Deserialize, schemars::JsonSchema)]
 struct RenameAgentParams {
     /// Slot ID of the team member to rename.
