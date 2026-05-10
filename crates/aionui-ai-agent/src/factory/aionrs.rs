@@ -78,6 +78,12 @@ pub(super) async fn build(
 
     let (base_url, compat_overrides) = resolve_aionrs_url_and_compat(&row.platform, &row.base_url, &provider);
 
+    let bedrock_config = if row.platform == "bedrock" {
+        resolve_bedrock_config(row.bedrock_config.as_deref())
+    } else {
+        None
+    };
+
     let session_directory = deps.data_dir.join("aionrs-sessions");
 
     let resume_session = {
@@ -115,6 +121,7 @@ pub(super) async fn build(
         session_directory,
         session_mode: overrides.session_mode,
         extra_mcp_servers,
+        bedrock_config,
     };
 
     let agent = AionrsAgentManager::new(ctx.conversation_id, ctx.workspace, config, resume_session).await?;
@@ -189,6 +196,17 @@ fn is_openai_host(url: &str) -> bool {
 fn normalize_aionrs_base_url(url: &str) -> String {
     let trimmed = url.trim_end_matches('/');
     trimmed.strip_suffix("/v1").unwrap_or(trimmed).to_owned()
+}
+
+fn resolve_bedrock_config(json: Option<&str>) -> Option<aion_config::config::BedrockConfig> {
+    let bc: aionui_api_types::BedrockConfig = serde_json::from_str(json?).ok()?;
+    Some(aion_config::config::BedrockConfig {
+        region: Some(bc.region),
+        access_key_id: bc.access_key_id,
+        secret_access_key: bc.secret_access_key,
+        session_token: None,
+        profile: bc.profile,
+    })
 }
 
 fn resolve_mcp_servers(overrides: &AionrsBuildExtra, conversation_id: &str) -> HashMap<String, McpServerConfig> {
@@ -468,5 +486,36 @@ mod tests {
 
         let result = resolve_mcp_servers(&overrides, "conv-5");
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn resolve_bedrock_config_access_key() {
+        let json = r#"{"auth_method":"accessKey","region":"us-west-2","access_key_id":"AKIA123","secret_access_key":"secret456"}"#;
+        let result = resolve_bedrock_config(Some(json)).unwrap();
+        assert_eq!(result.region.as_deref(), Some("us-west-2"));
+        assert_eq!(result.access_key_id.as_deref(), Some("AKIA123"));
+        assert_eq!(result.secret_access_key.as_deref(), Some("secret456"));
+        assert!(result.profile.is_none());
+        assert!(result.session_token.is_none());
+    }
+
+    #[test]
+    fn resolve_bedrock_config_profile() {
+        let json = r#"{"auth_method":"profile","region":"eu-west-1","profile":"my-profile"}"#;
+        let result = resolve_bedrock_config(Some(json)).unwrap();
+        assert_eq!(result.region.as_deref(), Some("eu-west-1"));
+        assert_eq!(result.profile.as_deref(), Some("my-profile"));
+        assert!(result.access_key_id.is_none());
+        assert!(result.secret_access_key.is_none());
+    }
+
+    #[test]
+    fn resolve_bedrock_config_none_when_json_missing() {
+        assert!(resolve_bedrock_config(None).is_none());
+    }
+
+    #[test]
+    fn resolve_bedrock_config_none_when_json_invalid() {
+        assert!(resolve_bedrock_config(Some("not-json")).is_none());
     }
 }

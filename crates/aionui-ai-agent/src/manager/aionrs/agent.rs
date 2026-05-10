@@ -72,6 +72,7 @@ impl AionrsAgentManager {
             Config::resolve(&cli_args).map_err(|e| AppError::Internal(format!("Config resolve failed: {e}")))?;
 
         // Backend-specific overrides
+        config.bedrock = config_extra.bedrock_config;
         config.session.enabled = true;
         config.session.directory = config_extra.session_directory.to_string_lossy().into_owned();
 
@@ -332,6 +333,7 @@ mod tests {
             session_directory: std::env::temp_dir().join("aionrs-test-sessions"),
             session_mode: None,
             extra_mcp_servers: std::collections::HashMap::new(),
+            bedrock_config: None,
         }
     }
 

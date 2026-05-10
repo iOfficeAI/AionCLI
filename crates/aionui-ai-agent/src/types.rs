@@ -68,6 +68,8 @@ pub struct AionrsResolvedConfig {
     pub session_mode: Option<String>,
     /// Extra MCP servers to inject (team coordination or guide).
     pub extra_mcp_servers: HashMap<String, aion_config::config::McpServerConfig>,
+    /// AWS Bedrock credentials (region + access key or profile).
+    pub bedrock_config: Option<aion_config::config::BedrockConfig>,
 }
 
 #[cfg(test)]
