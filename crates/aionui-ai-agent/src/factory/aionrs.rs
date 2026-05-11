@@ -23,6 +23,16 @@ pub(super) async fn build(
 ) -> Result<AgentInstance, AppError> {
     let mut overrides: AionrsBuildExtra = serde_json::from_value(options.extra).unwrap_or_default();
 
+    // Merge preset assistant rules into system_prompt (used as custom_prompt
+    // in aionrs's build_system_prompt). Mirrors the old architecture's
+    // `init_history` injection of `[Assistant System Rules]`.
+    if let Some(rules) = overrides.preset_rules.take() {
+        overrides.system_prompt = Some(match overrides.system_prompt.take() {
+            Some(existing) => format!("{existing}\n\n{rules}"),
+            None => rules,
+        });
+    }
+
     // Inject Guide MCP config for solo (non-team) sessions, mirroring acp.rs:39-55.
     if overrides.team_mcp_stdio_config.is_none()
         && overrides.guide_mcp_config.is_none()
@@ -517,5 +527,64 @@ mod tests {
     #[test]
     fn resolve_bedrock_config_none_when_json_invalid() {
         assert!(resolve_bedrock_config(Some("not-json")).is_none());
+    }
+
+    #[test]
+    fn preset_rules_merged_into_system_prompt_when_no_existing() {
+        let json = serde_json::json!({
+            "preset_rules": "You are a data analyst. Always use Python.",
+        });
+        let mut overrides: AionrsBuildExtra = serde_json::from_value(json).unwrap();
+
+        if let Some(rules) = overrides.preset_rules.take() {
+            overrides.system_prompt = Some(match overrides.system_prompt.take() {
+                Some(existing) => format!("{existing}\n\n{rules}"),
+                None => rules,
+            });
+        }
+
+        assert_eq!(
+            overrides.system_prompt.as_deref(),
+            Some("You are a data analyst. Always use Python.")
+        );
+        assert!(overrides.preset_rules.is_none());
+    }
+
+    #[test]
+    fn preset_rules_appended_to_existing_system_prompt() {
+        let json = serde_json::json!({
+            "system_prompt": "Be concise.",
+            "preset_rules": "You are a data analyst.",
+        });
+        let mut overrides: AionrsBuildExtra = serde_json::from_value(json).unwrap();
+
+        if let Some(rules) = overrides.preset_rules.take() {
+            overrides.system_prompt = Some(match overrides.system_prompt.take() {
+                Some(existing) => format!("{existing}\n\n{rules}"),
+                None => rules,
+            });
+        }
+
+        assert_eq!(
+            overrides.system_prompt.as_deref(),
+            Some("Be concise.\n\nYou are a data analyst.")
+        );
+    }
+
+    #[test]
+    fn no_preset_rules_leaves_system_prompt_unchanged() {
+        let json = serde_json::json!({
+            "system_prompt": "Be concise.",
+        });
+        let mut overrides: AionrsBuildExtra = serde_json::from_value(json).unwrap();
+
+        if let Some(rules) = overrides.preset_rules.take() {
+            overrides.system_prompt = Some(match overrides.system_prompt.take() {
+                Some(existing) => format!("{existing}\n\n{rules}"),
+                None => rules,
+            });
+        }
+
+        assert_eq!(overrides.system_prompt.as_deref(), Some("Be concise."));
     }
 }
