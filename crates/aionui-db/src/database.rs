@@ -131,8 +131,8 @@ async fn try_init_file(path: &Path) -> Result<Database, DbError> {
 }
 
 async fn run_migrations(pool: &SqlitePool) -> Result<(), DbError> {
-    sqlx::migrate!().run(pool).await.map_err(DbError::Migration)?;
-    ensure_schema_columns(pool).await
+    ensure_schema_columns(pool).await?;
+    sqlx::migrate!().run(pool).await.map_err(DbError::Migration)
 }
 
 /// Ensure columns expected by Rust models exist in the database.
@@ -146,17 +146,29 @@ async fn ensure_schema_columns(pool: &SqlitePool) -> Result<(), DbError> {
         ("cron_jobs", "description", "TEXT"),
         ("conversations", "pinned", "INTEGER NOT NULL DEFAULT 0"),
         ("conversations", "pinned_at", "INTEGER"),
+        ("teams", "agents_version", "TEXT NOT NULL DEFAULT '1.0.0'"),
     ];
 
     for &(table, column, col_def) in expected {
-        let exists: bool = sqlx::query_scalar("SELECT COUNT(*) > 0 FROM pragma_table_info(?) WHERE name = ?")
+        let table_exists: bool =
+            sqlx::query_scalar("SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name=?")
+                .bind(table)
+                .fetch_one(pool)
+                .await
+                .map_err(DbError::Query)?;
+
+        if !table_exists {
+            continue;
+        }
+
+        let col_exists: bool = sqlx::query_scalar("SELECT COUNT(*) > 0 FROM pragma_table_info(?) WHERE name = ?")
             .bind(table)
             .bind(column)
             .fetch_one(pool)
             .await
             .map_err(DbError::Query)?;
 
-        if !exists {
+        if !col_exists {
             let sql = format!("ALTER TABLE {table} ADD COLUMN {column} {col_def}");
             sqlx::query(&sql).execute(pool).await.map_err(DbError::Query)?;
             info!("Added missing column {table}.{column}");
