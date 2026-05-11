@@ -193,7 +193,7 @@ VALUES
      'claude', 'acp', 'builtin', '{"binary_name":"claude","bridge_binary":"bun"}',
      1, 'bun', '["x","--bun","@agentclientprotocol/claude-agent-acp@0.29.2"]', '[]',
      '[".claude/skills"]',
-     '{"supports_side_question":true,"self_identity_sticky":true,"session_load_via_meta_field":true}',
+     '{"supports_side_question":true,"self_identity_sticky":true,"session_load_via_meta_field":true,"supports_team":true}',
      'bypassPermissions', 3100,
      unixepoch('now','subsec')*1000, unixepoch('now','subsec')*1000),
 
@@ -201,7 +201,7 @@ VALUES
      'codex', 'acp', 'builtin', '{"binary_name":"codex","bridge_binary":"bun"}',
      1, 'bun', '["x","--bun","@zed-industries/codex-acp@0.9.5"]', '[]',
      '[".codex/skills"]',
-     '{"supports_side_question":false}',
+     '{"supports_side_question":false,"supports_team":true}',
      'full-access', 3110,
      unixepoch('now','subsec')*1000, unixepoch('now','subsec')*1000),
 
@@ -209,7 +209,7 @@ VALUES
      'gemini', 'acp', 'builtin', '{"binary_name":"gemini"}',
      1, 'gemini', '["--experimental-acp"]', '[]',
      '[".gemini/skills"]',
-     '{"supports_side_question":false}',
+     '{"supports_side_question":false,"supports_team":true}',
      'yolo', 3120,
      unixepoch('now','subsec')*1000, unixepoch('now','subsec')*1000),
 
@@ -225,7 +225,7 @@ VALUES
      'codebuddy', 'acp', 'builtin', '{"binary_name":"codebuddy","bridge_binary":"bun"}',
      1, 'bun', '["x","--bun","@tencent-ai/codebuddy-code@2.73.0","--acp"]', '[]',
      '[".codebuddy/skills"]',
-     '{"supports_side_question":false}',
+     '{"supports_side_question":false,"supports_team":true}',
      'bypassPermissions', 3130,
      unixepoch('now','subsec')*1000, unixepoch('now','subsec')*1000),
 
@@ -347,7 +347,7 @@ VALUES
      NULL, 'aionrs', 'internal', '{}',
      1, NULL, '[]', '[]',
      '[".aionrs/skills"]',
-     '{}',
+     '{"supports_team":true}',
      'yolo', 100,
      unixepoch('now','subsec')*1000, unixepoch('now','subsec')*1000);
 
