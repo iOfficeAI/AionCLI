@@ -1,4 +1,5 @@
 use super::*;
+use aionui_api_types::BehaviorPolicy;
 use aionui_common::AgentType;
 use aionui_common::constants::{TEAM_CAPABLE_BACKENDS, has_mcp_capability};
 
@@ -54,8 +55,8 @@ pub(crate) fn resolve_full_auto_mode(backend: &str) -> &'static str {
 
 impl TeamSessionService {
     /// Check if a backend is allowed to participate in team mode.
-    /// Hard whitelist passes immediately; otherwise queries the persisted
-    /// `agent_capabilities` from `agent_metadata` for MCP transport declarations.
+    /// Hard whitelist passes immediately; then checks behavior_policy.supports_team;
+    /// finally queries persisted `agent_capabilities` for MCP transport declarations.
     pub(crate) async fn is_backend_team_capable(&self, backend: &str) -> bool {
         if TEAM_CAPABLE_BACKENDS.contains(&backend) {
             return true;
@@ -63,6 +64,14 @@ impl TeamSessionService {
         let Ok(Some(row)) = self.agent_metadata_repo.find_builtin_by_backend(backend).await else {
             return false;
         };
+        let bp_supports = row
+            .behavior_policy
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<BehaviorPolicy>(s).ok())
+            .is_some_and(|bp| bp.supports_team);
+        if bp_supports {
+            return true;
+        }
         let caps = row
             .agent_capabilities
             .as_deref()
@@ -70,7 +79,7 @@ impl TeamSessionService {
         has_mcp_capability(caps.as_ref())
     }
 
-    /// Return all backends currently team-capable (hard whitelist + dynamically detected).
+    /// Return all backends currently team-capable (hard whitelist + behavior_policy + dynamically detected).
     /// Used to build the Lead prompt's `available_agent_types` list.
     pub(crate) async fn list_team_capable_backends(&self) -> Vec<(String, String)> {
         let Ok(rows) = self.agent_metadata_repo.list_all().await else {
@@ -84,19 +93,38 @@ impl TeamSessionService {
             if !row.enabled {
                 continue;
             }
-            let Some(backend) = row.backend.as_deref() else {
-                continue;
+            // Use backend if present, otherwise agent_type as identifier
+            let key = match row.backend.as_deref() {
+                Some(b) => b.to_string(),
+                None => row.agent_type.clone(),
             };
-            if TEAM_CAPABLE_BACKENDS.contains(&backend) {
-                result.push((backend.to_string(), row.name.clone()));
+
+            // Check behavior_policy.supports_team (covers agents with backend=NULL like aionrs)
+            let bp_supports = row
+                .behavior_policy
+                .as_deref()
+                .and_then(|s| serde_json::from_str::<BehaviorPolicy>(s).ok())
+                .is_some_and(|bp| bp.supports_team);
+            if bp_supports {
+                result.push((key, row.name.clone()));
                 continue;
             }
+
+            // Hard whitelist (only works when backend is present)
+            if let Some(backend) = row.backend.as_deref()
+                && TEAM_CAPABLE_BACKENDS.contains(&backend)
+            {
+                result.push((key, row.name.clone()));
+                continue;
+            }
+
+            // Dynamic MCP detection
             let caps = row
                 .agent_capabilities
                 .as_deref()
                 .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
             if has_mcp_capability(caps.as_ref()) {
-                result.push((backend.to_string(), row.name.clone()));
+                result.push((key, row.name.clone()));
             }
         }
         // Ensure hard whitelist entries are present even if not in DB
