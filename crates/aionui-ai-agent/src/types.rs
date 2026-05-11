@@ -216,6 +216,7 @@ mod tests {
         let json = json!({});
         let extra: AionrsBuildExtra = serde_json::from_value(json).unwrap();
         assert!(extra.system_prompt.is_none());
+        assert!(extra.preset_rules.is_none());
         assert_eq!(extra.max_tokens, 8192);
         assert!(extra.max_turns.is_none());
     }
@@ -231,5 +232,16 @@ mod tests {
         assert_eq!(extra.system_prompt.unwrap(), "You are a helpful assistant.");
         assert_eq!(extra.max_tokens, 4096);
         assert_eq!(extra.max_turns.unwrap(), 10);
+    }
+
+    #[test]
+    fn aionrs_build_extra_serde_with_preset_rules() {
+        let json = json!({
+            "preset_rules": "You are a data analyst.",
+            "max_tokens": 8192
+        });
+        let extra: AionrsBuildExtra = serde_json::from_value(json).unwrap();
+        assert!(extra.system_prompt.is_none());
+        assert_eq!(extra.preset_rules.unwrap(), "You are a data analyst.");
     }
 }

@@ -75,6 +75,8 @@ pub struct RemoteBuildExtra {
 pub struct AionrsBuildExtra {
     #[serde(default)]
     pub system_prompt: Option<String>,
+    #[serde(default)]
+    pub preset_rules: Option<String>,
     #[serde(default = "default_aionrs_max_tokens")]
     pub max_tokens: u32,
     #[serde(default)]
