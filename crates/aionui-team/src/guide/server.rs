@@ -130,7 +130,25 @@ async fn handle_tool_request(
     let response_body = match tool {
         "aion_create_team" => exec_create_team(&body, &args, &state.service).await,
         "aion_list_models" => {
-            let result = crate::guide::handlers::handle_aion_list_models();
+            let result = match state.service.read().await.upgrade() {
+                Some(svc) => {
+                    let mut base = svc.list_models_from_db(None).await;
+                    // Guide surfaces Gemini even if not in spawn whitelist
+                    if let Some(types) = base.get_mut("agent_types").and_then(serde_json::Value::as_array_mut) {
+                        let has_gemini = types
+                            .iter()
+                            .any(|e| e.get("type").and_then(serde_json::Value::as_str) == Some("gemini"));
+                        if !has_gemini {
+                            types.push(serde_json::json!({
+                                "type": "gemini",
+                                "models": ["gemini-2.5-pro", "gemini-2.5-flash"]
+                            }));
+                        }
+                    }
+                    base
+                }
+                None => crate::guide::handlers::handle_aion_list_models(),
+            };
             info!("Guide HTTP: aion_list_models succeeded");
             serde_json::json!({"result": serde_json::to_string(&result).unwrap_or_default()})
         }

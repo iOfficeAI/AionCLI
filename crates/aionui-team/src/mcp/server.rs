@@ -441,14 +441,19 @@ pub(crate) async fn dispatch_tool(
         "team_shutdown_agent" => {
             exec_shutdown_agent(arguments, scheduler, service, team_id, caller_slot_id, caller_role).await
         }
-        "team_list_models" => exec_list_models(arguments).await,
+        "team_list_models" => exec_list_models(arguments, service).await,
         "team_describe_assistant" => exec_describe_assistant(arguments).await,
         _ => Err(format!("Unknown tool: {tool_name}")),
     }
 }
 
-async fn exec_list_models(args: &Value) -> Result<String, String> {
-    let value = handle_team_list_models(args);
+async fn exec_list_models(args: &Value, service: &Weak<TeamSessionService>) -> Result<String, String> {
+    let agent_type_filter = args.get("agent_type").and_then(Value::as_str);
+
+    let value = match service.upgrade() {
+        Some(svc) => svc.list_models_from_db(agent_type_filter).await,
+        None => handle_team_list_models(args),
+    };
     serde_json::to_string_pretty(&value).map_err(|e| format!("Serialization error: {e}"))
 }
 

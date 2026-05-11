@@ -136,6 +136,15 @@ impl TeamSessionService {
         result
     }
 
+    /// Return the `team_list_models` response built from DB rows.
+    /// Falls back to the hardcoded response if the DB query fails.
+    pub(crate) async fn list_models_from_db(&self, agent_type_filter: Option<&str>) -> serde_json::Value {
+        let Ok(rows) = self.agent_metadata_repo.list_all().await else {
+            return crate::mcp::tools::handle_team_list_models(&serde_json::Value::Null);
+        };
+        crate::mcp::tools::build_list_models_from_rows(&rows, agent_type_filter)
+    }
+
     pub async fn spawn_agent_in_session(
         &self,
         team_id: &str,
