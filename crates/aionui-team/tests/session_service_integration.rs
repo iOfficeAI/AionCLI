@@ -476,6 +476,14 @@ impl IWorkerTaskManager for CountingTaskManager {
             .push((conversation_id.to_owned(), reason));
         self.inner.kill(conversation_id, reason)
     }
+    fn kill_and_wait(
+        &self,
+        conversation_id: &str,
+        reason: Option<AgentKillReason>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        let _ = self.kill(conversation_id, reason);
+        Box::pin(std::future::ready(()))
+    }
     fn clear(&self) {
         self.inner.clear()
     }

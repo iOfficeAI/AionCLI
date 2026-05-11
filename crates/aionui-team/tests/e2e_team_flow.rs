@@ -223,6 +223,14 @@ impl aionui_ai_agent::IWorkerTaskManager for StubTaskManager {
             .push((conversation_id.to_owned(), reason));
         Ok(())
     }
+    fn kill_and_wait(
+        &self,
+        conversation_id: &str,
+        reason: Option<AgentKillReason>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        let _ = self.kill(conversation_id, reason);
+        Box::pin(std::future::ready(()))
+    }
     fn clear(&self) {}
     fn active_count(&self) -> usize {
         self.tasks.lock().unwrap().len()

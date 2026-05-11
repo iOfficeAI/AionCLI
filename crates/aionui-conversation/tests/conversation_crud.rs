@@ -53,6 +53,13 @@ impl IWorkerTaskManager for NoopTaskManager {
     fn kill(&self, _: &str, _: Option<AgentKillReason>) -> Result<(), AppError> {
         Ok(())
     }
+    fn kill_and_wait(
+        &self,
+        _: &str,
+        _: Option<AgentKillReason>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        Box::pin(std::future::ready(()))
+    }
     fn clear(&self) {}
     fn active_count(&self) -> usize {
         0

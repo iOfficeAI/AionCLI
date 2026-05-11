@@ -24,7 +24,7 @@ use crate::session::TeamSession;
 use crate::types::{Team, TeamAgent, TeammateRole};
 
 struct SessionEntry {
-    session: TeamSession,
+    session: Arc<TeamSession>,
     /// Background tasks that forward `Finish` / `Error` stream events to
     /// `session.on_agent_finish`. Aborted in `stop_session`.
     finish_subscribers: Vec<JoinHandle<()>>,
@@ -299,15 +299,20 @@ impl TeamSessionService {
 
         self.stop_session(team_id);
 
-        // D11.5: tear down every agent worker before the team's conversations
-        // are deleted — otherwise the spawned ACP/CLI processes become orphans.
-        // Failures here (e.g. the task was never built, or already gone) must
-        // not block the delete path.
-        for agent in &team.agents {
-            let _ = self
-                .task_manager
-                .kill(&agent.conversation_id, Some(AgentKillReason::TeamDeleted));
-        }
+        let kill_futures: Vec<_> = team
+            .agents
+            .iter()
+            .map(|agent| {
+                self.task_manager
+                    .kill_and_wait(&agent.conversation_id, Some(AgentKillReason::TeamDeleted))
+            })
+            .collect();
+
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            futures_util::future::join_all(kill_futures),
+        )
+        .await;
 
         for agent in &team.agents {
             let _ = self.conversation_service.delete(user_id, &agent.conversation_id).await;
@@ -317,8 +322,6 @@ impl TeamSessionService {
         self.repo.delete_tasks_by_team(team_id).await?;
         self.repo.delete_team(team_id).await?;
 
-        // Drop the per-team add_agent lock so the DashMap entry does not leak
-        // across team lifecycles (W4-D23).
         self.add_agent_locks.remove(team_id);
 
         info!(team_id = %team_id, "Team removed");
@@ -415,8 +418,8 @@ impl TeamSessionService {
             )
             .await?;
 
-        if let Some(entry) = self.sessions.get(team_id) {
-            entry.session.add_agent(&agent).await;
+        if let Some(session) = self.sessions.get(team_id).map(|e| Arc::clone(&e.session)) {
+            session.add_agent(&agent).await;
         }
 
         self.build_agent_response(&agent).await
@@ -455,8 +458,8 @@ impl TeamSessionService {
             )
             .await?;
 
-        if let Some(entry) = self.sessions.get(team_id) {
-            let _ = entry.session.remove_agent(slot_id).await;
+        if let Some(session) = self.sessions.get(team_id).map(|e| Arc::clone(&e.session)) {
+            let _ = session.remove_agent(slot_id).await;
         }
 
         Ok(())
@@ -489,8 +492,8 @@ impl TeamSessionService {
             )
             .await?;
 
-        if let Some(entry) = self.sessions.get(team_id) {
-            let _ = entry.session.rename_agent(slot_id, name).await;
+        if let Some(session) = self.sessions.get(team_id).map(|e| Arc::clone(&e.session)) {
+            let _ = session.rename_agent(slot_id, name).await;
         }
 
         Ok(())
@@ -583,7 +586,7 @@ impl TeamSessionService {
         let finish_subscribers = self.spawn_finish_subscribers(team_id, &agents_snapshot);
 
         let entry = SessionEntry {
-            session,
+            session: Arc::new(session),
             finish_subscribers,
         };
         self.sessions.insert(team_id.to_owned(), entry);
@@ -703,12 +706,15 @@ impl TeamSessionService {
                     if !is_error && !matches!(event, AgentStreamEvent::Finish(_)) {
                         continue;
                     }
-                    let Some(entry) = sessions.get(&team_id) else {
-                        break;
+                    let session = {
+                        let Some(entry) = sessions.get(&team_id) else {
+                            break;
+                        };
+                        Arc::clone(&entry.session)
                     };
-                    match entry.session.on_agent_finish(&conv_id, is_error).await {
+                    match session.on_agent_finish(&conv_id, is_error).await {
                         Ok(Some(wake_target)) => {
-                            entry.session.try_wake(&wake_target, None).await;
+                            session.try_wake(&wake_target, None).await;
                         }
                         Ok(None) => {}
                         Err(e) => {
@@ -756,12 +762,15 @@ impl TeamSessionService {
                 if !is_error && !matches!(event, AgentStreamEvent::Finish(_)) {
                     continue;
                 }
-                let Some(entry) = sessions.get(&team_id_owned) else {
-                    break;
+                let session = {
+                    let Some(entry) = sessions.get(&team_id_owned) else {
+                        break;
+                    };
+                    Arc::clone(&entry.session)
                 };
-                match entry.session.on_agent_finish(&conv_id, is_error).await {
+                match session.on_agent_finish(&conv_id, is_error).await {
                     Ok(Some(wake_target)) => {
-                        entry.session.try_wake(&wake_target, None).await;
+                        session.try_wake(&wake_target, None).await;
                     }
                     Ok(None) => {}
                     Err(e) => {
@@ -804,11 +813,14 @@ impl TeamSessionService {
         content: &str,
         files: Option<Vec<String>>,
     ) -> Result<(), TeamError> {
-        let entry = self
-            .sessions
-            .get(team_id)
-            .ok_or_else(|| TeamError::SessionNotFound(team_id.into()))?;
-        entry.session.send_message(content, files).await
+        let session = {
+            let entry = self
+                .sessions
+                .get(team_id)
+                .ok_or_else(|| TeamError::SessionNotFound(team_id.into()))?;
+            Arc::clone(&entry.session)
+        };
+        session.send_message(content, files).await
     }
 
     pub async fn send_message_to_agent(
@@ -818,44 +830,43 @@ impl TeamSessionService {
         content: &str,
         files: Option<Vec<String>>,
     ) -> Result<(), TeamError> {
-        let entry = self
-            .sessions
-            .get(team_id)
-            .ok_or_else(|| TeamError::SessionNotFound(team_id.into()))?;
-        entry.session.send_message_to_agent(slot_id, content, files).await
+        let session = {
+            let entry = self
+                .sessions
+                .get(team_id)
+                .ok_or_else(|| TeamError::SessionNotFound(team_id.into()))?;
+            Arc::clone(&entry.session)
+        };
+        session.send_message_to_agent(slot_id, content, files).await
     }
 
     /// Wake a specific agent in a team session (trigger it to read mailbox).
     /// Called by MCP dispatch after `team_send_message` writes to mailbox.
     pub async fn wake_agent_in_session(&self, team_id: &str, slot_id: &str) -> Result<(), TeamError> {
-        let entry = self
-            .sessions
-            .get(team_id)
-            .ok_or_else(|| TeamError::SessionNotFound(team_id.into()))?;
+        let (session, scheduler) = {
+            let entry = self
+                .sessions
+                .get(team_id)
+                .ok_or_else(|| TeamError::SessionNotFound(team_id.into()))?;
+            (Arc::clone(&entry.session), entry.session.scheduler().clone())
+        };
 
-        // Acquire an exclusive wake lock before proceeding. If another wake is
-        // already in-flight for this slot, skip — the queued wake will produce
-        // its own Finish event when it completes (Bug 3: race with finish_subscriber).
-        if !entry.session.scheduler().acquire_wake_lock(slot_id) {
+        if !scheduler.acquire_wake_lock(slot_id) {
             return Ok(());
         }
 
-        entry
-            .session
-            .scheduler()
+        scheduler
             .set_status(slot_id, crate::types::TeammateStatus::Working)
             .await?;
-        let input = entry.session.compute_wake_input(slot_id).await;
+        let input = session.compute_wake_input(slot_id).await;
 
         if let Ok(Some(ref i)) = input
             && i.should_send
         {
-            entry.session.mirror_unread_to_conversation(i).await;
+            session.mirror_unread_to_conversation(i).await;
         }
 
-        let user_id = entry.session.user_id().to_owned();
-        let scheduler = entry.session.scheduler().clone();
-        drop(entry);
+        let user_id = session.user_id().to_owned();
 
         let conv_id = match &input {
             Ok(Some(i)) if i.should_send => i.conversation_id.clone(),
@@ -922,28 +933,26 @@ impl TeamSessionService {
 
             let send_result = handle.send_message(data).await;
 
-            if send_result.is_ok()
-                && !msg_ids.is_empty()
-                && let Some(entry) = sessions.get(&team_id_owned)
-                && let Err(e) = entry.session.mailbox().mark_read_batch(&msg_ids).await
-            {
-                warn!(
-                    slot_id = %slot_id_owned,
-                    error = %e,
-                    "mark_read_batch failed after successful send in wake_agent_in_session (non-fatal)"
-                );
+            if send_result.is_ok() && !msg_ids.is_empty() {
+                let session = sessions.get(&team_id_owned).map(|e| Arc::clone(&e.session));
+                if let Some(session) = session
+                    && let Err(e) = session.mailbox().mark_read_batch(&msg_ids).await
+                {
+                    warn!(
+                        slot_id = %slot_id_owned,
+                        error = %e,
+                        "mark_read_batch failed after successful send in wake_agent_in_session (non-fatal)"
+                    );
+                }
             }
 
             scheduler.release_wake_lock(&slot_id_owned);
 
-            // The Finish event was emitted inside send_message (before it
-            // returned), so on_agent_finish already ran but skipped finalization
-            // because is_wake_active was still true at that point. Now that the
-            // lock is released, we must finalize the turn ourselves.
-            if let Some(entry) = sessions.get(&team_id_owned) {
-                match entry.session.on_agent_finish(&conv_id, false).await {
+            let session = sessions.get(&team_id_owned).map(|e| Arc::clone(&e.session));
+            if let Some(session) = session {
+                match session.on_agent_finish(&conv_id, false).await {
                     Ok(Some(wake_target)) => {
-                        entry.session.try_wake(&wake_target, None).await;
+                        session.try_wake(&wake_target, None).await;
                     }
                     Ok(None) => {}
                     Err(e) => {

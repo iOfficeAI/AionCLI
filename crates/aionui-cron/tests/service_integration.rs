@@ -73,6 +73,13 @@ impl aionui_ai_agent::task_manager::IWorkerTaskManager for StubTaskManager {
     fn kill(&self, _: &str, _: Option<aionui_common::AgentKillReason>) -> Result<(), aionui_common::AppError> {
         Ok(())
     }
+    fn kill_and_wait(
+        &self,
+        _: &str,
+        _: Option<aionui_common::AgentKillReason>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        Box::pin(std::future::ready(()))
+    }
     fn clear(&self) {}
     fn active_count(&self) -> usize {
         0

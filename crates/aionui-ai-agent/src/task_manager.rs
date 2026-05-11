@@ -44,6 +44,13 @@ pub trait IWorkerTaskManager: Send + Sync {
     /// Kill and remove a task.
     fn kill(&self, conversation_id: &str, reason: Option<AgentKillReason>) -> Result<(), AppError>;
 
+    /// Kill a task and return a future that resolves when the process has terminated.
+    fn kill_and_wait(
+        &self,
+        conversation_id: &str,
+        reason: Option<AgentKillReason>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+
     /// Kill and remove all active tasks.
     fn clear(&self);
 
@@ -122,6 +129,20 @@ impl IWorkerTaskManager for WorkerTaskManagerImpl {
             }
         }
         Ok(())
+    }
+
+    fn kill_and_wait(
+        &self,
+        conversation_id: &str,
+        reason: Option<AgentKillReason>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        if let Some((id, slot)) = self.tasks.remove(conversation_id) {
+            info!(conversation_id = %id, ?reason, "Killing agent task (awaitable)");
+            if let Some(agent) = slot.get() {
+                return agent.kill_and_wait(reason);
+            }
+        }
+        Box::pin(std::future::ready(()))
     }
 
     fn clear(&self) {

@@ -487,3 +487,21 @@ impl crate::agent_task::IAgentTask for OpenClawAgentManager {
         Ok(())
     }
 }
+
+impl OpenClawAgentManager {
+    pub fn kill_and_wait(
+        &self,
+        reason: Option<AgentKillReason>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        let _ = crate::agent_task::IAgentTask::kill(self, reason);
+        if let Some(ref process) = self.gateway_process {
+            let process = Arc::clone(process);
+            let grace = Duration::from_millis(OPENCLAW_KILL_GRACE_MS);
+            Box::pin(async move {
+                let _ = process.kill(grace).await;
+            })
+        } else {
+            Box::pin(std::future::ready(()))
+        }
+    }
+}

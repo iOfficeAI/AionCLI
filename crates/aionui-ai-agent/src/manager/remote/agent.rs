@@ -342,6 +342,16 @@ impl crate::agent_task::IAgentTask for RemoteAgentManager {
     }
 }
 
+impl RemoteAgentManager {
+    pub fn kill_and_wait(
+        &self,
+        reason: Option<AgentKillReason>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        let _ = crate::agent_task::IAgentTask::kill(self, reason);
+        Box::pin(std::future::ready(()))
+    }
+}
+
 /// Remote-specific operations reached through `AgentInstance::Remote(..)`.
 impl RemoteAgentManager {
     pub fn confirm(&self, _msg_id: &str, call_id: &str, _data: Value, always_allow: bool) -> Result<(), AppError> {

@@ -207,6 +207,23 @@ impl AgentInstance {
         self.as_task().kill(reason)
     }
 
+    /// Terminate the agent process and return a future that resolves when the
+    /// underlying OS process has exited.
+    pub fn kill_and_wait(
+        &self,
+        reason: Option<AgentKillReason>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        match self {
+            Self::Acp(m) => m.kill_and_wait(reason),
+            Self::OpenClaw(m) => m.kill_and_wait(reason),
+            Self::Nanobot(m) => m.kill_and_wait(reason),
+            Self::Aionrs(m) => m.kill_and_wait(reason),
+            Self::Remote(m) => m.kill_and_wait(reason),
+            #[cfg(any(test, feature = "test-support"))]
+            Self::Mock(_) => Box::pin(std::future::ready(())),
+        }
+    }
+
     // ── Cross-variant semi-specific helpers ──────────────────────────
     //
     // These fan out to inherent methods on concrete managers. Variants

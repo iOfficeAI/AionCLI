@@ -1315,6 +1315,15 @@ impl IWorkerTaskManager for MockTaskManager {
         Ok(())
     }
 
+    fn kill_and_wait(
+        &self,
+        conversation_id: &str,
+        reason: Option<AgentKillReason>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        let _ = self.kill(conversation_id, reason);
+        Box::pin(std::future::ready(()))
+    }
+
     fn clear(&self) {
         self.agents.lock().unwrap().clear();
     }
@@ -1369,6 +1378,15 @@ impl IWorkerTaskManager for MockTaskManagerWithWorkspace {
     fn kill(&self, conversation_id: &str, _reason: Option<AgentKillReason>) -> Result<(), AppError> {
         self.agents.lock().unwrap().remove(conversation_id);
         Ok(())
+    }
+
+    fn kill_and_wait(
+        &self,
+        conversation_id: &str,
+        reason: Option<AgentKillReason>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        let _ = self.kill(conversation_id, reason);
+        Box::pin(std::future::ready(()))
     }
 
     fn clear(&self) {

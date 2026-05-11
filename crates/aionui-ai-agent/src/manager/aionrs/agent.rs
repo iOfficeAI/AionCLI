@@ -241,6 +241,16 @@ impl crate::agent_task::IAgentTask for AionrsAgentManager {
     }
 }
 
+impl AionrsAgentManager {
+    pub fn kill_and_wait(
+        &self,
+        reason: Option<AgentKillReason>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        let _ = crate::agent_task::IAgentTask::kill(self, reason);
+        Box::pin(std::future::ready(()))
+    }
+}
+
 /// Aionrs-specific operations reached through `AgentInstance::Aionrs(..)`
 /// matches in the routes + services.
 impl AionrsAgentManager {

@@ -602,6 +602,18 @@ impl crate::agent_task::IAgentTask for AcpAgentManager {
 }
 
 impl AcpAgentManager {
+    pub fn kill_and_wait(
+        &self,
+        reason: Option<AgentKillReason>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        let _ = crate::agent_task::IAgentTask::kill(self, reason);
+        let process = Arc::clone(&self.process);
+        let grace = Duration::from_millis(ACP_KILL_GRACE_MS);
+        Box::pin(async move {
+            let _ = process.kill(grace).await;
+        })
+    }
+
     /// Submit a permission response for a pending tool call. ACP confirms
     /// always carry an `option_id`; `always_allow` is consumed by the CLI
     /// and is not reflected in the local approval memory (the ACP CLI

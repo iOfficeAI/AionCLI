@@ -217,6 +217,20 @@ impl crate::agent_task::IAgentTask for NanobotAgentManager {
     }
 }
 
+impl NanobotAgentManager {
+    pub fn kill_and_wait(
+        &self,
+        reason: Option<AgentKillReason>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        let _ = crate::agent_task::IAgentTask::kill(self, reason);
+        let process = Arc::clone(&self.process);
+        let grace = Duration::from_millis(NANOBOT_KILL_GRACE_MS);
+        Box::pin(async move {
+            let _ = process.kill(grace).await;
+        })
+    }
+}
+
 /// Nanobot-specific operations reached through `AgentInstance::Nanobot(..)`.
 /// Nanobot does not track tool confirmations or approval memory, so these
 /// are trivial stubs matching the semantics of the removed `IAgentManager`
