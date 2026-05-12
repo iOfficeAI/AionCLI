@@ -247,6 +247,13 @@ impl CronService {
             };
 
             if self.is_orphan(&job).await {
+                warn!(
+                    job_id = %job.id,
+                    job_name = %job.name,
+                    conversation_id = %job.conversation_id,
+                    execution_mode = job.execution_mode.as_str(),
+                    "Deleting orphan cron job whose bound conversation no longer exists"
+                );
                 if let Err(e) = self.repo.delete(&job.id).await {
                     error!(job_id = %job.id, error = %e, "Failed to delete orphan cron job");
                 }
@@ -438,14 +445,25 @@ impl CronService {
     }
 
     async fn is_orphan(&self, job: &CronJob) -> bool {
+        // NewConversation jobs never depend on an existing conversation —
+        // every run materializes a fresh one. They must not be cleaned up
+        // based on conversation state.
+        if matches!(job.execution_mode, ExecutionMode::NewConversation) {
+            return false;
+        }
+
+        // Existing-mode jobs can legitimately carry an empty conversation_id
+        // until the first run performs lazy binding. Leave them alone.
+        if job.conversation_id.trim().is_empty() {
+            return false;
+        }
+
         if self.executor.busy_guard().is_busy(&job.conversation_id) {
             return false;
         }
 
-        if job.conversation_id.trim().is_empty() {
-            return true;
-        }
-
+        // Only true orphan case: Existing + bound conversation_id, but that
+        // conversation has been deleted.
         match self.executor.conversation_exists(&job.conversation_id).await {
             Ok(exists) => !exists,
             Err(err) => {
@@ -540,9 +558,9 @@ impl CronService {
         }
     }
 
-    async fn update_job_after_success(&self, job_id: &str, _conversation_id: &str) {
-        let run_count = match self.repo.get_by_id(job_id).await {
-            Ok(Some(r)) => r.run_count,
+    async fn update_job_after_success(&self, job_id: &str, conversation_id: &str) {
+        let existing_row = match self.repo.get_by_id(job_id).await {
+            Ok(Some(r)) => r,
             Ok(None) => return,
             Err(e) => {
                 error!(job_id, error = %e, "Failed to read job for run_count");
@@ -550,16 +568,38 @@ impl CronService {
             }
         };
         let now = now_ms();
+        // Persist the conversation_id back onto the job the first time an
+        // "existing" job is materialized (lazy binding). Subsequent runs then
+        // reuse the same conversation, matching the UX where the job is the
+        // continuation anchor.
+        let needs_conversation_bind =
+            existing_row.conversation_id.trim().is_empty() && !conversation_id.trim().is_empty();
         let params = UpdateCronJobParams {
             last_run_at: Some(Some(now)),
             last_status: Some(Some("ok".into())),
             last_error: Some(None),
             retry_count: Some(0),
-            run_count: Some(run_count + 1),
+            run_count: Some(existing_row.run_count + 1),
+            conversation_id: needs_conversation_bind.then(|| conversation_id.to_owned()),
             ..Default::default()
         };
         if let Err(e) = self.repo.update(job_id, &params).await {
             error!(job_id, error = %e, "Failed to update job after success");
+            return;
+        }
+
+        if needs_conversation_bind
+            && let Err(e) = self
+                .executor
+                .bind_cron_job_to_conversation(conversation_id, job_id)
+                .await
+        {
+            warn!(
+                job_id,
+                conversation_id,
+                error = %e,
+                "Failed to bind lazily-created conversation to cron job"
+            );
         }
     }
 

@@ -369,6 +369,15 @@ impl JobExecutor {
     ) -> Result<String, CronError> {
         match job.execution_mode {
             ExecutionMode::Existing => {
+                // A job created without an anchor conversation (the frontend
+                // creates "continue-this-conversation" jobs from the cron page
+                // before any conversation exists) keeps `conversation_id`
+                // empty until the first run. Treat that first run as a new
+                // conversation; the service layer then persists the new id
+                // back onto the job so subsequent runs reuse it.
+                if job.conversation_id.trim().is_empty() {
+                    return self.create_new_conversation(job, saved_skill).await;
+                }
                 self.verify_conversation_exists(&job.conversation_id).await?;
                 Ok(job.conversation_id.clone())
             }

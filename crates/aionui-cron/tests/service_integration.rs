@@ -1102,26 +1102,59 @@ async fn sc8_every_negative_interval() {
     assert!(matches!(err, aionui_cron::error::CronError::InvalidSchedule(_)));
 }
 
-// ── OC-1: Init cleans orphan jobs ─────────────────────────────────
+// ── OC-1: Init preserves lazy-bind "existing" jobs with empty conversation_id ─────
 
 #[tokio::test]
-async fn oc1_init_cleans_orphans() {
+async fn oc1_init_preserves_lazy_existing_jobs() {
+    // "existing + empty conversation_id" is a legitimate lazy-binding job:
+    // the frontend creates a cron from the standalone cron page before any
+    // conversation exists, and the first execution materializes it. Those
+    // jobs must survive init, not be cleaned up as orphans.
     let (svc, _repo, _) = setup().await;
 
-    let mut req = make_create_req("Orphan", every_60s());
+    let mut req = make_create_req("Lazy Existing", every_60s());
     req.conversation_id = "".into();
-    let orphan = svc.add_job(req).await.unwrap();
+    req.execution_mode = Some("existing".into());
+    let lazy = svc.add_job(req).await.unwrap();
 
     let normal_req = make_create_req("Normal", every_60s());
     let normal = svc.add_job(normal_req).await.unwrap();
 
     svc.init().await;
 
-    let err = svc.get_job(&orphan.id).await;
-    assert!(err.is_err());
+    let found_lazy = svc.get_job(&lazy.id).await;
+    assert!(found_lazy.is_ok(), "lazy-bind existing job should survive init");
 
     let found = svc.get_job(&normal.id).await;
     assert!(found.is_ok());
+}
+
+// NewConversation jobs don't depend on any existing conversation — they
+// create one on every run. They must never be cleaned up as orphans.
+#[tokio::test]
+async fn oc1b_init_preserves_new_conversation_jobs() {
+    let (svc, _repo, _) = setup().await;
+
+    let mut empty_req = make_create_req("New-conv empty", every_60s());
+    empty_req.conversation_id = "".into();
+    empty_req.execution_mode = Some("new_conversation".into());
+    let empty = svc.add_job(empty_req).await.unwrap();
+
+    let mut stale_req = make_create_req("New-conv with stale id", every_60s());
+    stale_req.conversation_id = "conv-that-no-longer-exists".into();
+    stale_req.execution_mode = Some("new_conversation".into());
+    let stale = svc.add_job(stale_req).await.unwrap();
+
+    svc.init().await;
+
+    assert!(
+        svc.get_job(&empty.id).await.is_ok(),
+        "empty new_conversation job must survive"
+    );
+    assert!(
+        svc.get_job(&stale.id).await.is_ok(),
+        "new_conversation job with stale id must survive"
+    );
 }
 
 #[tokio::test]
