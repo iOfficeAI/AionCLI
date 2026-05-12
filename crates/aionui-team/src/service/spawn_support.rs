@@ -161,6 +161,22 @@ impl TeamSessionService {
             .collect()
     }
 
+    /// Find the provider ID that contains a given model name.
+    /// Iterates all enabled providers and checks their models JSON array.
+    pub(crate) async fn resolve_provider_for_model(&self, model: &str) -> Option<String> {
+        let providers = self.provider_repo.list().await.ok()?;
+        for p in providers {
+            if !p.enabled {
+                continue;
+            }
+            let models: Vec<String> = serde_json::from_str(&p.models).unwrap_or_default();
+            if models.iter().any(|m| m == model) {
+                return Some(p.id);
+            }
+        }
+        None
+    }
+
     pub async fn spawn_agent_in_session(
         &self,
         team_id: &str,
@@ -219,11 +235,16 @@ impl TeamSessionService {
         let mut team = Team::from_row(&row)?;
 
         let agent_type = parse_agent_type(&backend)?;
+        let provider_id = if agent_type == AgentType::Aionrs {
+            self.resolve_provider_for_model(&model).await.unwrap_or(backend.clone())
+        } else {
+            backend.clone()
+        };
         let conv_req = CreateConversationRequest {
             r#type: agent_type,
             name: Some(name.clone()),
             model: Some(ProviderWithModel {
-                provider_id: backend.clone(),
+                provider_id,
                 model: model.clone(),
                 use_model: None,
             }),

@@ -9,7 +9,7 @@ use aionui_api_types::{
     AddAgentRequest, CreateConversationRequest, CreateTeamRequest, GuideMcpConfig, TeamAgentResponse, TeamMcpPhase,
     TeamMcpStatusPayload, TeamResponse, WebSocketMessage,
 };
-use aionui_common::{AgentKillReason, ProviderWithModel, generate_id, now_ms};
+use aionui_common::{AgentKillReason, AgentType, ProviderWithModel, generate_id, now_ms};
 use aionui_conversation::ConversationService;
 use aionui_db::models::TeamRow;
 use aionui_db::{IAgentMetadataRepository, IProviderRepository, ITeamRepository, UpdateTeamParams};
@@ -178,11 +178,18 @@ impl TeamSessionService {
                 existing_id.clone()
             } else {
                 let agent_type = parse_agent_type(&input.backend)?;
+                let provider_id = if agent_type == AgentType::Aionrs {
+                    self.resolve_provider_for_model(&input.model)
+                        .await
+                        .unwrap_or_else(|| input.backend.clone())
+                } else {
+                    input.backend.clone()
+                };
                 let conv_req = CreateConversationRequest {
                     r#type: agent_type,
                     name: Some(input.name.clone()),
                     model: Some(ProviderWithModel {
-                        provider_id: input.backend.clone(),
+                        provider_id,
                         model: input.model.clone(),
                         use_model: None,
                     }),
@@ -371,11 +378,18 @@ impl TeamSessionService {
         let role = TeammateRole::parse(&req.role).unwrap_or(TeammateRole::Teammate);
         let agent_type = parse_agent_type(&req.backend)?;
 
+        let provider_id = if agent_type == AgentType::Aionrs {
+            self.resolve_provider_for_model(&req.model)
+                .await
+                .unwrap_or_else(|| req.backend.clone())
+        } else {
+            req.backend.clone()
+        };
         let conv_req = CreateConversationRequest {
             r#type: agent_type,
             name: Some(req.name.clone()),
             model: Some(ProviderWithModel {
-                provider_id: req.backend.clone(),
+                provider_id,
                 model: req.model.clone(),
                 use_model: None,
             }),
