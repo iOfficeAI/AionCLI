@@ -470,11 +470,21 @@ impl ConversationService {
 
         let now = now_ms();
 
-        // Merge extra if provided
+        // Merge extra if provided. For aionrs, strip `extra.model` post-merge
+        // so the row keeps a single canonical model source (top-level column).
         let merged_extra = if let Some(new_extra) = &req.extra {
             let mut existing_extra: serde_json::Value =
                 serde_json::from_str(&existing.extra).unwrap_or_else(|_| serde_json::json!({}));
             merge_json(&mut existing_extra, new_extra);
+            if existing_type == AgentType::Aionrs
+                && let Some(obj) = existing_extra.as_object_mut()
+                && obj.remove("model").is_some()
+            {
+                warn!(
+                    conversation_id = %id,
+                    "aionrs update: stripped legacy `extra.model` from merged extra"
+                );
+            }
             Some(
                 serde_json::to_string(&existing_extra)
                     .map_err(|e| AppError::Internal(format!("Failed to serialize merged extra: {e}")))?,
