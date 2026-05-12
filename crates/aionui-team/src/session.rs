@@ -508,7 +508,7 @@ impl TeamSession {
         // check, both paths can create a StreamRelay on the same broadcast channel
         // causing duplicate streaming output to the frontend.
         if let Some(svc) = self.service.upgrade() {
-            let repo = svc.conversation_service_ref().repo();
+            let repo = svc.conversation_service_ref().conversation_repo();
             if let Ok(Some(row)) = repo.get(&input.conversation_id).await
                 && row.status.as_deref() == Some("running")
             {
@@ -531,7 +531,7 @@ impl TeamSession {
         // Claim the conversation as Running in DB so ConversationService::send_message
         // (which checks DB status) cannot start a parallel turn with its own relay.
         if let Some(svc) = self.service.upgrade() {
-            let repo = svc.conversation_service_ref().repo();
+            let repo = svc.conversation_service_ref().conversation_repo();
             let update = aionui_db::ConversationRowUpdate {
                 status: Some("running".to_owned()),
                 updated_at: Some(aionui_common::now_ms()),
@@ -569,7 +569,7 @@ impl TeamSession {
             let _ = self.scheduler.set_status(slot_id, TeammateStatus::Idle).await;
             // Reset DB status so future attempts are not blocked.
             if let Some(svc) = self.service.upgrade() {
-                let repo = svc.conversation_service_ref().repo();
+                let repo = svc.conversation_service_ref().conversation_repo();
                 let update = aionui_db::ConversationRowUpdate {
                     status: Some("finished".to_owned()),
                     updated_at: Some(aionui_common::now_ms()),

@@ -17,7 +17,6 @@ fn create_conv_body(name: &str, agent_type: &str) -> serde_json::Value {
     json!({
         "type": agent_type,
         "name": name,
-        "model": { "provider_id": "p1", "model": "m1" },
         "extra": { "workspace": "/project" }
     })
 }
@@ -26,7 +25,6 @@ fn create_conv_body_with_workspace(name: &str, agent_type: &str, workspace: &str
     json!({
         "type": agent_type,
         "name": name,
-        "model": { "provider_id": "p1", "model": "m1" },
         "extra": { "workspace": workspace }
     })
 }

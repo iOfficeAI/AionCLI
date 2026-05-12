@@ -352,7 +352,6 @@ async fn rn1_run_now_returns_conversation_id_for_new_conversation_job() {
         json!({
             "type": "acp",
             "name": "Run Now Source",
-            "model": { "provider_id": "p1", "model": "claude-sonnet-4-20250514" },
             "extra": { "workspace": "/project" }
         }),
         &token,

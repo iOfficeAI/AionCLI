@@ -14,7 +14,6 @@ fn create_body(name: &str) -> serde_json::Value {
     json!({
         "type": "acp",
         "name": name,
-        "model": { "provider_id": "p1", "model": "claude-sonnet-4-20250514" },
         "extra": { "workspace": "/project" }
     })
 }
@@ -23,7 +22,6 @@ fn create_body_with_extra(name: &str, extra: serde_json::Value) -> serde_json::V
     json!({
         "type": "acp",
         "name": name,
-        "model": { "provider_id": "p1", "model": "claude-sonnet-4-20250514" },
         "extra": extra
     })
 }
@@ -62,7 +60,6 @@ async fn t1_2_create_various_agent_types() {
     for agent_type in types {
         let body = json!({
             "type": agent_type,
-            "model": { "provider_id": "p1", "model": "m1" },
             "extra": {}
         });
         let req = json_with_token("POST", "/api/conversations", body, &token, &csrf);
@@ -81,7 +78,6 @@ async fn t1_3_create_with_optional_fields() {
     let body = json!({
         "type": "acp",
         "name": "Telegram Bot",
-        "model": { "provider_id": "p1", "model": "m1" },
         "source": "telegram",
         "channel_chat_id": "user:123",
         "extra": {}
@@ -117,7 +113,7 @@ async fn t1_4_create_missing_required_field() {
 
     // Missing extra
     let body = json!({
-        "type": "acp",
+        "type": "aionrs",
         "model": { "provider_id": "p1", "model": "m1" }
     });
     let req = json_with_token("POST", "/api/conversations", body, &token, &csrf);
@@ -264,7 +260,6 @@ async fn t2_4_list_source_filter() {
     let tg_body = json!({
         "type": "acp",
         "name": "TG Conv",
-        "model": { "provider_id": "p1", "model": "m1" },
         "source": "telegram",
         "extra": {}
     });
@@ -461,7 +456,14 @@ async fn t4_4_update_model() {
     let (mut app, services) = build_app().await;
     let (token, csrf) = setup_and_login(&mut app, &services, "admin", "StrongP@ss1").await;
 
-    let req = json_with_token("POST", "/api/conversations", create_body("Model Test"), &token, &csrf);
+    // aionrs — only type that allows top-level model updates
+    let create = json!({
+        "type": "aionrs",
+        "name": "Model Test",
+        "model": { "provider_id": "p1", "model": "m1" },
+        "extra": {}
+    });
+    let req = json_with_token("POST", "/api/conversations", create, &token, &csrf);
     let resp = app.clone().oneshot(req).await.unwrap();
     let json = body_json(resp).await;
     let id = json["data"]["id"].as_str().unwrap().to_owned();
@@ -575,7 +577,6 @@ async fn t6_1_clone_from_source() {
         "source_conversation_id": source_id,
         "conversation": {
             "type": "acp",
-            "model": { "provider_id": "p1", "model": "m1" },
             "extra": { "newKey": "value" }
         }
     });
@@ -601,7 +602,6 @@ async fn t6_2_clone_without_source() {
         "conversation": {
             "type": "acp",
             "name": "Fresh Clone",
-            "model": { "provider_id": "p1", "model": "m1" },
             "extra": {}
         }
     });
@@ -623,7 +623,6 @@ async fn t6_3_clone_source_not_found() {
         "source_conversation_id": "non-existent-id",
         "conversation": {
             "type": "acp",
-            "model": { "provider_id": "p1", "model": "m1" },
             "extra": {}
         }
     });

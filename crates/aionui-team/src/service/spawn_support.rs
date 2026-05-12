@@ -240,20 +240,38 @@ impl TeamSessionService {
         } else {
             backend.clone()
         };
+        // Top-level `model` is aionrs-only per spec 2026-05-12; for other
+        // agent types the model/provider ride along in `extra`.
+        let (top_level_model, extra) = if agent_type == AgentType::Aionrs {
+            (
+                Some(ProviderWithModel {
+                    provider_id,
+                    model: model.clone(),
+                    use_model: None,
+                }),
+                serde_json::json!({
+                    "teamId": team_id,
+                    "backend": backend,
+                }),
+            )
+        } else {
+            (
+                None,
+                serde_json::json!({
+                    "teamId": team_id,
+                    "backend": backend,
+                    "provider_id": provider_id,
+                    "current_model_id": model.clone(),
+                }),
+            )
+        };
         let conv_req = CreateConversationRequest {
             r#type: agent_type,
             name: Some(name.clone()),
-            model: Some(ProviderWithModel {
-                provider_id,
-                model: model.clone(),
-                use_model: None,
-            }),
+            model: top_level_model,
             source: None,
             channel_chat_id: None,
-            extra: serde_json::json!({
-                "teamId": team_id,
-                "backend": backend,
-            }),
+            extra,
         };
         let conv = self
             .conversation_service

@@ -15,7 +15,6 @@ fn create_conv_body(name: &str) -> serde_json::Value {
     json!({
         "type": "acp",
         "name": name,
-        "model": { "provider_id": "p1", "model": "m1" },
         "extra": { "workspace": "/project", "backend": "gemini" }
     })
 }
