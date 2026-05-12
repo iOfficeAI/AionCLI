@@ -759,3 +759,34 @@ async fn update_non_aionrs_extra_model_does_not_kill_task() {
     assert_eq!(updated.extra["current_model_id"], "claude-opus-4");
     assert!(updated.model.is_none());
 }
+
+#[tokio::test]
+async fn update_aionrs_strips_extra_model_from_patch() {
+    let (svc, _, task_mgr) = setup().await;
+
+    let create_req: CreateConversationRequest = serde_json::from_value(json!({
+        "type": "aionrs",
+        "model": { "provider_id": "p1", "model": "gpt-4o" },
+        "extra": {}
+    }))
+    .unwrap();
+    let conv = svc.create(USER_ID, create_req).await.unwrap();
+
+    // Client mistakenly sends extra.model on an aionrs PATCH. It should be
+    // silently stripped from the merged extra, not persisted.
+    let req: UpdateConversationRequest = serde_json::from_value(json!({
+        "extra": { "model": "legacy-value", "last_token_usage": { "total_tokens": 42 } }
+    }))
+    .unwrap();
+    let updated = svc.update(USER_ID, &conv.id, req, &task_mgr).await.unwrap();
+
+    assert!(
+        !updated.extra.as_object().unwrap().contains_key("model"),
+        "aionrs PATCH must strip extra.model; got {:?}",
+        updated.extra
+    );
+    // Other extra keys from the patch are merged as usual.
+    assert_eq!(updated.extra["last_token_usage"]["total_tokens"], 42);
+    // Top-level model unchanged by the extra-only patch.
+    assert_eq!(updated.model.unwrap().model, "gpt-4o");
+}
