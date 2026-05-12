@@ -15,6 +15,12 @@ pub(super) async fn build(
     options: BuildTaskOptions,
     ctx: FactoryContext,
 ) -> Result<AgentInstance, AppError> {
+    let belongs_to_team = options
+        .extra
+        .get("teamId")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|s| !s.is_empty());
+
     let mut config: AcpBuildExtra = serde_json::from_value(options.extra)
         .map_err(|e| AppError::BadRequest(format!("Invalid ACP build options: {e}")))?;
 
@@ -44,6 +50,8 @@ pub(super) async fn build(
     // two are mutually exclusive per the build_new_session_request guard.
     if config.team_mcp_stdio_config.is_some() {
         debug!(ctx.conversation_id, "guide_mcp: skipped: has team_mcp");
+    } else if belongs_to_team {
+        debug!(ctx.conversation_id, "guide_mcp: skipped: conversation belongs to a team (extra.teamId)");
     } else if config.guide_mcp_config.is_some() {
         debug!(
             ctx.conversation_id,

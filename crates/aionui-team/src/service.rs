@@ -704,14 +704,30 @@ impl TeamSessionService {
         skip_leader: bool,
     ) -> Result<(), TeamError> {
         for agent in agents {
-            if skip_leader && agent.role == TeammateRole::Lead {
-                continue;
-            }
             let cfg = session.mcp_stdio_config(&agent.slot_id);
             let patch = serde_json::json!({
                 "team_mcp_stdio_config": cfg,
                 "session_mode": resolve_full_auto_mode(&agent.backend),
             });
+
+            // Always persist team_mcp_stdio_config into the leader's extra
+            // so subsequent warmups pick it up. Only skip the kill+warmup
+            // when the leader is already running (guide flow).
+            if skip_leader && agent.role == TeammateRole::Lead {
+                if let Err(e) = self
+                    .conversation_service
+                    .update_extra(&agent.conversation_id, patch)
+                    .await
+                {
+                    warn!(
+                        team_id,
+                        slot_id = %agent.slot_id,
+                        error = %e,
+                        "failed to persist team_mcp_stdio_config for skipped leader"
+                    );
+                }
+                continue;
+            }
 
             if let Err(e) = self
                 .conversation_service

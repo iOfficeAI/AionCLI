@@ -218,6 +218,30 @@ async fn exec_create_team(
         .filter(|s| !s.is_empty())
         .map(str::to_owned);
 
+    // Refuse if the caller conversation already belongs to a team.
+    // This prevents duplicate team creation when guide MCP is
+    // erroneously injected into an existing team leader session.
+    if let Some(ref conv_id) = caller_conversation_id {
+        let repo = svc.conversation_service_ref().conversation_repo().clone();
+        if let Ok(Some(row)) = repo.get(conv_id).await {
+            let extra: serde_json::Value =
+                serde_json::from_str(&row.extra).unwrap_or(serde_json::Value::Null);
+            if extra
+                .get("teamId")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|s| !s.is_empty())
+            {
+                warn!(
+                    conversation_id = conv_id,
+                    "Guide HTTP: aion_create_team refused — conversation already belongs to a team"
+                );
+                return serde_json::json!({
+                    "error": "This conversation already belongs to a team. Cannot create another team from here."
+                });
+            }
+        }
+    }
+
     let req = CreateTeamRequest {
         name: params.name.clone(),
         agents: vec![TeamAgentInput {

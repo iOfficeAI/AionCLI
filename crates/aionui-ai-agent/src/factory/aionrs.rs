@@ -21,6 +21,12 @@ pub(super) async fn build(
     options: BuildTaskOptions,
     ctx: FactoryContext,
 ) -> Result<AgentInstance, AppError> {
+    let belongs_to_team = options
+        .extra
+        .get("teamId")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|s| !s.is_empty());
+
     let mut overrides: AionrsBuildExtra = serde_json::from_value(options.extra).unwrap_or_default();
 
     // Merge preset assistant rules into system_prompt (used as custom_prompt
@@ -33,10 +39,12 @@ pub(super) async fn build(
         });
     }
 
-    // Inject Guide MCP config for solo (non-team) sessions, mirroring acp.rs:39-55.
+    // Inject Guide MCP config for solo (non-team) sessions, mirroring acp.rs.
+    // Skip if the conversation already belongs to a team (extra.teamId set).
     if overrides.team_mcp_stdio_config.is_none()
         && overrides.guide_mcp_config.is_none()
         && deps.guide_mcp_config.is_some()
+        && !belongs_to_team
     {
         overrides.guide_mcp_config.clone_from(&deps.guide_mcp_config);
         overrides.backend.get_or_insert_with(|| "aionrs".to_owned());
