@@ -30,11 +30,13 @@ pub struct UpdateConversationRequest {
 }
 
 /// Body for `POST /api/conversations/clone`.
+///
+/// Despite the name, this endpoint no longer supports cloning from an
+/// existing conversation — it's kept as a distinct route because multiple
+/// call sites pass a pre-built `CreateConversationRequest` payload shape.
 #[derive(Debug, Deserialize)]
 pub struct CloneConversationRequest {
-    pub source_conversation_id: Option<String>,
     pub conversation: CreateConversationRequest,
-    pub migrate_cron: Option<bool>,
 }
 
 /// Body for `POST /api/conversations/:id/messages`.
@@ -324,24 +326,7 @@ mod tests {
     // ── CloneConversationRequest ────────────────────────────────────
 
     #[test]
-    fn deserialize_clone_request_with_source() {
-        let raw = json!({
-            "source_conversation_id": "conv_abc",
-            "conversation": {
-                "type": "acp",
-                "model": { "provider_id": "p1", "model": "m1" },
-                "extra": {}
-            },
-            "migrate_cron": true
-        });
-        let req: CloneConversationRequest = serde_json::from_value(raw).unwrap();
-        assert_eq!(req.source_conversation_id.as_deref(), Some("conv_abc"));
-        assert_eq!(req.conversation.r#type, AgentType::Acp);
-        assert_eq!(req.migrate_cron, Some(true));
-    }
-
-    #[test]
-    fn deserialize_clone_request_without_source() {
+    fn deserialize_clone_request() {
         let raw = json!({
             "conversation": {
                 "type": "acp",
@@ -350,8 +335,7 @@ mod tests {
             }
         });
         let req: CloneConversationRequest = serde_json::from_value(raw).unwrap();
-        assert!(req.source_conversation_id.is_none());
-        assert!(req.migrate_cron.is_none());
+        assert_eq!(req.conversation.r#type, AgentType::Acp);
     }
 
     // ── ListConversationsQuery ──────────────────────────────────────
