@@ -614,3 +614,58 @@ async fn full_lifecycle_create_get_update_delete() {
     assert_eq!(events[1].data["action"], "updated");
     assert_eq!(events[2].data["action"], "deleted");
 }
+
+// ── Type-aware model rules ─────────────────────────────────────────
+
+#[tokio::test]
+async fn create_rejects_top_level_model_for_acp() {
+    let (svc, _, _task_mgr) = setup().await;
+
+    let req: CreateConversationRequest = serde_json::from_value(json!({
+        "type": "acp",
+        "model": { "provider_id": "p1", "model": "claude-sonnet-4-20250514" },
+        "extra": {}
+    }))
+    .unwrap();
+
+    let err = svc.create(USER_ID, req).await.unwrap_err();
+    match err {
+        AppError::BadRequest(msg) => {
+            assert!(msg.contains("model"), "error message should mention model: {msg}");
+            assert!(msg.contains("extra"), "error message should mention extra: {msg}");
+        }
+        other => panic!("expected BadRequest, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn create_rejects_top_level_model_for_remote() {
+    let (svc, _, _task_mgr) = setup().await;
+
+    let req: CreateConversationRequest = serde_json::from_value(json!({
+        "type": "remote",
+        "model": { "provider_id": "p1", "model": "m1" },
+        "extra": {}
+    }))
+    .unwrap();
+
+    assert!(matches!(svc.create(USER_ID, req).await, Err(AppError::BadRequest(_))));
+}
+
+#[tokio::test]
+async fn create_accepts_top_level_model_for_aionrs() {
+    let (svc, _, _task_mgr) = setup().await;
+
+    let req: CreateConversationRequest = serde_json::from_value(json!({
+        "type": "aionrs",
+        "model": { "provider_id": "p1", "model": "gpt-4o" },
+        "extra": {}
+    }))
+    .unwrap();
+
+    let resp = svc.create(USER_ID, req).await.unwrap();
+    assert_eq!(resp.r#type, AgentType::Aionrs);
+    let model = resp.model.expect("aionrs response should carry top-level model");
+    assert_eq!(model.provider_id, "p1");
+    assert_eq!(model.model, "gpt-4o");
+}
