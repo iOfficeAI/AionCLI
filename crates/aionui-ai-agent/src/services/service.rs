@@ -54,7 +54,7 @@ impl AgentService {
     }
 
     // Private helper — move logic from routes::session_ops::get_task verbatim
-    fn task(&self, conversation_id: &str) -> Result<AgentInstance, AppError> {
+    pub(crate) fn task(&self, conversation_id: &str) -> Result<AgentInstance, AppError> {
         self.task_manager
             .get_task(conversation_id)
             .ok_or_else(|| AppError::NotFound(format!("No active agent for conversation '{conversation_id}'")))
@@ -227,16 +227,6 @@ impl AgentService {
             status: "ok".into(),
             answer: Some("Side question support will be fully wired in app integration phase.".into()),
         })
-    }
-
-    pub async fn get_openclaw_runtime(&self, conversation_id: &str) -> Result<serde_json::Value, AppError> {
-        let instance = self.task(conversation_id)?;
-        let AgentInstance::OpenClaw(openclaw) = &instance else {
-            return Err(AppError::BadRequest(
-                "This endpoint is only available for OpenClaw agents".into(),
-            ));
-        };
-        Ok(openclaw.get_diagnostics().await)
     }
 }
 

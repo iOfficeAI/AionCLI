@@ -50,6 +50,7 @@ pub fn session_ops_routes(state: SessionRouterState) -> Router {
     Router::new()
         .route("/api/conversations/{id}/side-question", post(side_question))
         .route("/api/conversations/{id}/slash-commands", get(get_slash_commands))
+        .route("/api/conversations/{id}/usage", get(get_usage))
         .route("/api/conversations/{id}/mode", get(get_mode).put(set_mode))
         .route("/api/conversations/{id}/model", get(get_model).put(set_model))
         .route("/api/conversations/{id}/config", get(get_configs).put(set_configs))
@@ -57,7 +58,6 @@ pub fn session_ops_routes(state: SessionRouterState) -> Router {
             "/api/conversations/{id}/config/{configId}",
             get(get_config).put(set_config),
         )
-        .route("/api/conversations/{id}/usage", get(get_usage))
         .route(
             "/api/conversations/{id}/agent-capabilities",
             get(get_agent_capabilities),

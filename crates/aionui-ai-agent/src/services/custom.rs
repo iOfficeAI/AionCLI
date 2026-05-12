@@ -20,8 +20,8 @@ use aionui_common::{AppError, generate_short_id};
 use aionui_db::UpsertAgentMetadataParams;
 use tracing::warn;
 
+use super::AgentService;
 use crate::protocol::custom_agent_probe::try_connect_custom_agent as probe;
-use crate::service::AgentService;
 
 const CUSTOM_SORT_ORDER_DEFAULT: i64 = 1500;
 

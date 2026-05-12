@@ -18,16 +18,19 @@ use axum::Router;
 
 use aionui_db::IConversationRepository;
 
+use crate::services::AgentService;
 use crate::task_manager::IWorkerTaskManager;
 
 pub mod acp_probe;
 pub mod agent;
 pub mod conversation_ops;
+pub mod remote;
 pub mod session_ops;
 
 pub use acp_probe::{AcpRouterState, acp_routes};
 pub use agent::{AgentRouterState, agent_routes};
 pub use conversation_ops::conversation_ops_routes;
+pub use remote::{RemoteAgentRouterState, remote_agent_routes};
 pub use session_ops::session_ops_routes;
 
 /// Shared router state for conversation-scoped routes.
@@ -40,7 +43,7 @@ pub use session_ops::session_ops_routes;
 pub struct SessionRouterState {
     pub worker_task_manager: Arc<dyn IWorkerTaskManager>,
     pub conversation_repo: Arc<dyn IConversationRepository>,
-    pub service: Arc<crate::service::AgentService>,
+    pub service: Arc<AgentService>,
 }
 
 /// Build the combined session router, merging

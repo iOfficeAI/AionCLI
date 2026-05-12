@@ -23,7 +23,7 @@ use aionui_api_types::{
 use aionui_auth::CurrentUser;
 use aionui_common::AppError;
 
-use super::service::RemoteAgentService;
+use crate::services::RemoteAgentService;
 
 /// Router state for remote agent routes.
 #[derive(Clone)]

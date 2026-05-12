@@ -94,16 +94,31 @@ pub struct SearchMessagesQuery {
 // ── Response types ─────────────────────────────────────────────────
 
 /// Full conversation object returned in API responses.
+///
+/// `model` is the canonical top-level field **only for `AgentType::Aionrs`**.
+/// For every other agent type, `model` is always `None` here and the client
+/// should read agent-specific model/mode fields out of `extra` (e.g. ACP uses
+/// `extra.current_model_id` / `extra.current_mode_id`). See
+/// `docs/superpowers/specs/2026-05-12-conversation-type-aware-model-design.md`.
+///
+/// `Option<T>` fields use `skip_serializing_if = "Option::is_none"` so the
+/// serialized JSON omits the key entirely when the value is absent. This
+/// keeps the wire shape tight and matches what the frontend mapper already
+/// tolerates (`'model' in r` guard handles missing keys).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationResponse {
     pub id: String,
     pub name: String,
     pub r#type: AgentType,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<ProviderWithModel>,
     pub status: ConversationStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<ConversationSource>,
     pub pinned: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub pinned_at: Option<TimestampMs>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub channel_chat_id: Option<String>,
     pub created_at: TimestampMs,
     pub modified_at: TimestampMs,
@@ -431,10 +446,39 @@ mod tests {
         assert_eq!(json["modified_at"], 1712345678000_i64);
         assert_eq!(json["extra"]["workspace"], "/project");
         // Verify snake_case keys
-        assert!(json.get("channel_chat_id").is_some());
         assert!(json.get("channelChatId").is_none());
         assert!(json.get("createdAt").is_none());
         assert!(json.get("pinnedAt").is_none());
+        // Null-valued Option fields must be omitted from JSON.
+        assert!(json.get("pinned_at").is_none(), "pinned_at None should be omitted");
+        assert!(json.get("channel_chat_id").is_none(), "channel_chat_id None should be omitted");
+    }
+
+    #[test]
+    fn serialize_conversation_response_omits_none_keys() {
+        let resp = ConversationResponse {
+            id: "conv_none".into(),
+            name: "Test".into(),
+            r#type: AgentType::Acp,
+            model: None,
+            status: ConversationStatus::Pending,
+            source: None,
+            pinned: false,
+            pinned_at: None,
+            channel_chat_id: None,
+            created_at: 1,
+            modified_at: 1,
+            extra: json!({}),
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json.get("model").is_none(), "model None should be omitted");
+        assert!(json.get("source").is_none(), "source None should be omitted");
+        assert!(json.get("pinned_at").is_none(), "pinned_at None should be omitted");
+        assert!(json.get("channel_chat_id").is_none(), "channel_chat_id None should be omitted");
+        // Non-optional fields still present.
+        assert_eq!(json["id"], "conv_none");
+        assert_eq!(json["type"], "acp");
+        assert_eq!(json["pinned"], false);
     }
 
     #[test]

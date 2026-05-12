@@ -13,7 +13,7 @@ use aionui_auth::CurrentUser;
 use aionui_common::AppError;
 
 use crate::registry::AgentRegistry;
-use crate::service::AgentService;
+use crate::services::AgentService;
 use crate::task_manager::IWorkerTaskManager;
 use aionui_api_types::AcpModelInfo;
 
@@ -32,9 +32,9 @@ pub struct AcpRouterState {
 pub fn acp_routes(state: AcpRouterState) -> Router {
     Router::new()
         // Global ACP management routes
+        .route("/api/acp/env", get(get_env))
         .route("/api/acp/detect-cli", post(detect_cli))
         .route("/api/acp/health-check", post(health_check))
-        .route("/api/acp/env", get(get_env))
         .route("/api/acp/probe-model", post(probe_model))
         .with_state(state)
 }
