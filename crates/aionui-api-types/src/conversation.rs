@@ -145,6 +145,12 @@ pub struct MessageResponse {
 /// Paginated list of messages.
 pub type MessageListResponse = PaginatedResult<MessageResponse>;
 
+/// Response for `GET /api/conversations/active-count`.
+#[derive(Debug, Serialize)]
+pub struct ActiveCountResponse {
+    pub count: usize,
+}
+
 /// Artifact kind discriminant for conversation-bound UI artifacts.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

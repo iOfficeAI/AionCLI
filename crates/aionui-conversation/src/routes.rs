@@ -5,11 +5,11 @@ use axum::http::StatusCode;
 use axum::routing::{get, patch, post};
 
 use aionui_api_types::{
-    ApiResponse, ApprovalCheckQuery, ApprovalCheckResponse, CloneConversationRequest, ConfirmRequest,
-    ConfirmationListResponse, ConversationArtifactListResponse, ConversationArtifactResponse, ConversationListResponse,
-    ConversationResponse, CreateConversationRequest, ListConversationsQuery, ListMessagesQuery, MessageListResponse,
-    MessageSearchResponse, SearchMessagesQuery, SendMessageRequest, SendMessageResponse,
-    UpdateConversationArtifactRequest, UpdateConversationRequest,
+    ActiveCountResponse, ApiResponse, ApprovalCheckQuery, ApprovalCheckResponse, CloneConversationRequest,
+    ConfirmRequest, ConfirmationListResponse, ConversationArtifactListResponse, ConversationArtifactResponse,
+    ConversationListResponse, ConversationResponse, CreateConversationRequest, ListConversationsQuery,
+    ListMessagesQuery, MessageListResponse, MessageSearchResponse, SearchMessagesQuery, SendMessageRequest,
+    SendMessageResponse, UpdateConversationArtifactRequest, UpdateConversationRequest,
 };
 use aionui_auth::CurrentUser;
 use aionui_common::AppError;
@@ -23,6 +23,7 @@ pub fn conversation_routes(state: ConversationRouterState) -> Router {
     Router::new()
         .route("/api/conversations", post(create).get(list))
         // Static path must come before `{id}` wildcard
+        .route("/api/conversations/active-count", get(active_count))
         .route("/api/conversations/clone", post(clone))
         .route("/api/conversations/{id}", get(get_one).patch(update).delete(delete_one))
         .route("/api/conversations/{id}/reset", post(reset))
@@ -267,4 +268,12 @@ async fn check_approval(
         )
         .await?;
     Ok(Json(ApiResponse::ok(result)))
+}
+
+async fn active_count(
+    State(state): State<ConversationRouterState>,
+    Extension(_user): Extension<CurrentUser>,
+) -> Result<Json<ApiResponse<ActiveCountResponse>>, AppError> {
+    let count = state.worker_task_manager.active_count();
+    Ok(Json(ApiResponse::ok(ActiveCountResponse { count })))
 }
