@@ -182,10 +182,8 @@ impl ConversationService {
         // Consume transient skill-shaping inputs and freeze the initial
         // `skills` snapshot into `extra.skills`. These request-only fields
         // must not land in the stored row. Legacy names (`enabled_skills`,
-        // `exclude_builtin_skills`) are accepted as aliases so that
-        // `clone_create` — which merges a source conversation's legacy
-        // `extra` into the new request — keeps working on pre-snapshot rows
-        // until every legacy row has been backfilled (§7.1).
+        // `exclude_builtin_skills`) are accepted as aliases for compatibility
+        // with older frontend builds and pre-snapshot presets (§7.1).
         fn take_string_array(obj: &mut serde_json::Map<String, serde_json::Value>, keys: &[&str]) -> Vec<String> {
             for key in keys {
                 if let Some(v) = obj.remove(*key)
@@ -596,60 +594,20 @@ impl ConversationService {
         Ok(())
     }
 
-    /// Clone a conversation from an optional source, creating a new one.
+    /// Create a conversation from a `CloneConversationRequest`.
     ///
-    /// If `source_conversation_id` is given, copies config (type, model,
-    /// extra) from the source and merges with provided overrides.
-    /// Optionally migrates `cronJobId` binding.
-    /// Messages are never copied.
+    /// Historically this method supported cloning from a source conversation
+    /// (inheriting name / extra / cron binding). That use case has been
+    /// removed — the method is retained only because `POST
+    /// /api/conversations/clone` has three active callers
+    /// (`_AddNewConversation`, worker task manager, legacy repo shim) that
+    /// send a pre-built payload shape. New code should prefer `create`.
     pub async fn clone_create(
         &self,
         user_id: &str,
         req: CloneConversationRequest,
     ) -> Result<ConversationResponse, AppError> {
-        let mut create_req = req.conversation;
-
-        if let Some(source_id) = &req.source_conversation_id {
-            let source_row = self
-                .conversation_repo
-                .get(source_id)
-                .await?
-                .filter(|r| r.user_id == user_id)
-                .ok_or_else(|| AppError::NotFound(format!("Source conversation {source_id} not found")))?;
-
-            // Inherit name from source if not provided
-            if create_req.name.is_none() {
-                create_req.name = Some(source_row.name.clone());
-            }
-
-            // Merge source extra with provided extra
-            let source_extra: serde_json::Value =
-                serde_json::from_str(&source_row.extra).unwrap_or_else(|_| serde_json::json!({}));
-            let mut merged = source_extra;
-            merge_json(&mut merged, &create_req.extra);
-
-            // Handle cron job binding migration across both legacy and new keys.
-            if let Some(obj) = merged.as_object_mut() {
-                if req.migrate_cron == Some(true) {
-                    let cron_job_id = obj
-                        .get("cron_job_id")
-                        .and_then(|value| value.as_str())
-                        .or_else(|| obj.get("cronJobId").and_then(|value| value.as_str()))
-                        .map(ToOwned::to_owned);
-                    if let Some(cron_job_id) = cron_job_id {
-                        obj.insert("cron_job_id".into(), serde_json::Value::String(cron_job_id.clone()));
-                        obj.insert("cronJobId".into(), serde_json::Value::String(cron_job_id));
-                    }
-                } else {
-                    obj.remove("cron_job_id");
-                    obj.remove("cronJobId");
-                }
-            }
-
-            create_req.extra = merged;
-        }
-
-        self.create(user_id, create_req).await
+        self.create(user_id, req.conversation).await
     }
 
     /// Reset a conversation: clear messages and set status back to pending.

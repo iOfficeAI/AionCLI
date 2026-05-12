@@ -558,42 +558,6 @@ async fn t5_3_delete_requires_auth() {
 // ── T6: Clone ─────────────────────────────────────────────────────────
 
 #[tokio::test]
-async fn t6_1_clone_from_source() {
-    let (mut app, services) = build_app().await;
-    let (token, csrf) = setup_and_login(&mut app, &services, "admin", "StrongP@ss1").await;
-
-    // Create source
-    let body = create_body_with_extra(
-        "Source Conv",
-        json!({"workspace": "/src", "context_file_name": "ctx.md"}),
-    );
-    let req = json_with_token("POST", "/api/conversations", body, &token, &csrf);
-    let resp = app.clone().oneshot(req).await.unwrap();
-    let json = body_json(resp).await;
-    let source_id = json["data"]["id"].as_str().unwrap().to_owned();
-
-    // Clone from source
-    let clone_body = json!({
-        "source_conversation_id": source_id,
-        "conversation": {
-            "type": "acp",
-            "extra": { "newKey": "value" }
-        }
-    });
-    let req = json_with_token("POST", "/api/conversations/clone", clone_body, &token, &csrf);
-    let resp = app.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::CREATED);
-
-    let json = body_json(resp).await;
-    let cloned = &json["data"];
-    assert_ne!(cloned["id"].as_str().unwrap(), source_id);
-    assert_eq!(cloned["name"], "Source Conv"); // inherited
-    assert_eq!(cloned["extra"]["workspace"], "/src"); // inherited from source
-    assert_eq!(cloned["extra"]["context_file_name"], "ctx.md"); // inherited
-    assert_eq!(cloned["extra"]["newKey"], "value"); // from clone request
-}
-
-#[tokio::test]
 async fn t6_2_clone_without_source() {
     let (mut app, services) = build_app().await;
     let (token, csrf) = setup_and_login(&mut app, &services, "admin", "StrongP@ss1").await;
@@ -612,23 +576,6 @@ async fn t6_2_clone_without_source() {
     let json = body_json(resp).await;
     assert_eq!(json["data"]["name"], "Fresh Clone");
     assert_eq!(json["data"]["type"], "acp");
-}
-
-#[tokio::test]
-async fn t6_3_clone_source_not_found() {
-    let (mut app, services) = build_app().await;
-    let (token, csrf) = setup_and_login(&mut app, &services, "admin", "StrongP@ss1").await;
-
-    let clone_body = json!({
-        "source_conversation_id": "non-existent-id",
-        "conversation": {
-            "type": "acp",
-            "extra": {}
-        }
-    });
-    let req = json_with_token("POST", "/api/conversations/clone", clone_body, &token, &csrf);
-    let resp = app.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

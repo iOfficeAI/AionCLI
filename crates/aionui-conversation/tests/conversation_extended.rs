@@ -104,39 +104,6 @@ fn make_message(conv_id: &str, content: &str, offset_ms: i64) -> MessageRow {
 // ── T6: Clone conversation ─────────────────────────────────────────
 
 #[tokio::test]
-async fn t6_1_clone_from_source() {
-    let (svc, _repo, _b) = setup().await;
-
-    // Create source
-    let source_req: CreateConversationRequest = serde_json::from_value(json!({
-        "type": "acp",
-        "name": "Source",
-        "extra": { "workspace": "/src", "contextFileName": "ctx.md" }
-    }))
-    .unwrap();
-    let source = svc.create(USER_ID, source_req).await.unwrap();
-
-    // Clone with overrides
-    let clone_req: CloneConversationRequest = serde_json::from_value(json!({
-        "source_conversation_id": source.id,
-        "conversation": {
-            "type": "acp",
-            "name": "Cloned",
-            "extra": { "workspace": "/cloned" }
-        }
-    }))
-    .unwrap();
-    let cloned = svc.clone_create(USER_ID, clone_req).await.unwrap();
-
-    assert_ne!(cloned.id, source.id);
-    assert_eq!(cloned.name, "Cloned");
-    // workspace overridden, contextFileName inherited from source
-    assert_eq!(cloned.extra["workspace"], "/cloned");
-    assert_eq!(cloned.extra["contextFileName"], "ctx.md");
-    assert_eq!(cloned.status, ConversationStatus::Pending);
-}
-
-#[tokio::test]
 async fn t6_2_clone_without_source() {
     let (svc, _repo, _b) = setup().await;
 
@@ -150,51 +117,9 @@ async fn t6_2_clone_without_source() {
     .unwrap();
     let resp = svc.clone_create(USER_ID, req).await.unwrap();
     assert_eq!(resp.name, "Direct");
-}
-
-#[tokio::test]
-async fn t6_3_clone_source_not_found() {
-    let (svc, _repo, _b) = setup().await;
-
-    let req: CloneConversationRequest = serde_json::from_value(json!({
-        "source_conversation_id": "nonexistent",
-        "conversation": {
-            "type": "acp",
-            "extra": {}
-        }
-    }))
-    .unwrap();
-    let err = svc.clone_create(USER_ID, req).await.unwrap_err();
-    assert!(matches!(err, aionui_common::AppError::NotFound(_)));
-}
-
-#[tokio::test]
-async fn t6_4_clone_messages_not_copied() {
-    let (svc, repo, _b) = setup().await;
-
-    let source = svc.create(USER_ID, make_create_req()).await.unwrap();
-    // Insert message into source
-    repo.insert_message(&make_message(&source.id, "hello", 0))
-        .await
-        .unwrap();
-
-    let clone_req: CloneConversationRequest = serde_json::from_value(json!({
-        "source_conversation_id": source.id,
-        "conversation": {
-            "type": "acp",
-            "extra": {}
-        }
-    }))
-    .unwrap();
-    let cloned = svc.clone_create(USER_ID, clone_req).await.unwrap();
-
-    // Cloned conversation should have no messages
-    let messages = svc
-        .list_messages(USER_ID, &cloned.id, ListMessagesQuery::default())
-        .await
-        .unwrap();
-    assert!(messages.items.is_empty());
-    assert_eq!(messages.total, 0);
+    // No source to merge from — only the caller-provided CreateConversationRequest
+    // drives `extra`, so source-only keys (e.g. `contextFileName`) must not appear.
+    assert!(resp.extra.get("contextFileName").is_none());
 }
 
 // ── T7: Reset conversation ─────────────────────────────────────────
