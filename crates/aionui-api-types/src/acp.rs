@@ -90,26 +90,6 @@ pub struct ProbeModelRequest {
     pub backend: String,
 }
 
-/// Request body for setting a config option.
-#[derive(Debug, Deserialize)]
-pub struct SetConfigOptionRequest {
-    pub value: String,
-}
-
-/// A single session config option update.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct SessionConfigOptionUpdate {
-    pub config_id: String,
-    pub value: String,
-}
-
-/// Request body for setting multiple ACP config options.
-#[derive(Debug, Deserialize)]
-pub struct SetConfigOptionsRequest {
-    #[serde(default)]
-    pub config_options: Vec<SessionConfigOptionUpdate>,
-}
-
 /// Request body for probing a custom ACP agent.
 ///
 /// Two-step check: Step 1 resolves `command` on `$PATH`; Step 2 spawns
@@ -234,27 +214,6 @@ mod tests {
         let json = json!({ "model_id": "claude-sonnet-4" });
         let req: SetModelRequest = serde_json::from_value(json).unwrap();
         assert_eq!(req.model_id, "claude-sonnet-4");
-    }
-
-    #[test]
-    fn set_config_option_request_serde() {
-        let json = json!({ "value": "dark" });
-        let req: SetConfigOptionRequest = serde_json::from_value(json).unwrap();
-        assert_eq!(req.value, "dark");
-    }
-
-    #[test]
-    fn set_config_options_request_serde() {
-        let json = json!({
-            "config_options": [
-                { "config_id": "model", "value": "claude-sonnet-4" },
-                { "config_id": "reasoning", "value": "high" }
-            ]
-        });
-        let req: SetConfigOptionsRequest = serde_json::from_value(json).unwrap();
-        assert_eq!(req.config_options.len(), 2);
-        assert_eq!(req.config_options[0].config_id, "model");
-        assert_eq!(req.config_options[1].value, "high");
     }
 
     #[test]

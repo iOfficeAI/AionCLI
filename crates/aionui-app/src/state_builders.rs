@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
-use aionui_ai_agent::{
-    AcpRouterState, AgentRouterState, AgentService, RemoteAgentRouterState, RemoteAgentService, SessionRouterState,
-};
+use aionui_ai_agent::{AgentRouterState, AgentService, RemoteAgentRouterState, RemoteAgentService};
 use aionui_assistant::{AssistantRouterState, AssistantService, BuiltinAssistantRegistry};
 use aionui_auth::extract_token_from_ws_headers;
 use aionui_channel::ChannelRouterState;
@@ -60,7 +58,7 @@ pub struct ChannelOrchestratorComponents {
 pub async fn build_module_states(services: &AppServices) -> (ModuleStates, ChannelOrchestratorComponents) {
     let (ext_state, hub_state, mut skill_state) = build_extension_states(services).await;
 
-    let scan_paths = resolve_scan_paths_for_data_dir(std::path::Path::new(&services.data_dir));
+    let scan_paths = resolve_scan_paths_for_data_dir(&services.data_dir);
     if let Err(error) = ext_state.registry.initialize_with_scan_paths(scan_paths).await {
         tracing::warn!(error = %error, "extension registry initialize failed");
     }
@@ -85,21 +83,17 @@ pub async fn build_module_states(services: &AppServices) -> (ModuleStates, Chann
             .unwrap_or_else(|| std::path::PathBuf::from("aionui-backend")),
     );
 
-    let agent_service = AgentService::new(
-        services.worker_task_manager.clone(),
-        services.agent_registry.clone(),
-        services.conversation_repo.clone(),
-        services.acp_session_sync.clone(),
-        std::path::PathBuf::from(&services.data_dir),
-    );
+    let agent_service = AgentService::new(services.agent_registry.clone(), services.data_dir.clone());
 
     let states = ModuleStates {
         system: build_system_state(services),
         conversation: build_conversation_state(services, Some(cron.cron_service.clone())),
         remote_agent: build_remote_agent_state(services),
-        acp: build_acp_state(services, agent_service.clone()),
+        agent: AgentRouterState {
+            agent_registry: services.agent_registry.clone(),
+            service: agent_service,
+        },
         connection_test: build_connection_test_state(),
-        session: build_session_state(services, agent_service.clone()),
         file: build_file_state(services),
         mcp: build_mcp_state(services),
         extension: ext_state,
@@ -116,10 +110,6 @@ pub async fn build_module_states(services: &AppServices) -> (ModuleStates, Chann
         office: build_office_state(services),
         shell: build_shell_state(services),
         assistant,
-        agent: AgentRouterState {
-            agent_registry: services.agent_registry.clone(),
-            service: agent_service,
-        },
     };
 
     (states, channel_components)
@@ -158,7 +148,7 @@ pub fn build_conversation_state(
     cron_service: Option<Arc<aionui_cron::service::CronService>>,
 ) -> ConversationRouterState {
     let pool = services.database.pool().clone();
-    let repo = Arc::new(SqliteConversationRepository::new(pool.clone()));
+    let conversaion_repo = Arc::new(SqliteConversationRepository::new(pool.clone()));
     let agent_metadata_repo: Arc<dyn IAgentMetadataRepository> =
         Arc::new(SqliteAgentMetadataRepository::new(pool.clone()));
     let acp_session_repo: Arc<dyn IAcpSessionRepository> = Arc::new(SqliteAcpSessionRepository::new(pool));
@@ -166,10 +156,11 @@ pub fn build_conversation_state(
         services.skill_paths.clone(),
     ));
     let conversation_service = ConversationService::new(
-        std::path::PathBuf::from(&services.data_dir),
+        services.data_dir.clone(),
         services.event_bus.clone(),
         skill_resolver,
-        repo,
+        services.worker_task_manager.clone(),
+        conversaion_repo,
         agent_metadata_repo,
         acp_session_repo,
     );
@@ -177,8 +168,8 @@ pub fn build_conversation_state(
         conversation_service.with_cron_service(Some(cron_service));
     }
     ConversationRouterState {
-        conversation_service,
-        worker_task_manager: services.worker_task_manager.clone(),
+        service: conversation_service,
+        task_manager: services.worker_task_manager.clone(),
     }
 }
 
@@ -188,16 +179,7 @@ pub fn build_remote_agent_state(services: &AppServices) -> RemoteAgentRouterStat
     let pool = services.database.pool().clone();
     let repo = Arc::new(SqliteRemoteAgentRepository::new(pool));
     RemoteAgentRouterState {
-        service: RemoteAgentService::new(repo, encryption_key),
-    }
-}
-
-/// Build the default `AcpRouterState` from application services.
-pub fn build_acp_state(services: &AppServices, agent_service: Arc<AgentService>) -> AcpRouterState {
-    AcpRouterState {
-        worker_task_manager: services.worker_task_manager.clone(),
-        agent_registry: services.agent_registry.clone(),
-        service: agent_service,
+        service: Arc::new(RemoteAgentService::new(repo, encryption_key)),
     }
 }
 
@@ -205,18 +187,6 @@ pub fn build_acp_state(services: &AppServices, agent_service: Arc<AgentService>)
 pub fn build_connection_test_state() -> ConnectionTestRouterState {
     ConnectionTestRouterState {
         service: ConnectionTestService::new(reqwest::Client::new()),
-    }
-}
-
-/// Build the default `SessionRouterState` (formerly `AuxiliaryRouterState`)
-/// from application services.
-pub fn build_session_state(services: &AppServices, agent_service: Arc<AgentService>) -> SessionRouterState {
-    let pool = services.database.pool().clone();
-    let conversation_repo = Arc::new(SqliteConversationRepository::new(pool));
-    SessionRouterState {
-        worker_task_manager: services.worker_task_manager.clone(),
-        conversation_repo,
-        service: agent_service,
     }
 }
 
@@ -323,9 +293,10 @@ pub async fn build_channel_state(
         aionui_db::SqliteAcpSessionRepository::new(services.database.pool().clone()),
     );
     let conversation_svc = Arc::new(ConversationService::new(
-        std::path::PathBuf::from(&services.data_dir),
+        services.data_dir.clone(),
         services.event_bus.clone(),
         skill_resolver,
+        services.worker_task_manager.clone(),
         conv_repo,
         agent_metadata_repo,
         acp_session_repo,
@@ -397,9 +368,10 @@ pub fn build_team_state(
         services.skill_paths.clone(),
     ));
     let conv_service = ConversationService::new(
-        std::path::PathBuf::from(&services.data_dir),
+        services.data_dir.clone(),
         services.event_bus.clone(),
         skill_resolver,
+        services.worker_task_manager.clone(),
         conv_repo,
         agent_metadata_repo,
         acp_session_repo,
@@ -434,9 +406,10 @@ pub fn build_cron_state(services: &AppServices) -> CronRouterState {
         services.skill_paths.clone(),
     ));
     let conv_service = ConversationService::new(
-        std::path::PathBuf::from(&services.data_dir),
+        services.data_dir.clone(),
         services.event_bus.clone(),
         skill_resolver,
+        services.worker_task_manager.clone(),
         conv_repo.clone(),
         agent_metadata_repo,
         acp_session_repo,
@@ -448,7 +421,7 @@ pub fn build_cron_state(services: &AppServices) -> CronRouterState {
         conv_repo,
         Arc::new(conv_service.clone()),
         busy_guard,
-        std::path::PathBuf::from(&services.data_dir),
+        services.data_dir.clone(),
         services.event_bus.clone(),
         services.agent_registry.clone(),
     ));
@@ -472,7 +445,7 @@ pub fn build_cron_state(services: &AppServices) -> CronRouterState {
         scheduler,
         executor,
         emitter,
-        std::path::PathBuf::from(&services.data_dir),
+        services.data_dir.clone(),
     ));
 
     tick_service_ref.0.lock().unwrap().replace(cron_service.clone());
@@ -485,7 +458,7 @@ pub fn build_cron_state(services: &AppServices) -> CronRouterState {
 
 /// Build the default `OfficeRouterState` from application services.
 pub fn build_office_state(services: &AppServices) -> OfficeRouterState {
-    let data_dir = std::path::Path::new(&services.data_dir);
+    let data_dir = services.data_dir.as_path();
     let allowed_roots = default_allowed_roots();
 
     let spawner: Arc<dyn aionui_office::ProcessSpawner> = Arc::new(aionui_office::DefaultProcessSpawner);
@@ -531,7 +504,7 @@ struct CronServiceTickRef(std::sync::Mutex<Option<Arc<aionui_cron::service::Cron
 pub async fn build_extension_states(
     services: &AppServices,
 ) -> (ExtensionRouterState, HubRouterState, SkillRouterState) {
-    let skill_data_dir = std::path::PathBuf::from(&services.data_dir);
+    let skill_data_dir = services.data_dir.clone();
 
     let state_store = ExtensionStateStore::new(resolve_state_file_path(&skill_data_dir));
     let registry = ExtensionRegistry::new(state_store, services.event_bus.clone(), services.app_version.clone());
@@ -619,14 +592,10 @@ mod tests {
         .unwrap();
 
         let db = aionui_db::init_database_memory().await.unwrap();
-        let services = AppServices::from_database_with_data_dir_and_app_version(
-            db,
-            data_dir.to_string_lossy().into_owned(),
-            false,
-            "2.1.0".to_string(),
-        )
-        .await
-        .unwrap();
+        let services =
+            AppServices::from_database_with_data_dir_and_app_version(db, data_dir, false, "2.1.0".to_string())
+                .await
+                .unwrap();
 
         let (ext_state, _hub_state, _skill_state) = build_extension_states(&services).await;
         ext_state

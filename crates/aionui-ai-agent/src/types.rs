@@ -75,9 +75,7 @@ pub struct AionrsResolvedConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aionui_api_types::{
-        AcpBuildExtra, AcpModelInfo, AcpSessionConfigOption, AionrsBuildExtra, OpenClawGatewayConfig, SlashCommandItem,
-    };
+    use aionui_api_types::{AcpBuildExtra, AcpModelInfo, AionrsBuildExtra, OpenClawGatewayConfig, SlashCommandItem};
     use serde_json::json;
 
     #[test]
@@ -177,19 +175,6 @@ mod tests {
         let json = serde_json::to_value(&info).unwrap();
         assert_eq!(json["model_id"], "claude-sonnet-4");
         assert_eq!(json["model_name"], "Claude Sonnet 4");
-    }
-
-    #[test]
-    fn acp_session_config_option_serde() {
-        let opt = AcpSessionConfigOption {
-            config_id: "theme".into(),
-            label: "Theme".into(),
-            value: "dark".into(),
-            options: Some(vec!["light".into(), "dark".into()]),
-        };
-        let json = serde_json::to_value(&opt).unwrap();
-        assert_eq!(json["config_id"], "theme");
-        assert_eq!(json["options"], json!(["light", "dark"]));
     }
 
     #[test]

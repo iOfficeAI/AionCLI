@@ -41,7 +41,7 @@ async fn build_office_app_with_roots(
     allowed_roots: Vec<std::path::PathBuf>,
 ) -> (axum::Router, AppServices, tempfile::TempDir) {
     let tmp = tempfile::TempDir::new().unwrap();
-    let data_dir = tmp.path().to_str().unwrap().to_string();
+    let data_dir = tmp.path().to_path_buf();
 
     let db = aionui_db::init_database_memory().await.unwrap();
     let services = AppServices::from_database_with_data_dir(db, data_dir, false)

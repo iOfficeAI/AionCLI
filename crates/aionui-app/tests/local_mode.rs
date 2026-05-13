@@ -5,7 +5,7 @@ use tower::ServiceExt;
 #[tokio::test]
 async fn test_local_mode_skips_auth() {
     let db = aionui_db::init_database_memory().await.unwrap();
-    let services = aionui_app::AppServices::from_database_with_data_dir(db, "data".to_string(), true)
+    let services = aionui_app::AppServices::from_database_with_data_dir(db, std::path::PathBuf::from("data"), true)
         .await
         .unwrap();
 
@@ -32,7 +32,7 @@ async fn test_local_mode_skips_auth() {
 #[tokio::test]
 async fn test_non_local_mode_requires_auth() {
     let db = aionui_db::init_database_memory().await.unwrap();
-    let services = aionui_app::AppServices::from_database_with_data_dir(db, "data".to_string(), false)
+    let services = aionui_app::AppServices::from_database_with_data_dir(db, std::path::PathBuf::from("data"), false)
         .await
         .unwrap();
 

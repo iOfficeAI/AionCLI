@@ -19,7 +19,7 @@ use std::time::Duration;
 use aionui_ai_agent::factory::acp_assembler::{WorkspaceInfo, assemble_acp_params};
 use aionui_ai_agent::manager::acp::AcpAgentManager;
 use aionui_ai_agent::registry::AgentRegistry;
-use aionui_ai_agent::{AgentStreamEvent, IAgentTask};
+use aionui_ai_agent::{AgentInstance, AgentStreamEvent, IAgentTask};
 use aionui_common::ConversationStatus;
 use aionui_db::{SqliteAgentMetadataRepository, init_database_memory};
 use tokio::sync::broadcast;
@@ -300,12 +300,16 @@ async fn acp_agent_model_info_captured() {
 
     wait_for_event(&mut rx, |e| matches!(e, AgentStreamEvent::AcpModelInfo(_))).await;
 
-    let info = agent.model().await;
-    assert!(info.is_some(), "Model info should be captured");
-    let info = info.unwrap();
-    assert_eq!(&*info.current_model_id.0, "claude-sonnet-4");
+    // Route through the public `AgentInstance` API rather than reaching
+    // into the private `AcpAgentManager::model()`: the ai-agent crate only
+    // exposes `AgentInstance` to downstream callers, so tests should
+    // exercise the same surface.
+    let instance = AgentInstance::Acp(agent.clone());
+    let resp = instance.get_model().await.expect("get_model should succeed");
+    let info = resp.model_info.expect("Model info should be captured");
+    assert_eq!(info.current_model_id.as_deref(), Some("claude-sonnet-4"));
     assert_eq!(info.available_models.len(), 2);
-    assert_eq!(info.available_models[0].name, "Claude Sonnet 4");
+    assert_eq!(info.available_models[0].label, "Claude Sonnet 4");
 
     agent.kill(None).unwrap();
 }

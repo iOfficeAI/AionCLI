@@ -548,10 +548,12 @@ async fn setup_with_conv_repo() -> (
 
     let stub_conv_repo = Arc::new(StubConvRepo::new());
     let stub_conv_repo_trait: Arc<dyn IConversationRepository> = stub_conv_repo.clone();
+    let task_manager: Arc<dyn aionui_ai_agent::task_manager::IWorkerTaskManager> = Arc::new(StubTaskManager);
     let conv_service = Arc::new(ConversationService::new(
         std::env::temp_dir(),
         bc.clone() as Arc<dyn EventBroadcaster>,
         Arc::new(StubSkillResolver),
+        Arc::clone(&task_manager),
         Arc::clone(&stub_conv_repo_trait),
         Arc::clone(&agent_metadata_repo),
         acp_session_repo,
@@ -560,7 +562,7 @@ async fn setup_with_conv_repo() -> (
     agent_registry.hydrate().await.unwrap();
     let busy_guard = Arc::new(CronBusyGuard::new());
     let executor = Arc::new(JobExecutor::new(
-        Arc::new(StubTaskManager),
+        task_manager,
         stub_conv_repo_trait,
         conv_service,
         busy_guard,

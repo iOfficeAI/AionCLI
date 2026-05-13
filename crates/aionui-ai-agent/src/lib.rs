@@ -19,8 +19,8 @@ pub use agent_runtime::AgentRuntime;
 pub use agent_task::IMockAgent;
 pub use agent_task::{AgentInstance, IAgentTask};
 pub use aionui_api_types::{
-    AcpBuildExtra, AcpModelInfo, AcpSessionConfigOption, AionrsBuildExtra, OpenClawBuildExtra, OpenClawGatewayConfig,
-    RemoteBuildExtra, SlashCommandItem,
+    AcpBuildExtra, AcpModelInfo, AionrsBuildExtra, OpenClawBuildExtra, OpenClawGatewayConfig, RemoteBuildExtra,
+    SlashCommandItem,
 };
 pub use capability::skill_manager::{
     AcpSkillManager, SkillDefinition, SkillIndex, build_skills_index_text, build_system_instructions,
@@ -32,8 +32,7 @@ pub use idle_scanner::start_idle_scanner;
 pub use persistence::AcpSessionSyncService;
 pub use protocol::events::AgentStreamEvent;
 pub use registry::AgentRegistry;
-pub use routes::remote::{RemoteAgentRouterState, remote_agent_routes};
-pub use routes::{AcpRouterState, AgentRouterState, SessionRouterState, acp_routes, agent_routes, session_routes};
+pub use routes::{AgentRouterState, RemoteAgentRouterState, agent_routes, remote_agent_routes};
 pub use services::AgentService;
 pub use services::RemoteAgentService;
 pub use task_manager::{IWorkerTaskManager, WorkerTaskManagerImpl};

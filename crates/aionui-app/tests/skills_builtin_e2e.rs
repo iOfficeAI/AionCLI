@@ -55,7 +55,7 @@ async fn fixture_embedded() -> Fixture {
         .expect("failed to materialize embedded builtin skills for test fixture");
 
     let db = init_database_memory().await.unwrap();
-    let services = aionui_app::AppServices::from_database_with_data_dir(db, "data".to_string(), false)
+    let services = aionui_app::AppServices::from_database_with_data_dir(db, std::path::PathBuf::from("data"), false)
         .await
         .unwrap();
     let (mut states, _): (ModuleStates, _) = build_module_states(&services).await;

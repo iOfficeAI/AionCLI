@@ -608,17 +608,18 @@ fn setup_with_factory_and_metadata(
     let conv_repo: Arc<dyn IConversationRepository> = Arc::new(MockConversationRepo::new());
     let broadcaster: Arc<dyn EventBroadcaster> = Arc::new(NullBroadcaster);
     let acp_session_repo: Arc<dyn IAcpSessionRepository> = Arc::new(StubAcpSessionRepo);
+    let task_manager = Arc::new(CountingTaskManager::new(factory));
+    let task_manager_dyn: Arc<dyn IWorkerTaskManager> = task_manager.clone();
     let conv_service = ConversationService::new(
         std::env::temp_dir(),
         broadcaster.clone(),
         Arc::new(StubSkillResolver),
+        task_manager_dyn.clone(),
         conv_repo,
         agent_metadata_repo.clone(),
         acp_session_repo,
     );
     let backend_binary_path = Arc::new(std::path::PathBuf::from("/tmp/aionui-backend-test"));
-    let task_manager = Arc::new(CountingTaskManager::new(factory));
-    let task_manager_dyn: Arc<dyn IWorkerTaskManager> = task_manager.clone();
     let provider_repo: Arc<dyn IProviderRepository> = Arc::new(EmptyProviderRepo);
     let svc = TeamSessionService::new(
         team_repo,
@@ -644,16 +645,17 @@ fn setup_with_recording_broadcaster() -> (Arc<TeamSessionService>, Arc<Recording
     let broadcaster: Arc<dyn EventBroadcaster> = recorder.clone();
     let agent_metadata_repo: Arc<dyn IAgentMetadataRepository> = Arc::new(StubAgentMetadataRepo::empty());
     let acp_session_repo: Arc<dyn IAcpSessionRepository> = Arc::new(StubAcpSessionRepo);
+    let task_manager: Arc<dyn IWorkerTaskManager> = Arc::new(CountingTaskManager::new(success_factory()));
     let conv_service = ConversationService::new(
         std::env::temp_dir(),
         broadcaster.clone(),
         Arc::new(StubSkillResolver),
+        task_manager.clone(),
         conv_repo,
         agent_metadata_repo.clone(),
         acp_session_repo,
     );
     let backend_binary_path = Arc::new(std::path::PathBuf::from("/tmp/aionui-backend-test"));
-    let task_manager: Arc<dyn IWorkerTaskManager> = Arc::new(CountingTaskManager::new(success_factory()));
     let provider_repo: Arc<dyn IProviderRepository> = Arc::new(EmptyProviderRepo);
     let svc = TeamSessionService::new(
         team_repo,

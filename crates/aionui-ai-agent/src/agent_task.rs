@@ -24,6 +24,10 @@ use crate::manager::remote::RemoteAgentManager;
 use crate::protocol::events::AgentStreamEvent;
 use crate::types::SendMessageData;
 
+use aionui_api_types::{
+    GetModelInfoResponse, ModelInfoEntry, ModelInfoPayload, SideQuestionRequest, SideQuestionResponse, SlashCommandItem,
+};
+
 #[cfg(any(test, feature = "test-support"))]
 use aionui_common::Confirmation;
 
@@ -110,6 +114,29 @@ pub trait IMockAgent: IAgentTask {
         Err(AppError::BadRequest(
             "Mode switching is not supported for this mock".into(),
         ))
+    }
+    async fn get_model(&self) -> Result<GetModelInfoResponse, AppError> {
+        Ok(GetModelInfoResponse { model_info: None })
+    }
+    async fn set_model(&self, _model_id: &str) -> Result<(), AppError> {
+        Err(AppError::BadRequest(
+            "Model switching is not supported for this mock".into(),
+        ))
+    }
+    async fn get_usage(&self) -> Result<Option<serde_json::Value>, AppError> {
+        Ok(None)
+    }
+    async fn get_slash_commands(&self) -> Result<Vec<SlashCommandItem>, AppError> {
+        Ok(Vec::new())
+    }
+    async fn handle_side_question(&self, _req: SideQuestionRequest) -> Result<SideQuestionResponse, AppError> {
+        Ok(SideQuestionResponse {
+            status: "unsupported".into(),
+            answer: None,
+        })
+    }
+    async fn get_openclaw_runtime(&self) -> Result<serde_json::Value, AppError> {
+        Ok(serde_json::Value::Null)
     }
 }
 
@@ -320,5 +347,145 @@ impl AgentInstance {
             #[cfg(any(test, feature = "test-support"))]
             Self::Mock(m) => m.set_mode(mode).await,
         }
+    }
+
+    /// Get the current session model info. Only ACP exposes a model
+    /// catalog; other variants report `model_info = None` so the UI can
+    /// hide the model picker without an error.
+    pub async fn get_model(&self) -> Result<GetModelInfoResponse, AppError> {
+        match self {
+            Self::Acp(m) => {
+                let sdk_model = m.model().await;
+                let model_info = sdk_model.map(map_sdk_model_to_payload);
+                Ok(GetModelInfoResponse { model_info })
+            }
+            Self::Aionrs(_) | Self::OpenClaw(_) | Self::Nanobot(_) | Self::Remote(_) => {
+                Ok(GetModelInfoResponse { model_info: None })
+            }
+            #[cfg(any(test, feature = "test-support"))]
+            Self::Mock(m) => m.get_model().await,
+        }
+    }
+
+    /// Switch the active model. Unsupported for variants other than ACP —
+    /// returns a `BadRequest` so the caller can surface an actionable
+    /// error rather than silently no-op.
+    pub async fn set_model(&self, model_id: &str) -> Result<(), AppError> {
+        if model_id.trim().is_empty() {
+            return Err(AppError::BadRequest("model_id must not be empty".into()));
+        }
+        match self {
+            Self::Acp(m) => m.set_model(model_id).await,
+            Self::Aionrs(_) | Self::OpenClaw(_) | Self::Nanobot(_) | Self::Remote(_) => Err(AppError::BadRequest(
+                "Model switching is not supported for this agent type".into(),
+            )),
+            #[cfg(any(test, feature = "test-support"))]
+            Self::Mock(m) => m.set_model(model_id).await,
+        }
+    }
+
+    /// Returns the cached session usage as a snake_case JSON object. The
+    /// structure mirrors the ACP SDK `UsageUpdate` schema
+    /// (`used` / `size` / `cost` / `_meta`), normalised via
+    /// [`aionui_common::normalize_keys_to_snake_case`] so keys land as
+    /// `used` / `size` / `cost` to match the AionUI wire convention —
+    /// `_meta` passes through verbatim.
+    ///
+    /// Non-ACP agents return `None`.
+    pub async fn get_usage(&self) -> Result<Option<serde_json::Value>, AppError> {
+        match self {
+            Self::Acp(m) => {
+                let Some(usage) = m.usage().await else { return Ok(None) };
+                let mut value = serde_json::to_value(usage)
+                    .map_err(|e| AppError::Internal(format!("Failed to serialize usage: {e}")))?;
+                aionui_common::normalize_keys_to_snake_case(&mut value);
+                Ok(Some(value))
+            }
+            Self::Aionrs(_) | Self::OpenClaw(_) | Self::Nanobot(_) | Self::Remote(_) => Ok(None),
+            #[cfg(any(test, feature = "test-support"))]
+            Self::Mock(m) => m.get_usage().await,
+        }
+    }
+
+    /// Slash commands available in the current session. Only ACP exposes
+    /// a slash-command catalog; other variants report an empty list
+    /// (the UI renders "no commands").
+    pub async fn get_slash_commands(&self) -> Result<Vec<SlashCommandItem>, AppError> {
+        match self {
+            Self::Acp(m) => m.load_slash_commands().await,
+            Self::Aionrs(_) | Self::OpenClaw(_) | Self::Nanobot(_) | Self::Remote(_) => Ok(Vec::new()),
+            #[cfg(any(test, feature = "test-support"))]
+            Self::Mock(m) => m.get_slash_commands().await,
+        }
+    }
+
+    /// Dispatch a side-question to the agent. **Placeholder** — matches
+    /// the current `AgentService::handle_side_question` behaviour: ACP
+    /// agents whose behavior_policy enables side-questions return a stub
+    /// "ok" response, everyone else returns `unsupported`.
+    pub async fn handle_side_question(&self, req: SideQuestionRequest) -> Result<SideQuestionResponse, AppError> {
+        if req.question.trim().is_empty() {
+            return Err(AppError::BadRequest("question must not be empty".into()));
+        }
+        match self {
+            Self::Acp(m) => {
+                if !m.supports_side_question() {
+                    return Ok(SideQuestionResponse {
+                        status: "unsupported".into(),
+                        answer: None,
+                    });
+                }
+                Ok(SideQuestionResponse {
+                    status: "ok".into(),
+                    answer: Some("Side question support will be fully wired in app integration phase.".into()),
+                })
+            }
+            Self::Aionrs(_) | Self::OpenClaw(_) | Self::Nanobot(_) | Self::Remote(_) => Ok(SideQuestionResponse {
+                status: "unsupported".into(),
+                answer: None,
+            }),
+            #[cfg(any(test, feature = "test-support"))]
+            Self::Mock(m) => m.handle_side_question(req).await,
+        }
+    }
+
+    /// OpenClaw-specific runtime diagnostics. Only OpenClaw reports
+    /// diagnostics; other variants report `Value::Null` so diagnostic
+    /// UIs degrade gracefully.
+    pub async fn get_openclaw_runtime(&self) -> Result<serde_json::Value, AppError> {
+        match self {
+            Self::OpenClaw(m) => Ok(m.get_diagnostics().await),
+            Self::Acp(_) | Self::Aionrs(_) | Self::Nanobot(_) | Self::Remote(_) => Ok(serde_json::Value::Null),
+            #[cfg(any(test, feature = "test-support"))]
+            Self::Mock(m) => m.get_openclaw_runtime().await,
+        }
+    }
+}
+
+/// Map the raw ACP SDK model state into the public API payload.
+///
+/// Kept private to this module: the only caller is
+/// [`AgentInstance::get_model`]. Mirrors the helper formerly living in
+/// `services/agent.rs`; do not duplicate — if the shape of
+/// `ModelInfoPayload` changes, update it here.
+fn map_sdk_model_to_payload(m: agent_client_protocol::schema::SessionModelState) -> ModelInfoPayload {
+    let available: Vec<ModelInfoEntry> = m
+        .available_models
+        .iter()
+        .map(|am| ModelInfoEntry {
+            id: am.model_id.to_string(),
+            label: am.name.clone(),
+        })
+        .collect();
+    let current_id = m.current_model_id.to_string();
+    let current_label = available
+        .iter()
+        .find(|e| e.id == current_id)
+        .map(|e| e.label.clone())
+        .unwrap_or_else(|| current_id.clone());
+    ModelInfoPayload {
+        current_model_id: Some(current_id),
+        current_model_label: Some(current_label),
+        available_models: available,
     }
 }

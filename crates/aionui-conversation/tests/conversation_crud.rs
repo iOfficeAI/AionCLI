@@ -99,15 +99,16 @@ async fn setup() -> (ConversationService, Arc<TestBroadcaster>, Arc<dyn IWorkerT
         Arc::new(aionui_db::SqliteAgentMetadataRepository::new(db.pool().clone()));
     let acp_session_repo: Arc<dyn aionui_db::IAcpSessionRepository> =
         Arc::new(aionui_db::SqliteAcpSessionRepository::new(db.pool().clone()));
+    let task_mgr: Arc<dyn IWorkerTaskManager> = Arc::new(NoopTaskManager);
     let svc = ConversationService::new(
         std::env::temp_dir(),
         broadcaster.clone(),
         Arc::new(EmptySkillResolver),
+        task_mgr.clone(),
         repo,
         agent_metadata_repo,
         acp_session_repo,
     );
-    let task_mgr: Arc<dyn IWorkerTaskManager> = Arc::new(NoopTaskManager);
     (svc, broadcaster, task_mgr)
 }
 
@@ -805,10 +806,12 @@ async fn create_acp_seeds_acp_session_runtime_from_extra() {
         Arc::new(aionui_db::SqliteAgentMetadataRepository::new(db.pool().clone()));
     let acp_session_repo: Arc<dyn aionui_db::IAcpSessionRepository> =
         Arc::new(SqliteAcpSessionRepository::new(db.pool().clone()));
+    let task_mgr: Arc<dyn IWorkerTaskManager> = Arc::new(NoopTaskManager);
     let svc = aionui_conversation::ConversationService::new(
         std::env::temp_dir(),
         broadcaster.clone(),
         Arc::new(EmptySkillResolver),
+        task_mgr,
         repo,
         agent_metadata_repo,
         acp_session_repo.clone(),
@@ -853,10 +856,12 @@ async fn create_acp_skips_seed_when_extra_has_empty_runtime_fields() {
         Arc::new(aionui_db::SqliteAgentMetadataRepository::new(db.pool().clone()));
     let acp_session_repo: Arc<dyn aionui_db::IAcpSessionRepository> =
         Arc::new(SqliteAcpSessionRepository::new(db.pool().clone()));
+    let task_mgr: Arc<dyn IWorkerTaskManager> = Arc::new(NoopTaskManager);
     let svc = aionui_conversation::ConversationService::new(
         std::env::temp_dir(),
         broadcaster.clone(),
         Arc::new(EmptySkillResolver),
+        task_mgr,
         repo,
         agent_metadata_repo,
         acp_session_repo.clone(),

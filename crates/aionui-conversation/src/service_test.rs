@@ -474,15 +474,16 @@ fn make_service_with_resolver(
     let broadcaster = Arc::new(MockBroadcaster::new());
     let agent_metadata_repo: Arc<dyn IAgentMetadataRepository> = Arc::new(StubAgentMetadataRepo);
     let acp_session_repo: Arc<dyn IAcpSessionRepository> = Arc::new(StubAcpSessionRepo);
+    let task_mgr: Arc<dyn IWorkerTaskManager> = Arc::new(MockTaskManager::new());
     let svc = ConversationService::new(
         std::path::PathBuf::from(std::env::temp_dir()),
         broadcaster.clone(),
         skill_resolver,
+        task_mgr.clone(),
         repo.clone(),
         agent_metadata_repo,
         acp_session_repo,
     );
-    let task_mgr: Arc<dyn IWorkerTaskManager> = Arc::new(MockTaskManager::new());
     (svc, broadcaster, repo, task_mgr)
 }
 

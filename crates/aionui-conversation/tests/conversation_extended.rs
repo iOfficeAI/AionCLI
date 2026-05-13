@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
+use aionui_ai_agent::IWorkerTaskManager;
 use aionui_api_types::{
     CloneConversationRequest, CreateConversationRequest, ListMessagesQuery, SearchMessagesQuery, WebSocketMessage,
 };
-use aionui_common::{ConversationStatus, generate_prefixed_id, now_ms};
+use aionui_common::{AgentKillReason, AppError, ConversationStatus, TimestampMs, generate_prefixed_id, now_ms};
 use aionui_conversation::ConversationService;
 use aionui_conversation::skill_resolver::SkillResolver;
 use aionui_db::models::MessageRow;
@@ -29,6 +30,39 @@ impl TestBroadcaster {
 impl EventBroadcaster for TestBroadcaster {
     fn broadcast(&self, event: WebSocketMessage<serde_json::Value>) {
         self.events.lock().unwrap().push(event);
+    }
+}
+
+struct NoopTaskManager;
+
+#[async_trait::async_trait]
+impl IWorkerTaskManager for NoopTaskManager {
+    fn get_task(&self, _: &str) -> Option<aionui_ai_agent::AgentInstance> {
+        None
+    }
+    async fn get_or_build_task(
+        &self,
+        _: &str,
+        _: aionui_ai_agent::types::BuildTaskOptions,
+    ) -> Result<aionui_ai_agent::AgentInstance, AppError> {
+        Err(AppError::Internal("noop".into()))
+    }
+    fn kill(&self, _: &str, _: Option<AgentKillReason>) -> Result<(), AppError> {
+        Ok(())
+    }
+    fn kill_and_wait(
+        &self,
+        _: &str,
+        _: Option<AgentKillReason>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        Box::pin(std::future::ready(()))
+    }
+    fn clear(&self) {}
+    fn active_count(&self) -> usize {
+        0
+    }
+    fn collect_idle(&self, _: TimestampMs) -> Vec<String> {
+        vec![]
     }
 }
 
@@ -66,10 +100,12 @@ async fn setup() -> (
         Arc::new(aionui_db::SqliteAgentMetadataRepository::new(db.pool().clone()));
     let acp_session_repo: Arc<dyn aionui_db::IAcpSessionRepository> =
         Arc::new(aionui_db::SqliteAcpSessionRepository::new(db.pool().clone()));
+    let task_mgr: Arc<dyn IWorkerTaskManager> = Arc::new(NoopTaskManager);
     let svc = ConversationService::new(
         std::env::temp_dir(),
         broadcaster.clone(),
         Arc::new(EmptySkillResolver),
+        task_mgr,
         repo.clone(),
         agent_metadata_repo,
         acp_session_repo,

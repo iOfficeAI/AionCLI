@@ -6,32 +6,25 @@
 //! - `POST /api/agents/refresh` — refresh agent list (e.g. after new agent is added to the system)
 //! - `POST /api/agents/test`    — test custom agent configuration (e.g. LLM connection)
 
-use std::sync::Arc;
-
 use axum::Router;
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Extension, Json, Path, State};
 use axum::routing::{get, patch, post, put};
 
 use aionui_api_types::{
-    AgentMetadata, ApiResponse, CustomAgentUpsertRequest, DeleteCustomAgentResponse, SetEnabledRequest,
-    TryConnectCustomAgentRequest, TryConnectCustomAgentResponse,
+    AcpHealthCheckRequest, AcpHealthCheckResponse, AgentMetadata, ApiResponse, CustomAgentUpsertRequest,
+    DeleteCustomAgentResponse, SetEnabledRequest, TryConnectCustomAgentRequest, TryConnectCustomAgentResponse,
 };
 use aionui_auth::CurrentUser;
 use aionui_common::AppError;
 
-use crate::registry::AgentRegistry;
-
-#[derive(Clone)]
-pub struct AgentRouterState {
-    pub agent_registry: Arc<AgentRegistry>,
-    pub service: Arc<crate::services::AgentService>,
-}
+use crate::routes::state::AgentRouterState;
 
 pub fn agent_routes(state: AgentRouterState) -> Router {
     Router::new()
         .route("/api/agents", get(list_agents))
         .route("/api/agents/refresh", post(refresh_agents))
+        .route("/api/agents/health-check", post(health_check))
         .route("/api/agents/{id}/enabled", patch(set_agent_enabled))
         .route("/api/agents/custom", post(create_custom))
         .route("/api/agents/custom/{id}", put(update_custom).delete(delete_custom))
@@ -51,6 +44,15 @@ async fn refresh_agents(
     Extension(_user): Extension<CurrentUser>,
 ) -> Result<Json<ApiResponse<Vec<AgentMetadata>>>, AppError> {
     Ok(Json(ApiResponse::ok(state.service.refresh_agents().await?)))
+}
+
+async fn health_check(
+    State(state): State<AgentRouterState>,
+    Extension(_user): Extension<CurrentUser>,
+    body: Result<Json<AcpHealthCheckRequest>, JsonRejection>,
+) -> Result<Json<ApiResponse<AcpHealthCheckResponse>>, AppError> {
+    let Json(req) = body.map_err(|e| AppError::BadRequest(e.to_string()))?;
+    Ok(Json(ApiResponse::ok(state.service.acp_health_check(req).await?)))
 }
 
 async fn try_connect_custom(

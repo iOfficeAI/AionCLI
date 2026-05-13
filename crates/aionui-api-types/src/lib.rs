@@ -27,14 +27,13 @@ mod websocket;
 
 pub use acp::{
     AcpEnvResponse, AcpHealthCheckRequest, AcpHealthCheckResponse, AgentModeResponse, DetectCliRequest,
-    DetectCliResponse, GetModelInfoResponse, ModelInfoEntry, ModelInfoPayload, ProbeModelRequest,
-    SessionConfigOptionUpdate, SetConfigOptionRequest, SetConfigOptionsRequest, SetModeRequest, SetModelRequest,
-    SideQuestionRequest, SideQuestionResponse, TryConnectCustomAgentRequest, TryConnectCustomAgentResponse,
-    WorkspaceBrowseQuery, WorkspaceEntry,
+    DetectCliResponse, GetModelInfoResponse, ModelInfoEntry, ModelInfoPayload, ProbeModelRequest, SetModeRequest,
+    SetModelRequest, SideQuestionRequest, SideQuestionResponse, TryConnectCustomAgentRequest,
+    TryConnectCustomAgentResponse, WorkspaceBrowseQuery, WorkspaceEntry,
 };
 pub use agent_build_extra::{
-    AcpBuildExtra, AcpModelInfo, AcpSessionConfigOption, AionrsBuildExtra, OpenClawBuildExtra, OpenClawGatewayConfig,
-    RemoteBuildExtra, SlashCommandItem,
+    AcpBuildExtra, AcpModelInfo, AionrsBuildExtra, OpenClawBuildExtra, OpenClawGatewayConfig, RemoteBuildExtra,
+    SlashCommandItem,
 };
 pub use agent_discovery::{AgentEnvEntry, AgentHandshake, AgentMetadata, AgentSource, AgentSourceInfo, BehaviorPolicy};
 pub use assistant::{

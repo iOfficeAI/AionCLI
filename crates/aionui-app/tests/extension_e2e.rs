@@ -152,7 +152,7 @@ async fn build_app_with_extension_root(ext_root: &std::path::Path) -> (axum::Rou
     let db = aionui_db::init_database_memory().await.unwrap();
     let services = AppServices::from_database_with_data_dir_and_app_version(
         db,
-        ext_root.join("..").join("data").to_string_lossy().into_owned(),
+        ext_root.join("..").join("data"),
         false,
         "1.0.0".to_string(),
     )

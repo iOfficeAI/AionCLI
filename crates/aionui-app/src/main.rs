@@ -23,7 +23,7 @@ struct Cli {
 
     /// Data directory for database and file storage.
     #[arg(long, default_value = "data")]
-    data_dir: String,
+    data_dir: PathBuf,
 
     /// Host application version used for extension engine compatibility.
     #[arg(long, default_value_t = env!("CARGO_PKG_VERSION").to_string())]
@@ -122,7 +122,7 @@ async fn async_main(merged_path: String, mcp_subcommand: Option<&str>, cli: Opti
 
     let cli = cli.expect("non-mcp entry guarantees cli is parsed");
 
-    let log_dir = cli.log_dir.unwrap_or_else(|| Path::new(&cli.data_dir).join("logs"));
+    let log_dir = cli.log_dir.unwrap_or_else(|| cli.data_dir.join("logs"));
     let _log_guard = init_tracing(&log_dir, cli.log_level.as_deref());
 
     tracing::info!(
@@ -158,7 +158,7 @@ async fn async_main(merged_path: String, mcp_subcommand: Option<&str>, cli: Opti
         .unwrap_or(true)
     {
         aionui_extension::materialize_if_needed(
-            Path::new(&config.data_dir),
+            &config.data_dir,
             aionui_extension::builtin_skills_corpus(),
             env!("CARGO_PKG_VERSION"),
         )
@@ -172,7 +172,7 @@ async fn async_main(merged_path: String, mcp_subcommand: Option<&str>, cli: Opti
         // place. Do NOT generalize this list — it is an explicit
         // allowlist of known-dead directories.
         for stale in ["builtin-skills-view", "tmp", "agent-skills"] {
-            let path = Path::new(&config.data_dir).join(stale);
+            let path = config.data_dir.join(stale);
             if path.exists()
                 && let Err(e) = std::fs::remove_dir_all(&path)
             {

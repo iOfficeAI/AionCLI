@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use aionui_ai_agent::IWorkerTaskManager;
 use aionui_ai_agent::types::{BuildTaskOptions, SendMessageData};
+use aionui_ai_agent::{AgentInstance, IWorkerTaskManager};
 
 use crate::response_middleware::ICronService;
 use aionui_api_types::{
@@ -41,10 +41,11 @@ pub trait OnConversationDelete: Send + Sync {
 
 #[derive(Clone)]
 pub struct ConversationService {
-    broadcaster: Arc<dyn EventBroadcaster>,
-    delete_hooks: Vec<Arc<dyn OnConversationDelete>>,
     workspace_root: std::path::PathBuf,
+    broadcaster: Arc<dyn EventBroadcaster>,
     skill_resolver: Arc<dyn SkillResolver>,
+    task_manager: Arc<dyn IWorkerTaskManager>,
+    delete_hooks: Vec<Arc<dyn OnConversationDelete>>,
     cron_service: Arc<RwLock<Option<Arc<dyn ICronService>>>>,
 
     // Repos for conversation, acp_session and agent_metadata access.
@@ -60,17 +61,21 @@ impl ConversationService {
         workspace_root: std::path::PathBuf,
         broadcaster: Arc<dyn EventBroadcaster>,
         skill_resolver: Arc<dyn SkillResolver>,
+        task_manager: Arc<dyn IWorkerTaskManager>,
+
         conversation_repo: Arc<dyn IConversationRepository>,
         agent_metadata_repo: Arc<dyn IAgentMetadataRepository>,
         acp_session_repo: Arc<dyn IAcpSessionRepository>,
     ) -> Self {
         Self {
-            conversation_repo,
-            broadcaster,
-            delete_hooks: Vec::new(),
             workspace_root,
+            broadcaster,
             skill_resolver,
+            task_manager,
+            delete_hooks: Vec::new(),
             cron_service: Arc::new(RwLock::new(None)),
+
+            conversation_repo,
             agent_metadata_repo,
             acp_session_repo,
         }
@@ -98,6 +103,12 @@ impl ConversationService {
 
     pub fn conversation_repo(&self) -> &Arc<dyn IConversationRepository> {
         &self.conversation_repo
+    }
+
+    pub(crate) fn task(&self, conversation_id: &str) -> Result<AgentInstance, AppError> {
+        self.task_manager
+            .get_task(conversation_id)
+            .ok_or_else(|| AppError::NotFound(format!("No active agent for conversation '{conversation_id}'")))
     }
 }
 

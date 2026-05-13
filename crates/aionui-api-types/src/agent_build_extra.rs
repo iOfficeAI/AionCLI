@@ -105,15 +105,6 @@ pub struct AcpModelInfo {
     pub provider: Option<String>,
 }
 
-/// ACP session configuration option.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AcpSessionConfigOption {
-    pub config_id: String,
-    pub label: String,
-    pub value: String,
-    pub options: Option<Vec<String>>,
-}
-
 /// A slash command item available in a conversation session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SlashCommandItem {

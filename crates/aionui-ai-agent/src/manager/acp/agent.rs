@@ -10,8 +10,7 @@ use crate::registry::CatalogSender;
 use crate::shared_kernel::{ModeId, ModelId, SessionId as DomainSessionId};
 use crate::types::SendMessageData;
 use agent_client_protocol::schema::{
-    AgentCapabilities, AuthMethod, AvailableCommand, CancelNotification, SessionConfigOption, SessionId,
-    SessionModelState, SessionNotification, SetSessionConfigOptionRequest, UsageUpdate,
+    CancelNotification, SessionId, SessionModelState, SessionNotification, UsageUpdate,
 };
 use aionui_api_types::{AgentHandshake, SlashCommandItem};
 use aionui_common::{
@@ -232,7 +231,7 @@ impl AcpAgentManager {
 }
 
 impl AcpAgentManager {
-    pub async fn mode(&self) -> Result<aionui_api_types::AgentModeResponse, AppError> {
+    pub(crate) async fn mode(&self) -> Result<aionui_api_types::AgentModeResponse, AppError> {
         let desired = self
             .session
             .read()
@@ -254,42 +253,17 @@ impl AcpAgentManager {
     }
 
     /// Cached model info from the ACP backend, if any has been received.
-    pub async fn model(&self) -> Option<SessionModelState> {
+    pub(crate) async fn model(&self) -> Option<SessionModelState> {
         self.session.read().await.model_info().cloned()
     }
 
-    /// Cached session configuration options.
-    pub async fn config_options(&self) -> Vec<SessionConfigOption> {
-        self.session
-            .read()
-            .await
-            .config_options()
-            .map(<[SessionConfigOption]>::to_vec)
-            .unwrap_or_default()
-    }
-
     /// Cached context usage info from the ACP backend.
-    pub async fn usage(&self) -> Option<UsageUpdate> {
+    pub(crate) async fn usage(&self) -> Option<UsageUpdate> {
         self.session.read().await.context_usage().cloned()
     }
 
-    /// Authentication methods captured during the ACP initialize handshake.
-    pub async fn auth_methods(&self) -> Option<Vec<AuthMethod>> {
-        self.session.read().await.auth_methods().map(|methods| methods.to_vec())
-    }
-
-    /// Agent capabilities captured during the ACP initialize handshake.
-    pub async fn agent_capabilities(&self) -> Option<AgentCapabilities> {
-        self.session.read().await.agent_capabilities().cloned()
-    }
-
-    /// Cached available commands from the ACP backend.
-    pub async fn available_commands(&self) -> Option<Vec<AvailableCommand>> {
-        self.session.read().await.available_commands().map(|c| c.to_vec())
-    }
-
     /// Set the mode for the current session.
-    pub async fn set_mode(&self, mode: &str) -> Result<(), AppError> {
+    pub(crate) async fn set_mode(&self, mode: &str) -> Result<(), AppError> {
         let normalized_mode = normalize_requested_mode(&self.params.metadata, mode);
         if normalized_mode.is_empty() {
             return Ok(());
@@ -322,7 +296,7 @@ impl AcpAgentManager {
     /// `reconcile_session` is the sole call-site of `protocol.set_model` —
     /// it also handles the observed sync since the CLI does not emit a
     /// CurrentModelUpdate notification after `session/set_model`.
-    pub async fn set_model(&self, model_id: &str) -> Result<(), AppError> {
+    pub(crate) async fn set_model(&self, model_id: &str) -> Result<(), AppError> {
         let session_id = self.session.read().await.session_id().map(ToOwned::to_owned);
 
         {
@@ -339,29 +313,8 @@ impl AcpAgentManager {
         Ok(())
     }
 
-    /// Set a session configuration option.
-    pub async fn set_config_option(&self, config_id: &str, value: &str) -> Result<(), AppError> {
-        let sid = self
-            .session
-            .read()
-            .await
-            .session_id()
-            .map(ToOwned::to_owned)
-            .ok_or_else(|| AppError::BadRequest("No active session".into()))?;
-
-        self.protocol
-            .set_config_option(SetSessionConfigOptionRequest::new(
-                SessionId::new(sid),
-                config_id.to_owned(),
-                value.to_owned(),
-            ))
-            .await
-            .map_err(AppError::from)
-            .map(|_| ())
-    }
-
     /// Return available slash commands from the session aggregate.
-    pub async fn load_slash_commands(&self) -> Result<Vec<SlashCommandItem>, AppError> {
+    pub(crate) async fn load_slash_commands(&self) -> Result<Vec<SlashCommandItem>, AppError> {
         let session = self.session.read().await;
         let items = session
             .available_commands()
