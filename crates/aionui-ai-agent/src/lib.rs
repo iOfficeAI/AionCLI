@@ -1,15 +1,15 @@
 //! AI agent lifecycle, worker task dispatch, and skill management.
-pub mod agent_runtime;
+pub(crate) mod agent_runtime;
 pub mod agent_task;
 pub(crate) mod capability;
 pub mod factory;
-pub mod idle_scanner;
+pub(crate) mod idle_scanner;
 pub mod manager;
-pub mod persistence;
+pub(crate) mod persistence;
 pub mod protocol;
 pub mod registry;
 pub mod routes;
-pub mod services;
+pub(crate) mod services;
 pub mod shared_kernel;
 pub mod task_manager;
 pub mod types;

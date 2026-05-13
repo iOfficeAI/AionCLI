@@ -214,9 +214,31 @@ async fn async_main(merged_path: String, mcp_subcommand: Option<&str>, cli: Opti
 
     info!(elapsed_ms = boot.elapsed().as_millis(), "Server listening on {addr}");
 
+    // Kick off the idle-ACP-agent reaper. `start_idle_scanner` returns
+    // immediately with a `JoinHandle`; the scanner task polls every 60 s
+    // and kills ACP agents whose `status == Finished` + last_activity
+    // exceeds the default 5-minute idle threshold. The watch channel
+    // propagates graceful-shutdown so the scanner exits on SIGINT/SIGTERM.
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let idle_scanner_handle =
+        aionui_ai_agent::start_idle_scanner(services.worker_task_manager.clone(), None, shutdown_rx);
+
     axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(async move {
+            shutdown_signal().await;
+            // Best-effort: only fails if every receiver has been dropped, in
+            // which case the scanner is already gone and there is nothing to
+            // signal.
+            let _ = shutdown_tx.send(true);
+        })
         .await?;
+
+    // Wait for the scanner to observe the shutdown watch value and
+    // return; at worst this blocks for the current 60 s tick. Log-only
+    // on failure since the HTTP server has already drained.
+    if let Err(e) = idle_scanner_handle.await {
+        tracing::warn!(error = %e, "idle scanner join failed");
+    }
 
     // Graceful shutdown: close database connections
     services.database.close().await;
