@@ -354,7 +354,7 @@ async fn read_file_buffer_returns_base64() {
 
     let dir = tempfile::tempdir().unwrap();
     let file_path = dir.path().join("binary.bin");
-    std::fs::write(&file_path, &[0x00, 0xFF, 0xAB]).unwrap();
+    std::fs::write(&file_path, [0x00, 0xFF, 0xAB]).unwrap();
 
     let req = json_with_token(
         "POST",

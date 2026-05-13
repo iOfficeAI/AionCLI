@@ -607,7 +607,7 @@ mod tests {
 
     #[test]
     fn spawn_error_other() {
-        let err = std::io::Error::new(std::io::ErrorKind::Other, "broken pipe");
+        let err = std::io::Error::other("broken pipe");
         let result = spawn_error_result("cmd", &err);
         assert!(result.error.unwrap().contains("Failed to start"));
     }

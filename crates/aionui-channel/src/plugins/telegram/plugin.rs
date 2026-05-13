@@ -1200,6 +1200,7 @@ mod tests {
         make_tg_message_with_caption(text, None, photo, document, voice, audio, video, sticker)
     }
 
+    #[allow(clippy::too_many_arguments)] // test helper requires all media variants
     fn make_tg_message_with_caption(
         text: Option<&str>,
         caption: Option<&str>,

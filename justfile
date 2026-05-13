@@ -57,6 +57,10 @@ build-debug *FLAGS:
         echo -e "\n✅ Debug build complete — sha256: ${new_sum:0:16}…"
     fi
 
+install:
+    cp target/release/aionui-backend ~/.cargo/bin/
+    codesign --force --sign - ~/.cargo/bin/aionui-backend
+
 # Run all tests
 test:
     cargo nextest run --workspace

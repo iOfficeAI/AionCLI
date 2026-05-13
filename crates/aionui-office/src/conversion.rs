@@ -281,6 +281,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant)] // 3.14 is test data, not an approximation of PI
     fn cell_to_json_value_float() {
         let cell = calamine::Data::Float(3.14);
         let val = cell_to_json_value(&cell);

@@ -1,9 +1,12 @@
 use crate::agent_runtime::AgentRuntime;
+use crate::capability::PromptCtx;
 use crate::capability::cli_process::CliAgentProcess;
-use crate::capability::first_message_injector::{InjectionConfig, inject_first_message_prefix};
+use crate::capability::prompt_pipeline::PromptPipeline;
 use crate::capability::skill_manager::AcpSkillManager;
 use crate::factory::acp_assembler::AcpSessionParams;
-use crate::manager::acp::{AcpSession, AcpSessionEvent, PermissionRouter};
+use crate::manager::acp::{
+    AcpSession, AcpSessionEvent, ModelIdentityReminderHook, PermissionRouter, SessionNewPreludeHook,
+};
 use crate::protocol::acp::AcpProtocol;
 use crate::protocol::events::AgentStreamEvent;
 use crate::registry::CatalogSender;
@@ -90,6 +93,10 @@ pub struct AcpAgentManager {
     /// Domain event sender — session aggregate events are forwarded here
     /// for the persistence consumer (`AcpSessionSyncService`).
     pub(super) domain_event_tx: mpsc::Sender<AcpSessionEvent>,
+
+    /// Outbound prompt transformation chain. Constructed once at build
+    /// time with the two built-in hooks; not swapped at runtime.
+    pub(super) pipeline: PromptPipeline,
 
     /// Underlying CLI process (for lifecycle management: kill, is_running).
     process: Arc<CliAgentProcess>,
@@ -185,6 +192,11 @@ impl AcpAgentManager {
 
         let session = AcpSession::new(initial_mode, initial_model, initial_config);
 
+        let pipeline = PromptPipeline::new(vec![
+            Arc::new(SessionNewPreludeHook),
+            Arc::new(ModelIdentityReminderHook),
+        ]);
+
         let manager = Self {
             params,
             session: RwLock::new(session),
@@ -195,6 +207,7 @@ impl AcpAgentManager {
             permission_router,
             skill_manager,
             domain_event_tx,
+            pipeline,
         };
         Ok((manager, domain_event_rx, notification_rx))
     }
@@ -344,14 +357,9 @@ impl AcpAgentManager {
     /// brand new and still needs `session/load` (or claude-meta-resume) to
     /// re-attach to the persisted session before the next prompt. Subsequent
     /// turns — once the resume handshake has run — take the short path.
-    ///
-    /// Also consumes the first-message injection flag: resumed sessions already
-    /// have the preset_context baked into the prior conversation history.
     pub async fn set_session_id(&self, sid: String) {
         let mut session = self.session.write().await;
         session.set_session_id(DomainSessionId::new(sid));
-        session.take_needs_first_message_injection();
-        // Discarded — the session_id already came from DB, no need to re-persist.
         session.drain_events();
     }
 
@@ -406,45 +414,32 @@ impl AcpAgentManager {
 
     /// Initialize or resume a session, then send the user message.
     ///
-    /// The first real user message is augmented with `[Assistant Rules]` /
-    /// skill-index injection via a one-shot flag in `AcpSession`. This is
-    /// independent of whether `warmup` already opened the session, avoiding
-    /// a race where warmup marks the session opened before the first message
-    /// arrives.
+    /// The prompt is passed through `self.pipeline.pre_send` before being
+    /// forwarded to the CLI. Each hook in the pipeline reads one-shot flags
+    /// on `AcpSession` (e.g. `pending_session_new_prelude`,
+    /// `pending_model_notice`) and prepends the appropriate block when set.
     async fn ensure_session_and_send(&self, data: &SendMessageData) -> Result<(), AppError> {
         let sid = self.ensure_session_opened().await?;
         self.runtime.transition_to(ConversationStatus::Running);
 
-        let needs_injection = {
+        let content = {
             let mut s = self.session.write().await;
-            s.take_needs_first_message_injection()
+            let mut ctx = PromptCtx {
+                session: &mut s,
+                params: &self.params,
+                skill_manager: &self.skill_manager,
+                runtime: &self.runtime,
+            };
+            let transformed = self.pipeline.pre_send(&mut ctx, data.content.clone()).await;
+            self.commit_session_changes(&mut s).await;
+            transformed
         };
 
-        if needs_injection {
-            let injected_content = inject_first_message_prefix(
-                &data.content,
-                &self.skill_manager,
-                InjectionConfig {
-                    preset_context: self.params.preset_context.as_deref(),
-                    skills: &self.params.config.skills,
-                    custom_workspace: self.params.workspace.is_custom,
-                    native_skill_support: self
-                        .params
-                        .metadata
-                        .native_skills_dirs
-                        .as_ref()
-                        .is_some_and(|v: &Vec<String>| !v.is_empty()),
-                },
-            )
-            .await;
-            let injected = SendMessageData {
-                content: injected_content,
-                ..data.clone()
-            };
-            self.prompt_existing_session(&injected, Some(&sid)).await
-        } else {
-            self.prompt_existing_session(data, Some(&sid)).await
-        }
+        let data = SendMessageData {
+            content,
+            ..data.clone()
+        };
+        self.prompt_existing_session(&data, Some(&sid)).await
     }
 
     /// Pre-open the ACP session without sending a prompt. Called by the

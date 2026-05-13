@@ -13,6 +13,10 @@
 //! Tests are serialized via `SERIAL_LOCK` to avoid OS-level resource
 //! contention from parallel subprocess spawning (pipes, I/O scheduling).
 
+// Pre-existing: serial() MutexGuard held across await points is intentional —
+// it serializes test execution. Useless .into() is a pre-existing nit.
+#![allow(clippy::await_holding_lock, clippy::useless_conversion)]
+
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -177,6 +181,7 @@ fn event_type_name(event: &AgentStreamEvent) -> &'static str {
         AgentStreamEvent::AcpConfigOption(_) => "AcpConfigOption",
         AgentStreamEvent::AcpSessionInfo(_) => "AcpSessionInfo",
         AgentStreamEvent::AcpContextUsage(_) => "AcpContextUsage",
+        AgentStreamEvent::AcpPromptHookWarning(_) => "AcpPromptHookWarning",
         AgentStreamEvent::Finish(_) => "Finish",
         AgentStreamEvent::Error(_) => "Error",
         AgentStreamEvent::System(_) => "System",

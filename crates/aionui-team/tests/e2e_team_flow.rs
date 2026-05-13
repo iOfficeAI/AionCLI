@@ -3,6 +3,10 @@
 //! These tests verify the full flow:
 //!   MCP tool call → mailbox write → wake → send_message → finish → leader notified
 //!
+
+// Pre-existing: MutexGuard held across await points is intentional in this
+// test to maintain a short critical section for assertion, then explicitly dropped.
+#![allow(clippy::await_holding_lock)]
 //! Infrastructure used:
 //! - Real in-memory mock repo (same pattern as existing tests)
 //! - Real TCP MCP server (TeamMcpServer)

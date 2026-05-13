@@ -496,7 +496,7 @@ mod tests {
         let serialized = serde_json::to_string(&resp).unwrap();
         let deserialized: ConversationResponse = serde_json::from_str(&serialized).unwrap();
         assert_eq!(deserialized.id, resp.id);
-        assert_eq!(deserialized.pinned, true);
+        assert!(deserialized.pinned);
         assert_eq!(deserialized.pinned_at, Some(1712345678000));
         assert_eq!(deserialized.channel_chat_id.as_deref(), Some("group:42"));
     }
@@ -547,7 +547,7 @@ mod tests {
         let serialized = serde_json::to_string(&resp).unwrap();
         let deserialized: MessageResponse = serde_json::from_str(&serialized).unwrap();
         assert_eq!(deserialized.r#type, MessageType::ToolCall);
-        assert_eq!(deserialized.hidden, true);
+        assert!(deserialized.hidden);
         assert!(deserialized.msg_id.is_none());
         assert!(deserialized.status.is_none());
     }

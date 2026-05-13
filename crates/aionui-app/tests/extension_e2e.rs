@@ -680,7 +680,7 @@ async fn eq20_enable_extension_channel_persists_config_and_exposes_status() {
     assert_eq!(enable_json["data"]["success"], true);
 
     let row = repo.get_plugin("legacy-channel").await.unwrap().unwrap();
-    assert_eq!(row.enabled, true);
+    assert!(row.enabled);
     assert_eq!(row.r#type, "legacy-channel");
     assert_eq!(row.status.as_deref(), Some("stopped"));
 

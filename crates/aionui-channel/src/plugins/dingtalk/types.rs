@@ -676,7 +676,7 @@ mod tests {
         assert_eq!(cb.msgtype.as_deref(), Some("text"));
         assert_eq!(cb.text.as_ref().unwrap().content.as_deref(), Some("Hello bot"));
         assert_eq!(cb.sender_staff_id.as_deref(), Some("staff_1"));
-        assert_eq!(cb.session_webhook.is_some(), true);
+        assert!(cb.session_webhook.is_some());
         assert_eq!(cb.conversation_type.as_deref(), Some("2"));
         assert_eq!(cb.is_in_at_list, Some(true));
     }

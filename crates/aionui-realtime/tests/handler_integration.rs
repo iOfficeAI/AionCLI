@@ -92,7 +92,7 @@ where
     S: StreamExt<Item = Result<tungstenite::Message, tungstenite::Error>> + Unpin,
 {
     let timeout = Duration::from_secs(5);
-    let msg = tokio::time::timeout(timeout, async {
+    tokio::time::timeout(timeout, async {
         loop {
             match stream.next().await {
                 Some(Ok(tungstenite::Message::Text(t))) => {
@@ -112,8 +112,7 @@ where
         }
     })
     .await
-    .expect("read timed out");
-    msg
+    .expect("read timed out")
 }
 
 /// Read until a close frame is received, returning the close code.
@@ -374,6 +373,7 @@ async fn multiple_concurrent_connections() {
 
     let mut handles = Vec::new();
     for _ in 0..10 {
+        #[allow(clippy::redundant_locals)] // rebind to Copy-move into async block
         let addr = addr;
         handles.push(tokio::spawn(
             async move { connect_with_token(addr, "valid-token").await },

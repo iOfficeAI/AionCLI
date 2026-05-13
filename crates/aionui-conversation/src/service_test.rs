@@ -476,7 +476,7 @@ fn make_service_with_resolver(
     let acp_session_repo: Arc<dyn IAcpSessionRepository> = Arc::new(StubAcpSessionRepo);
     let task_mgr: Arc<dyn IWorkerTaskManager> = Arc::new(MockTaskManager::new());
     let svc = ConversationService::new(
-        std::path::PathBuf::from(std::env::temp_dir()),
+        std::env::temp_dir(),
         broadcaster.clone(),
         skill_resolver,
         task_mgr.clone(),
@@ -1111,15 +1111,13 @@ impl IMockAgent for MockAgent {
         if !existed && !self.allow_direct_confirm {
             return Err(AppError::NotFound(format!("Confirmation {call_id} not found")));
         }
-        if always_allow {
-            if let Some(conf) = confs.iter().find(|c| c.call_id == call_id) {
-                let key = match (conf.action.as_deref(), conf.command_type.as_deref()) {
-                    (Some(a), Some(ct)) => format!("{a}:{ct}"),
-                    (Some(a), None) => a.to_owned(),
-                    _ => String::new(),
-                };
-                self.approval_memory.lock().unwrap().insert(key, true);
-            }
+        if always_allow && let Some(conf) = confs.iter().find(|c| c.call_id == call_id) {
+            let key = match (conf.action.as_deref(), conf.command_type.as_deref()) {
+                (Some(a), Some(ct)) => format!("{a}:{ct}"),
+                (Some(a), None) => a.to_owned(),
+                _ => String::new(),
+            };
+            self.approval_memory.lock().unwrap().insert(key, true);
         }
         confs.retain(|c| c.call_id != call_id);
         Ok(())

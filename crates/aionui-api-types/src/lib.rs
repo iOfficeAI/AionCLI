@@ -1,5 +1,6 @@
 //! All HTTP request/response DTOs shared across the API surface.
 mod acp;
+mod acp_prompt_hook;
 mod agent_build_extra;
 mod agent_discovery;
 mod assistant;
@@ -31,6 +32,7 @@ pub use acp::{
     SetModelRequest, SideQuestionRequest, SideQuestionResponse, TryConnectCustomAgentRequest,
     TryConnectCustomAgentResponse, WorkspaceBrowseQuery, WorkspaceEntry,
 };
+pub use acp_prompt_hook::AcpPromptHookWarningPayload;
 pub use agent_build_extra::{
     AcpBuildExtra, AcpModelInfo, AionrsBuildExtra, OpenClawBuildExtra, OpenClawGatewayConfig, RemoteBuildExtra,
     SlashCommandItem,

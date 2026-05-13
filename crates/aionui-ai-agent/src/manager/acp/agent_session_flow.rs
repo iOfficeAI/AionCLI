@@ -35,6 +35,9 @@ impl AcpAgentManager {
                 session.apply_advertised_config_options(config_options);
             }
             session.set_session_id(DomainSessionId::new(sid.clone()));
+            // Mark that the next prompt should carry the first-prompt prelude
+            // (preset_context + skill index). Consumed by SessionNewPreludeHook.
+            session.mark_pending_session_new_prelude();
             self.commit_session_changes(&mut session).await;
         }
         self.emit_snapshot_events().await;
@@ -69,18 +72,18 @@ impl AcpAgentManager {
             meta.insert("claudeCode".into(), Value::Object(claude_code));
 
             let req = self.params.new_session_request().meta(meta);
-            let session_response = self.protocol.new_session(req).await.map_err(AppError::from)?;
-            let new_sid = session_response.session_id.to_string();
+            let new_response = self.protocol.new_session(req).await.map_err(AppError::from)?;
+            let new_sid = new_response.session_id.to_string();
 
             {
                 let mut session = self.session.write().await;
-                if let Some(models) = session_response.models {
+                if let Some(models) = new_response.models {
                     session.apply_advertised_models(models);
                 }
-                if let Some(modes) = session_response.modes {
+                if let Some(modes) = new_response.modes {
                     session.apply_advertised_modes(modes);
                 }
-                if let Some(config_options) = session_response.config_options {
+                if let Some(config_options) = new_response.config_options {
                     session.apply_advertised_config_options(config_options);
                 }
                 session.set_session_id(DomainSessionId::new(new_sid.clone()));
@@ -112,29 +115,30 @@ impl AcpAgentManager {
             if !self.params.mcp_servers.is_empty() {
                 load_req = load_req.mcp_servers(self.params.mcp_servers.clone());
             }
-            let resp = self.protocol.load_session(load_req).await.map_err(AppError::from)?;
+            let load_response = self.protocol.load_session(load_req).await.map_err(AppError::from)?;
 
             {
                 let mut session = self.session.write().await;
-                if let Some(mut models) = resp.models {
+                if let Some(mut models) = load_response.models {
                     if let Some(db_current) = preloaded_model {
                         models.current_model_id = db_current.into();
                     }
                     session.apply_advertised_models(models);
                 }
-                if let Some(mut modes) = resp.modes {
+                if let Some(mut modes) = load_response.modes {
                     if let Some(db_current) = preloaded_mode {
                         modes.current_mode_id = db_current.into();
                     }
                     session.apply_advertised_modes(modes);
                 }
-                if let Some(config_options) = resp.config_options {
+                if let Some(config_options) = load_response.config_options {
                     session.apply_advertised_config_options(config_options);
                 }
                 session.set_session_id(DomainSessionId::new(session_id.to_owned()));
                 self.commit_session_changes(&mut session).await;
             }
             self.emit_snapshot_events().await;
+
             self.reconcile_session(session_id).await;
             return Ok(session_id.to_owned());
         }
@@ -160,27 +164,7 @@ impl AcpAgentManager {
     ) -> Result<(), AppError> {
         let sid = session_id.ok_or_else(|| AppError::Internal("Cannot prompt: no session ID available".into()))?;
 
-        // Take the pending model notice (if any) under the session write
-        // lock so the next prompt after this one does not re-inject it.
-        // No `.await` inside the block — the guard must be released
-        // before we call `protocol.prompt`.
-        let notice_label = {
-            let mut session = self.session.write().await;
-            session.take_pending_model_notice().map(|id| {
-                // Prefer the advertised label (human-readable) over the raw id.
-                session
-                    .model_info()
-                    .and_then(|m| {
-                        m.available_models
-                            .iter()
-                            .find(|am| am.model_id.0.as_ref() == id.as_str())
-                            .map(|am| am.name.clone())
-                    })
-                    .unwrap_or_else(|| id.as_str().to_owned())
-            })
-        };
-
-        let content = render_prompt_content(&data.content, notice_label.as_deref());
+        let content = data.content.clone();
 
         // Emit Start event
         self.runtime.emit(AgentStreamEvent::Start(StartEventData {
@@ -272,20 +256,6 @@ impl AcpAgentManager {
     }
 }
 
-/// Prepend a model-identity reminder to the user content if a notice
-/// is pending. Used by `prompt_existing_session` before sending so the
-/// CLI-hosted LLM answers with the user-selected model rather than the
-/// stale identity baked into its cached system prompt at launch.
-fn render_prompt_content(content: &str, pending_model_notice: Option<&str>) -> String {
-    match pending_model_notice {
-        Some(label) => {
-            let reminder = crate::capability::model_identity_reminder::render_model_identity_reminder(label);
-            format!("{reminder}{content}")
-        }
-        None => content.to_owned(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     //! Contract tests for the post-`warmup_session` session invariant.
@@ -363,14 +333,5 @@ mod tests {
             session.drain_events().is_empty(),
             "second warmup must not emit duplicate domain events"
         );
-    }
-
-    #[test]
-    fn render_prepends_reminder_when_notice_present_and_passthrough_otherwise() {
-        let with_notice = super::render_prompt_content("hello", Some("opus"));
-        assert!(with_notice.starts_with("<system-reminder>"));
-        assert!(with_notice.ends_with("hello"));
-        let without = super::render_prompt_content("hello", None);
-        assert_eq!(without, "hello");
     }
 }

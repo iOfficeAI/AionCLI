@@ -880,7 +880,7 @@ async fn create_acp_skips_seed_when_extra_has_empty_runtime_fields() {
     assert!(
         runtime
             .as_ref()
-            .map_or(true, |r| r.current_mode_id.is_none() && r.current_model_id.is_none()),
+            .is_none_or(|r| r.current_mode_id.is_none() && r.current_model_id.is_none()),
         "empty runtime fields should not produce a seed: got {runtime:?}"
     );
 }

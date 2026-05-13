@@ -54,6 +54,7 @@ fn create_xlsx_with_merges(dir: &TempDir) -> PathBuf {
     path
 }
 
+#[allow(clippy::approx_constant)] // 3.14 is test data, not an approximation of PI
 fn create_xlsx_with_types(dir: &TempDir) -> PathBuf {
     let path = dir.path().join("types.xlsx");
     let mut wb = Workbook::new();
@@ -211,6 +212,7 @@ async fn dc8b_ppt_to_json_officecli_not_installed() {
 
 // Excel cell type handling
 #[tokio::test]
+#[allow(clippy::approx_constant)] // 3.14 is test data, not an approximation of PI
 async fn excel_to_json_cell_types() {
     let dir = TempDir::new().unwrap();
     let path = create_xlsx_with_types(&dir);

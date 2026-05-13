@@ -3,6 +3,9 @@
 //! Uses the `rmcp` crate (Rust MCP SDK) for protocol handling, ensuring full
 //! compatibility with Claude CLI's MCP client implementation.
 //!
+
+// Pre-existing layout: `forward_tool` impl block lives after the test module.
+#![allow(clippy::items_after_test_module)]
 //! Tool calls are forwarded as HTTP POST to the Guide server running in the main
 //! process at `http://127.0.0.1:{AION_MCP_PORT}/tool`.
 

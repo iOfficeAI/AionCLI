@@ -8,6 +8,10 @@
 //! - System instruction building
 //! - First message preparation
 
+// Pre-existing: ENV_MUTEX MutexGuard held across await points is intentional —
+// it serializes env-var mutation across tests.
+#![allow(clippy::await_holding_lock)]
+
 use std::fs;
 use std::sync::{Arc, Mutex};
 

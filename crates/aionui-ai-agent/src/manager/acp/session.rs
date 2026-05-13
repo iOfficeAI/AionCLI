@@ -51,11 +51,18 @@ struct Advertised {
 pub struct AcpSession {
     session_id: Option<SessionId>,
     opened: bool,
-    /// Whether the first real user message still needs preset_context /
-    /// skill-index injection. Starts `true` and is consumed (set to `false`)
-    /// on the first `prompt` call. Separate from `opened` because `warmup`
-    /// may open the session before any message is sent.
-    needs_first_message_injection: bool,
+    /// Whether `open_session_new` has just completed and the next prompt
+    /// should receive preset_context / skill-index injection.
+    ///
+    /// Lifecycle:
+    /// - writer: `AcpAgentManager::open_session_new` after a successful
+    ///   `session/new` handshake.
+    /// - reader: `SessionNewPreludeHook` via `take_pending_session_new_prelude`.
+    /// - invalidation: any `take_*` call drains it to `false`.
+    ///
+    /// Starts `false` so resume paths, warmup-only flows, and aborted
+    /// session/new attempts all correctly observe "no prelude pending".
+    pending_session_new_prelude: bool,
     desired: Desired,
     observed: Observed,
     advertised: Advertised,
@@ -78,7 +85,7 @@ impl AcpSession {
         Self {
             session_id: None,
             opened: false,
-            needs_first_message_injection: true,
+            pending_session_new_prelude: false,
             desired: Desired {
                 mode_id: initial_mode,
                 model_id: initial_model,
@@ -127,10 +134,16 @@ impl AcpSession {
         }
     }
 
-    /// Returns `true` exactly once: on the first real user message.
-    /// After this call the flag is consumed and future calls return `false`.
-    pub fn take_needs_first_message_injection(&mut self) -> bool {
-        std::mem::replace(&mut self.needs_first_message_injection, false)
+    /// Set the flag signalling that the next prompt carries the first
+    /// post-`session/new` payload. Idempotent.
+    pub fn mark_pending_session_new_prelude(&mut self) {
+        self.pending_session_new_prelude = true;
+    }
+
+    /// Consume the prelude flag. Returns `true` exactly once after
+    /// `mark_pending_session_new_prelude`; subsequent calls return `false`.
+    pub fn take_pending_session_new_prelude(&mut self) -> bool {
+        std::mem::replace(&mut self.pending_session_new_prelude, false)
     }
 }
 
@@ -938,5 +951,35 @@ mod tests {
                 mode: ModeId::new("plan")
             }]
         );
+    }
+
+    #[test]
+    fn pending_session_new_prelude_defaults_to_false() {
+        let mut s = make_session();
+        assert!(!s.take_pending_session_new_prelude());
+    }
+
+    #[test]
+    fn mark_pending_session_new_prelude_sets_true() {
+        let mut s = make_session();
+        s.mark_pending_session_new_prelude();
+        assert!(s.take_pending_session_new_prelude());
+    }
+
+    #[test]
+    fn take_pending_session_new_prelude_is_destructive() {
+        let mut s = make_session();
+        s.mark_pending_session_new_prelude();
+        assert!(s.take_pending_session_new_prelude());
+        assert!(!s.take_pending_session_new_prelude());
+    }
+
+    #[test]
+    fn mark_pending_session_new_prelude_is_idempotent() {
+        let mut s = make_session();
+        s.mark_pending_session_new_prelude();
+        s.mark_pending_session_new_prelude();
+        assert!(s.take_pending_session_new_prelude());
+        assert!(!s.take_pending_session_new_prelude());
     }
 }

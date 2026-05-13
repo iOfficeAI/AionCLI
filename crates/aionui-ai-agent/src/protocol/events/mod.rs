@@ -43,6 +43,7 @@ pub enum AgentStreamEvent {
     AcpConfigOption(serde_json::Value),
     AcpSessionInfo(serde_json::Value),
     AcpContextUsage(serde_json::Value),
+    AcpPromptHookWarning(serde_json::Value),
     SlashCommandsUpdated(serde_json::Value),
     AvailableCommands(AvailableCommandsEventData),
     Finish(FinishEventData),

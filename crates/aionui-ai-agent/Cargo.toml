@@ -48,6 +48,10 @@ test-support = []
 
 [dev-dependencies]
 tempfile = "3"
+tokio = { workspace = true, features = ["full"] }
+aionui-common.workspace = true
+aionui-extension.workspace = true
+aionui-db.workspace = true
 
 # Integration tests under `tests/` need the `AgentInstance::Mock` variant.
 # Unlike unit tests (which see `cfg(test)` on the library), integration
