@@ -152,7 +152,7 @@ impl AionClient {
 }
 
 /// Parse a WebSocket text message into a ServerEvent.
-pub(crate) fn parse_ws_message(raw: &str) -> Option<ServerEvent> {
+pub fn parse_ws_message(raw: &str) -> Option<ServerEvent> {
     let msg: Value = serde_json::from_str(raw).ok()?;
     let name = msg.get("name")?.as_str()?;
 
