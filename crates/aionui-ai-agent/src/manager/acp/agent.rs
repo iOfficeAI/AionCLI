@@ -515,8 +515,14 @@ impl crate::agent_task::IAgentTask for AcpAgentManager {
                 self.runtime.emit_finish(None);
             }
             Err(err) => {
-                warn!(error = %ErrorChain(err), "ACP send_message failed");
-                self.runtime.emit_error(user_facing_message(err));
+                let augmented = self.augment_with_stderr(err).await;
+                if let Some(d) = augmented.as_deref() {
+                    warn!(error = %ErrorChain(err), augmented = %d, "ACP send_message failed");
+                } else {
+                    warn!(error = %ErrorChain(err), "ACP send_message failed");
+                }
+                let payload = augmented.unwrap_or_else(|| user_facing_message(err));
+                self.runtime.emit_error(payload);
             }
         }
         result
@@ -613,6 +619,40 @@ impl AcpAgentManager {
     }
 }
 
+impl AcpAgentManager {
+    /// If `err` is the "SDK gave us default Internal error with no data" shape,
+    /// peek the child's recent stderr and try to surface a more informative
+    /// message. Returns `None` when augmentation does not apply or finds nothing.
+    ///
+    /// Why string-matching: `AppError::BadGateway(String)` has discarded the
+    /// structured `AcpError` by the time we see it. The default-message
+    /// signature is narrow and stable enough that matching on the inner string
+    /// is cheaper than threading typed errors through the manager API. Keep
+    /// this in sync with `AcpError::Display` in
+    /// `crates/aionui-ai-agent/src/protocol/error.rs` if its fallback wording
+    /// changes.
+    async fn augment_with_stderr(&self, err: &AppError) -> Option<String> {
+        const SDK_DEFAULT_BAD_GATEWAY_PREFIX: &str = "Bad gateway: Agent internal error (code ";
+
+        let display = err.to_string();
+        // Match the Display produced by Task 1 for `AgentInternal { message=SDK
+        // default, data=None }` after wrapping in `AppError::BadGateway`.
+        // Examples that match:  "Bad gateway: Agent internal error (code -32603)"
+        //                       "Bad gateway: Agent internal error (code -32099)"
+        // Do NOT match anything that has a real upstream message after the prefix.
+        let is_default_internal =
+            display.starts_with(SDK_DEFAULT_BAD_GATEWAY_PREFIX) && display.ends_with(')');
+        if !is_default_internal {
+            return None;
+        }
+
+        // Read the last 32 lines of the child's stderr (cheap; ring buffer is
+        // bounded to 8 KiB ≈ a few hundred lines max).
+        let tail = self.process.peek_stderr_tail(32).await;
+        super::stderr_error_extractor::extract_error_message(&tail)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::user_facing_message;
@@ -647,5 +687,86 @@ mod tests {
             user_facing_message(&err),
             "Internal error: API Error: Internal server error"
         );
+    }
+
+    // ---- augment_with_stderr behavioral tests ------------------------------
+    //
+    // We can't easily construct a real AcpAgentManager in a unit test (it
+    // needs the full ACP plumbing). Instead we test the *composition* of
+    // Task 3's peek_stderr_tail + Task 4's extract_error_message + this
+    // task's "SDK default Display" shape detection by spawning a real
+    // CliAgentProcess that writes the chosen stderr, then running the same
+    // detection+peek+extract pipeline against it.
+    //
+    // The helper below MIRRORS `AcpAgentManager::augment_with_stderr`. If
+    // you change the production helper (e.g. the prefix string, peek line
+    // count, or extractor module path) update this helper to match.
+
+    use super::CliAgentProcess;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    async fn spawn_with_stderr(stderr_payload: &str) -> Arc<CliAgentProcess> {
+        use aionui_common::CommandSpec;
+        // Heredoc lets us embed apostrophes etc. without quoting headaches.
+        let script = format!("cat <<'EOF' >&2\n{stderr_payload}\nEOF");
+        let config = CommandSpec {
+            command: "sh".into(),
+            args: vec!["-c".into(), script],
+            env: vec![],
+            cwd: None,
+        };
+        let proc = CliAgentProcess::spawn(config).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), proc.wait_for_exit())
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        Arc::new(proc)
+    }
+
+    async fn augment_via_process(
+        proc: &Arc<CliAgentProcess>,
+        err: &AppError,
+    ) -> Option<String> {
+        const SDK_DEFAULT_BAD_GATEWAY_PREFIX: &str = "Bad gateway: Agent internal error (code ";
+        let display = err.to_string();
+        let is_default_internal =
+            display.starts_with(SDK_DEFAULT_BAD_GATEWAY_PREFIX) && display.ends_with(')');
+        if !is_default_internal {
+            return None;
+        }
+        let tail = proc.peek_stderr_tail(32).await;
+        super::super::stderr_error_extractor::extract_error_message(&tail)
+    }
+
+    #[tokio::test]
+    async fn augments_when_codex_usage_limit_in_stderr() {
+        let stderr = "\u{1b}[2m2026-05-13T20:01:21Z\u{1b}[0m \u{1b}[31mERROR\u{1b}[0m codex_acp::thread: Unhandled error during turn: You've hit your usage limit. Try again later. Some(UsageLimitExceeded)";
+        let proc = spawn_with_stderr(stderr).await;
+        let err = AppError::BadGateway("Agent internal error (code -32603)".into());
+
+        let augmented = augment_via_process(&proc, &err).await;
+        let msg = augmented.expect("must augment when stderr matches allowlist");
+        assert!(msg.to_lowercase().contains("usage limit"), "got {msg}");
+    }
+
+    #[tokio::test]
+    async fn does_not_augment_when_message_is_specific() {
+        // 1BF case: SDK already gave us a real message → don't second-guess.
+        let proc = spawn_with_stderr("ERROR something: usage limit exceeded").await;
+        let err = AppError::BadGateway(
+            "Internal error: API Error: Internal server error".into(),
+        );
+
+        assert!(augment_via_process(&proc, &err).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn returns_none_when_stderr_has_no_allowlisted_keywords() {
+        let stderr = "ERROR widget_loader: failed to load module 'foo'";
+        let proc = spawn_with_stderr(stderr).await;
+        let err = AppError::BadGateway("Agent internal error (code -32603)".into());
+
+        assert!(augment_via_process(&proc, &err).await.is_none());
     }
 }

@@ -81,7 +81,6 @@ fn matches_allowlist(line_lower: &str) -> bool {
 ///
 /// Returns `None` if nothing matches the allowlist — caller should keep its
 /// existing error message rather than substitute an empty string.
-#[allow(dead_code)]
 pub(super) fn extract_error_message(stderr_tail: &str) -> Option<String> {
     if stderr_tail.trim().is_empty() {
         return None;
