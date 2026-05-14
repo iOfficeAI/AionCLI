@@ -614,7 +614,7 @@ impl AcpAgentManager {
 }
 
 #[cfg(test)]
-mod user_facing_message_tests {
+mod tests {
     use super::user_facing_message;
     use aionui_common::AppError;
 
