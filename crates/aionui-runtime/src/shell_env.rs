@@ -109,6 +109,9 @@ fn platform_extra_bins_at(home: Option<&Path>) -> Vec<PathBuf> {
         push_if_dir(h.join(".deno").join("bin"));
         push_if_dir(h.join(".local").join("bin"));
         push_if_dir(h.join(".volta").join("bin"));
+        for nvm_bin in nvm_version_bins(h) {
+            push_if_dir(nvm_bin);
+        }
     }
 
     #[cfg(windows)]
@@ -133,6 +136,24 @@ fn platform_extra_bins_at(home: Option<&Path>) -> Vec<PathBuf> {
     }
 
     out
+}
+
+fn nvm_version_bins(home: &Path) -> Vec<PathBuf> {
+    let versions_dir = home.join(".nvm").join("versions").join("node");
+    let Ok(entries) = std::fs::read_dir(&versions_dir) else {
+        return Vec::new();
+    };
+
+    let mut bins: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path().join("bin"))
+        .filter(|bin| bin.is_dir())
+        .collect();
+
+    // Prefer newer-looking versions first, matching the user's active
+    // Node installation ahead of older fallbacks when multiple bins exist.
+    bins.sort_by(|a, b| b.cmp(a));
+    bins
 }
 
 #[cfg(unix)]
@@ -275,6 +296,8 @@ mod tests {
         // 检查但应被过滤掉。
         std::fs::create_dir_all(home.join(".bun/bin")).unwrap();
         std::fs::create_dir_all(home.join(".cargo/bin")).unwrap();
+        std::fs::create_dir_all(home.join(".nvm/versions/node/v22.22.0/bin")).unwrap();
+        std::fs::create_dir_all(home.join(".nvm/versions/node/v25.1.0/bin")).unwrap();
 
         let bins = platform_extra_bins_at(Some(home));
 
@@ -286,6 +309,27 @@ mod tests {
         assert!(
             bins.iter().any(|p| p.ends_with(".cargo/bin")),
             "expected ~/.cargo/bin in result"
+        );
+        assert!(
+            bins.iter().any(|p| p.ends_with(".nvm/versions/node/v22.22.0/bin")),
+            "expected ~/.nvm/versions/node/v22.22.0/bin in result"
+        );
+        assert!(
+            bins.iter().any(|p| p.ends_with(".nvm/versions/node/v25.1.0/bin")),
+            "expected ~/.nvm/versions/node/v25.1.0/bin in result"
+        );
+        let nvm_bins: Vec<_> = bins
+            .iter()
+            .filter(|p| p.to_string_lossy().contains(".nvm/versions/node/"))
+            .collect();
+        assert_eq!(nvm_bins.len(), 2);
+        assert!(
+            nvm_bins[0].ends_with(".nvm/versions/node/v25.1.0/bin"),
+            "expected newer NVM bin first"
+        );
+        assert!(
+            nvm_bins[1].ends_with(".nvm/versions/node/v22.22.0/bin"),
+            "expected older NVM bin second"
         );
 
         // 没创建的目录不应出现
