@@ -136,10 +136,7 @@ mod tests {
         let result = extract_error_message(STDERR_USAGE_LIMIT);
         let msg = result.expect("usage limit must match");
         assert!(msg.contains("usage limit"), "got {msg}");
-        assert!(
-            !msg.contains("\u{1b}["),
-            "ANSI escapes must be stripped; got {msg:?}"
-        );
+        assert!(!msg.contains("\u{1b}["), "ANSI escapes must be stripped; got {msg:?}");
         assert!(
             !msg.contains("ERROR"),
             "tracing level prefix should not leak into user message; got {msg}"
@@ -206,7 +203,8 @@ mod tests {
     fn strips_ansi_then_keeps_only_message_after_last_colon() {
         // tracing format: "<timestamp> <LEVEL> <target>: <fields>: <message>"
         // We want just the message tail.
-        let stderr = "\u{1b}[2m2026-05-13T20:01:21Z\u{1b}[0m \u{1b}[31mERROR\u{1b}[0m foo::bar: ctx=abc: usage limit exceeded";
+        let stderr =
+            "\u{1b}[2m2026-05-13T20:01:21Z\u{1b}[0m \u{1b}[31mERROR\u{1b}[0m foo::bar: ctx=abc: usage limit exceeded";
         let result = extract_error_message(stderr).expect("must match");
         assert_eq!(result, "usage limit exceeded");
     }

@@ -87,10 +87,7 @@ impl std::fmt::Display for AcpError {
                 )
             }
             AcpError::Disconnected { exit_code, signal, .. } => {
-                write!(
-                    f,
-                    "Agent process disconnected (exit={exit_code:?}, signal={signal:?})"
-                )
+                write!(f, "Agent process disconnected (exit={exit_code:?}, signal={signal:?})")
             }
             AcpError::AuthRequired => f.write_str("Authentication required"),
             AcpError::SessionNotFound { session_id } => {
@@ -104,8 +101,8 @@ impl std::fmt::Display for AcpError {
             }
             AcpError::AgentInternal { message, code, data } => {
                 let trimmed = message.trim();
-                let is_default = trimmed.is_empty()
-                    || SDK_DEFAULT_MESSAGES.iter().any(|d| d.eq_ignore_ascii_case(trimmed));
+                let is_default =
+                    trimmed.is_empty() || SDK_DEFAULT_MESSAGES.iter().any(|d| d.eq_ignore_ascii_case(trimmed));
                 if is_default {
                     write!(f, "Agent internal error (code {code})")?;
                 } else {
@@ -114,8 +111,7 @@ impl std::fmt::Display for AcpError {
                 if let Some(data) = data {
                     // serde_json::to_string on a Value cannot actually fail;
                     // the fallback exists only because Display must be infallible.
-                    let compact = serde_json::to_string(data)
-                        .unwrap_or_else(|_| "<unserializable data>".to_owned());
+                    let compact = serde_json::to_string(data).unwrap_or_else(|_| "<unserializable data>".to_owned());
                     write!(f, " ({compact})")?;
                 }
                 Ok(())
@@ -156,13 +152,11 @@ impl AcpError {
                 method: context.to_owned(),
             },
             ErrorCode::InvalidParams => AcpError::InvalidParams { message: err.message },
-            ErrorCode::ParseError | ErrorCode::InvalidRequest | ErrorCode::InternalError => {
-                AcpError::AgentInternal {
-                    message: err.message,
-                    code: i32::from(err.code),
-                    data: err.data,
-                }
-            }
+            ErrorCode::ParseError | ErrorCode::InvalidRequest | ErrorCode::InternalError => AcpError::AgentInternal {
+                message: err.message,
+                code: i32::from(err.code),
+                data: err.data,
+            },
             _ => {
                 let code = i32::from(err.code);
                 // -32001, -32002: additional session-not-found codes used by some agents
@@ -384,8 +378,7 @@ mod tests {
 
     #[test]
     fn from_sdk_captures_data_payload() {
-        let sdk_err = SdkError::internal_error()
-            .data(serde_json::json!({"reason": "rate_limited", "retry_after": 30}));
+        let sdk_err = SdkError::internal_error().data(serde_json::json!({"reason": "rate_limited", "retry_after": 30}));
         let acp = AcpError::from_sdk(sdk_err, "context");
         match acp {
             AcpError::AgentInternal { code, message, data } => {
@@ -464,10 +457,7 @@ mod tests {
         );
         assert!(display.contains("retry_after"), "data must be appended; got {display}");
         assert!(display.contains("30"), "data value must be appended; got {display}");
-        assert!(
-            !display.contains('\n'),
-            "data must be inline; got {display}"
-        );
+        assert!(!display.contains('\n'), "data must be inline; got {display}");
     }
 
     #[test]

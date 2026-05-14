@@ -37,9 +37,7 @@ fn user_facing_message(err: &AppError) -> String {
     // Each variant's Display starts with `"<Tag>: "`. Find the first ": " and
     // return what follows. Variants without a colon (e.g. `RateLimited` →
     // "Rate limited") fall through to the full string.
-    full.split_once(": ")
-        .map(|(_, rest)| rest.to_owned())
-        .unwrap_or(full)
+    full.split_once(": ").map(|(_, rest)| rest.to_owned()).unwrap_or(full)
 }
 
 use super::mode_normalize::normalize_requested_mode;
@@ -648,8 +646,7 @@ impl AcpAgentManager {
         // Examples that match:  "Bad gateway: Agent internal error (code -32603)"
         //                       "Bad gateway: Agent internal error (code -32099)"
         // Do NOT match anything that has a real upstream message after the prefix.
-        let is_default_internal =
-            display.starts_with(SDK_DEFAULT_BAD_GATEWAY_PREFIX) && display.ends_with(')');
+        let is_default_internal = display.starts_with(SDK_DEFAULT_BAD_GATEWAY_PREFIX) && display.ends_with(')');
         if !is_default_internal {
             return None;
         }
@@ -669,10 +666,7 @@ mod tests {
     #[test]
     fn strips_bad_gateway_prefix() {
         let err = AppError::BadGateway("API Error: Internal server error".into());
-        assert_eq!(
-            user_facing_message(&err),
-            "API Error: Internal server error"
-        );
+        assert_eq!(user_facing_message(&err), "API Error: Internal server error");
     }
 
     #[test]
@@ -732,14 +726,10 @@ mod tests {
         Arc::new(proc)
     }
 
-    async fn augment_via_process(
-        proc: &Arc<CliAgentProcess>,
-        err: &AppError,
-    ) -> Option<String> {
+    async fn augment_via_process(proc: &Arc<CliAgentProcess>, err: &AppError) -> Option<String> {
         const SDK_DEFAULT_BAD_GATEWAY_PREFIX: &str = "Bad gateway: Agent internal error (code ";
         let display = err.to_string();
-        let is_default_internal =
-            display.starts_with(SDK_DEFAULT_BAD_GATEWAY_PREFIX) && display.ends_with(')');
+        let is_default_internal = display.starts_with(SDK_DEFAULT_BAD_GATEWAY_PREFIX) && display.ends_with(')');
         if !is_default_internal {
             return None;
         }
@@ -763,9 +753,7 @@ mod tests {
     async fn does_not_augment_when_message_is_specific() {
         // 1BF case: SDK already gave us a real message → don't second-guess.
         let proc = spawn_with_stderr("ERROR something: usage limit exceeded").await;
-        let err = AppError::BadGateway(
-            "Internal error: API Error: Internal server error".into(),
-        );
+        let err = AppError::BadGateway("Internal error: API Error: Internal server error".into());
 
         assert!(augment_via_process(&proc, &err).await.is_none());
     }

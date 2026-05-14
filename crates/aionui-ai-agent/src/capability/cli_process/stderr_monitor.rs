@@ -73,9 +73,7 @@ mod tests {
 
     #[tokio::test]
     async fn peek_stderr_tail_returns_last_n_lines() {
-        let config = simple_script_config(
-            "for i in 1 2 3 4 5; do echo \"line $i\" >&2; done",
-        );
+        let config = simple_script_config("for i in 1 2 3 4 5; do echo \"line $i\" >&2; done");
         let proc = CliAgentProcess::spawn(config).await.unwrap();
 
         timeout(Duration::from_secs(5), proc.wait_for_exit()).await.unwrap();
