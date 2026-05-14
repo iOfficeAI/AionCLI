@@ -206,11 +206,12 @@ impl CliAgentProcess {
     ///
     /// Used by error-augmentation paths (`AcpAgentManager::send_message`) that
     /// need to surface tracing-level error context the SDK didn't include in
-    /// its JSON-RPC response. Returns an owned `String` so the buffer mutex
-    /// is released immediately.
+    /// its JSON-RPC response. Returns an owned `String`; the buffer lock is
+    /// held for the duration of this call (microseconds at the bounded sizes
+    /// we read) and dropped before the result is returned.
     ///
-    /// `max_lines == 0` returns an empty string. Trailing newline (if any) is
-    /// preserved — the caller may trim if they care.
+    /// `max_lines == 0` returns an empty string. The returned string has no
+    /// trailing newline — the caller may append one if they want.
     #[allow(dead_code)] // Called by error-augmentation path in AcpAgentManager::send_message (Task 5)
     pub async fn peek_stderr_tail(&self, max_lines: usize) -> String {
         if max_lines == 0 {
