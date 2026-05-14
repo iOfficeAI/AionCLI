@@ -40,8 +40,10 @@ pub(crate) enum AcpError {
     InvalidParams { message: String },
 
     /// Agent reported an internal error. `data` carries the optional JSON-RPC
-    /// `error.data` payload from the agent — see [`AcpError::display`] for how
+    /// `error.data` payload from the agent — see the [`Display`] impl for how
     /// it is rendered.
+    ///
+    /// [`Display`]: std::fmt::Display
     AgentInternal {
         message: String,
         code: i32,
@@ -59,6 +61,10 @@ pub(crate) enum AcpError {
 /// JSON-RPC default message strings that carry no useful information.
 /// When `AgentInternal` arrives with one of these as its `message`, we fall
 /// back to a diagnostic display ("Agent internal error (code -32603)").
+///
+/// These strings are copied from `ErrorCode`'s `strum::Display` attributes in
+/// `agent-client-protocol-schema`. If the SDK changes them, update this list
+/// to avoid silently reverting to the diagnostic fallback.
 const SDK_DEFAULT_MESSAGES: &[&str] = &[
     "Parse error",
     "Invalid request",
@@ -106,6 +112,8 @@ impl std::fmt::Display for AcpError {
                     f.write_str(trimmed)?;
                 }
                 if let Some(data) = data {
+                    // serde_json::to_string on a Value cannot actually fail;
+                    // the fallback exists only because Display must be infallible.
                     let compact = serde_json::to_string(data)
                         .unwrap_or_else(|_| "<unserializable data>".to_owned());
                     write!(f, " ({compact})")?;
@@ -178,7 +186,7 @@ impl AcpError {
 /// leaves this crate.
 ///
 /// **Security:** `StartupCrash` and `Disconnected` contain `stderr` which may
-/// hold sensitive data. The `Display` impl (from `thiserror`) only includes
+/// hold sensitive data. The `Display` impl only includes
 /// `exit_code` and `signal`. `stderr` is available for structured logging
 /// (`tracing`) but never serialized into HTTP responses.
 impl From<AcpError> for AppError {
@@ -432,6 +440,33 @@ mod tests {
         assert!(
             display.contains("-32603"),
             "Display must include the JSON-RPC code as a diagnostic when message is empty/default; got {display}"
+        );
+    }
+
+    #[test]
+    fn agent_internal_display_appends_data_when_message_is_sdk_default() {
+        // Real-world shape: SDK returned its default `"Internal error"` but
+        // attached structured data. Display must use the diagnostic header
+        // AND append the data.
+        let err = AcpError::AgentInternal {
+            message: "Internal error".into(),
+            code: -32603,
+            data: Some(serde_json::json!({"retry_after": 30})),
+        };
+        let display = err.to_string();
+        assert!(
+            display.contains("Agent internal error"),
+            "header must use diagnostic fallback when message is the SDK default; got {display}"
+        );
+        assert!(
+            display.contains("-32603"),
+            "header must include the code; got {display}"
+        );
+        assert!(display.contains("retry_after"), "data must be appended; got {display}");
+        assert!(display.contains("30"), "data value must be appended; got {display}");
+        assert!(
+            !display.contains('\n'),
+            "data must be inline; got {display}"
         );
     }
 
