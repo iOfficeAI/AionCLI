@@ -1,68 +1,17 @@
+mod cli;
+
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::Parser;
 use tokio::net::TcpListener;
 use tracing::info;
 use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 use aionui_app::{AppConfig, AppServices, bridge, create_router, guide_stdio, team_stdio};
-
-#[derive(Parser)]
-#[command(name = "aionui-backend", about = "AionUi Backend Server")]
-struct Cli {
-    /// Host address to listen on.
-    #[arg(long, default_value_t = String::from(aionui_common::constants::DEFAULT_HOST))]
-    host: String,
-
-    /// Port number to listen on.
-    #[arg(long, default_value_t = aionui_common::constants::DEFAULT_PORT)]
-    port: u16,
-
-    /// Data directory for database and file storage.
-    #[arg(long, default_value = "data")]
-    data_dir: PathBuf,
-
-    /// Working directory for conversation workspaces.
-    /// Falls back to AIONUI_WORK_DIR env, then to data-dir.
-    #[arg(long)]
-    work_dir: Option<PathBuf>,
-
-    /// Host application version used for extension engine compatibility.
-    #[arg(long, default_value_t = env!("CARGO_PKG_VERSION").to_string())]
-    app_version: String,
-
-    /// Run in local embedded mode (skip authentication, use system_default_user).
-    #[arg(long)]
-    local: bool,
-
-    /// Directory for log files. Defaults to {data-dir}/logs/.
-    #[arg(long)]
-    log_dir: Option<PathBuf>,
-
-    /// Log level filter (e.g. "info", "debug", "info,aionui_mcp=trace").
-    #[arg(long)]
-    log_level: Option<String>,
-
-    #[command(subcommand)]
-    command: Option<Command>,
-}
-
-#[derive(Subcommand)]
-// `Mcp` prefix is load-bearing — clap derives kebab-case subcommand names
-// (`mcp-bridge`, `mcp-guide-stdio`, `mcp-team-stdio`) that external callers
-// (ACP agent CLI, team MCP bridge spec) depend on verbatim.
-#[allow(clippy::enum_variant_names)]
-enum Command {
-    /// Stdio ↔ TCP bridge for the team MCP server (spawned by the ACP agent CLI).
-    McpBridge,
-    /// MCP stdio server for team-guide tools (spawned by the ACP agent CLI).
-    McpGuideStdio,
-    /// MCP stdio server for team tools (spawned by the ACP agent CLI).
-    McpTeamStdio,
-}
+use cli::{Cli, Command};
 
 const NOISE_SUPPRESSIONS: &[&str] = &["sqlx::query=warn", "hyper_util=warn", "reqwest=warn"];
 
