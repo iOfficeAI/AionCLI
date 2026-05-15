@@ -122,11 +122,18 @@ fn platform_extra_bins_at(home: Option<&Path>) -> Vec<PathBuf> {
         if let Ok(local) = std::env::var("LOCALAPPDATA") {
             push_if_dir(PathBuf::from(&local).join("pnpm"));
             push_if_dir(PathBuf::from(&local).join("fnm_multishells"));
+            // winget package shims (stable since App Installer 1.4).
+            push_if_dir(PathBuf::from(&local).join("Microsoft").join("WinGet").join("Links"));
+            // Yarn classic global bin.
+            push_if_dir(PathBuf::from(&local).join("Yarn").join("bin"));
         }
         if let Ok(pf) = std::env::var("ProgramFiles") {
             push_if_dir(PathBuf::from(&pf).join("Git").join("cmd"));
             push_if_dir(PathBuf::from(&pf).join("Git").join("bin"));
             push_if_dir(PathBuf::from(&pf).join("nodejs"));
+        }
+        if let Ok(pf86) = std::env::var("ProgramFiles(x86)") {
+            push_if_dir(PathBuf::from(&pf86).join("nodejs"));
         }
         if let Ok(scoop) = std::env::var("SCOOP") {
             push_if_dir(PathBuf::from(&scoop).join("shims"));

@@ -23,12 +23,14 @@
 //! once at process startup by [`crate::enhance_process_path`]; Builder
 //! does not re-inject it.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::io;
 use std::path::Path;
 use std::process::Stdio;
 
 use tokio::process::{Child, Command};
+
+use crate::resolver::resolve_command_path;
 
 /// Construction mode — determines default stdio + env extras.
 #[derive(Debug, Clone, Copy)]
@@ -60,7 +62,7 @@ impl Builder {
     /// - `kill_on_drop(true)`
     /// - removes `NODE_OPTIONS`, `NODE_INSPECT`, `NODE_DEBUG`, `CLAUDECODE`
     pub fn new<S: AsRef<OsStr>>(program: S) -> Self {
-        let mut inner = Command::new(program);
+        let mut inner = Command::new(resolve_program(program.as_ref()));
         inner.kill_on_drop(true);
         strip_pollution(&mut inner);
         Self {
@@ -77,7 +79,7 @@ impl Builder {
     /// - removes `NODE_OPTIONS`, `NODE_INSPECT`, `NODE_DEBUG`, `CLAUDECODE`
     /// - sets `NO_COLOR=1`, `TERM=dumb`
     pub fn clean_cli<S: AsRef<OsStr>>(program: S) -> Self {
-        let mut inner = Command::new(program);
+        let mut inner = Command::new(resolve_program(program.as_ref()));
         inner
             .kill_on_drop(true)
             .stdin(Stdio::null())
@@ -166,6 +168,23 @@ fn strip_pollution(cmd: &mut Command) {
         .env_remove("NODE_INSPECT")
         .env_remove("NODE_DEBUG")
         .env_remove("CLAUDECODE");
+}
+
+/// Resolve `program` through `resolve_command_path` so callers don't have
+/// to. If the input already contains a path separator (relative or
+/// absolute) we leave it alone — only bare command names go through
+/// the resolver, where the bundled-bun shim and Windows `.cmd / .ps1 /
+/// .bat` fallbacks live.
+fn resolve_program(program: &OsStr) -> OsString {
+    if let Some(s) = program.to_str()
+        && !s.is_empty()
+        && !s.contains('/')
+        && !s.contains('\\')
+        && let Some(path) = resolve_command_path(s)
+    {
+        return path.into_os_string();
+    }
+    program.to_os_string()
 }
 
 #[cfg(test)]

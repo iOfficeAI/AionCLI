@@ -134,6 +134,11 @@ fn env_override() -> Option<PathBuf> {
 /// For `bun` / `bunx` we go through `aionui_runtime` so the bundled
 /// runtime is used when present; everything else falls back to the
 /// user's `$PATH` via `which::which`.
+///
+/// On Windows, if a bare name lookup fails we retry with the common
+/// shim suffixes (`.cmd`, `.ps1`, `.bat`). Tools installed via npm
+/// global / pnpm / yarn typically ship as `name.cmd`, and a user with a
+/// trimmed `PATHEXT` would otherwise see them as missing.
 pub fn resolve_command_path(cmd: &str) -> Option<PathBuf> {
     match cmd {
         "bun" => resolve_bun().ok().or_else(|| which::which("bun").ok()),
@@ -147,9 +152,29 @@ pub fn resolve_command_path(cmd: &str) -> Option<PathBuf> {
             }
             which::which("bunx").ok()
         }
-        other => which::which(other).ok(),
+        other => which::which(other).ok().or_else(|| windows_shim_fallback(other)),
     }
 }
+
+#[cfg(windows)]
+fn windows_shim_fallback(cmd: &str) -> Option<PathBuf> {
+    // If the caller already passed an extension, no point retrying.
+    if Path::new(cmd).extension().is_some() {
+        return None;
+    }
+    for ext in ["cmd", "ps1", "bat"] {
+        if let Ok(p) = which::which(format!("{cmd}.{ext}")) {
+            return Some(p);
+        }
+    }
+    None
+}
+
+#[cfg(not(windows))]
+fn windows_shim_fallback(_cmd: &str) -> Option<PathBuf> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

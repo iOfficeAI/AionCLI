@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use aionui_runtime::Builder as CmdBuilder;
-use tokio::process::Command;
+use aionui_runtime::resolve_command_path;
 
 use crate::adapter::DetectedServer;
 use crate::error::McpError;
@@ -15,14 +15,13 @@ pub const DETECT_TIMEOUT: Duration = Duration::from_secs(30);
 pub const MUTATE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Check whether a CLI binary is available on `$PATH`.
+///
+/// Uses `aionui_runtime::resolve_command_path` so the lookup respects
+/// the bundled-bun shim and Windows `PATHEXT` rules. Previously this
+/// shelled out to `which`, which does not exist on Windows and made
+/// every MCP adapter report "not installed" there.
 pub async fn is_cli_installed(name: &str) -> Result<bool, McpError> {
-    let output = Command::new("which")
-        .arg(name)
-        .output()
-        .await
-        .map_err(|e| McpError::AgentOperationFailed(format!("failed to run `which {name}`: {e}")))?;
-
-    Ok(output.status.success())
+    Ok(resolve_command_path(name).is_some())
 }
 
 /// Run a CLI command with a timeout and clean environment variables.
@@ -228,6 +227,26 @@ pub fn build_header_args(headers: &HashMap<String, String>, flag: &str) -> Vec<S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn is_cli_installed_finds_known_binary() {
+        // Both platforms ship a usable shell on PATH out of the box: `sh`
+        // on Unix, `cmd` on Windows. resolve_command_path must locate it.
+        #[cfg(unix)]
+        let probe = "sh";
+        #[cfg(windows)]
+        let probe = "cmd";
+
+        assert!(is_cli_installed(probe).await.unwrap(), "expected `{probe}` on PATH");
+    }
+
+    #[tokio::test]
+    async fn is_cli_installed_returns_false_for_missing_binary() {
+        let result = is_cli_installed("aionui-definitely-not-a-real-binary-xyz")
+            .await
+            .unwrap();
+        assert!(!result);
+    }
 
     #[test]
     fn strip_ansi_removes_color_codes() {
