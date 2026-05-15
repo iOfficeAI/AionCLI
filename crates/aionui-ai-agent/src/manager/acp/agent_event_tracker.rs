@@ -123,6 +123,11 @@ impl AcpAgentManager {
                     self.commit_session_changes(&mut s).await;
                 }
             }
+            AgentStreamEvent::AvailableCommands(data) => {
+                let mut s = self.session.write().await;
+                s.apply_advertised_commands(data.commands.clone());
+                self.commit_session_changes(&mut s).await;
+            }
             _ => {}
         }
     }
