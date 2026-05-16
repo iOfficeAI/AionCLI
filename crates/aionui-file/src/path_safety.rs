@@ -1,4 +1,4 @@
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use aionui_common::AppError;
 
@@ -94,10 +94,7 @@ pub fn validate_path_for_write(path: &str, allowed_roots: &[&Path]) -> Result<Pa
 /// — always call [`validate_path`] or [`validate_path_for_write`] as the
 /// authoritative check.
 pub fn has_traversal(path: &str) -> bool {
-    path.contains('\0')
-        || Path::new(path)
-            .components()
-            .any(|component| matches!(component, Component::ParentDir))
+    aionui_common::path_safety::has_traversal(path)
 }
 
 #[cfg(test)]

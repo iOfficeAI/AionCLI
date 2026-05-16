@@ -9,7 +9,8 @@ use aionui_ai_agent::{AgentRouterState, AgentService, RemoteAgentRouterState, Re
 use aionui_assistant::{AssistantRouterState, AssistantService, BuiltinAssistantRegistry};
 use aionui_auth::extract_token_from_ws_headers;
 use aionui_channel::ChannelRouterState;
-use aionui_conversation::{ConversationRouterState, ConversationService};
+use aionui_conversation::{ConversationRouterState, ConversationService, StaticFileRouterState};
+use aionui_static_file::StaticFileService;
 use aionui_cron::{CronEventEmitter, CronRouterState};
 use aionui_db::{
     IAcpSessionRepository, IAgentMetadataRepository, IAssistantOverrideRepository, IAssistantRepository,
@@ -63,6 +64,7 @@ pub struct ModuleStates {
     pub cron: CronRouterState,
     pub office: OfficeRouterState,
     pub shell: ShellRouterState,
+    pub static_file: StaticFileRouterState,
     pub assistant: AssistantRouterState,
 }
 
@@ -130,9 +132,15 @@ pub async fn build_module_states(services: &AppServices) -> (ModuleStates, Chann
 
     let agent_service = AgentService::new(services.agent_registry.clone(), services.data_dir.clone());
 
+    let conversation_state = build_conversation_state(services, Some(cron.cron_service.clone()));
+    let static_file = StaticFileRouterState {
+        conversation_service: conversation_state.service.clone(),
+        static_file_service: Arc::new(StaticFileService::permissive()),
+    };
+
     let states = ModuleStates {
         system: build_system_state(services),
-        conversation: build_conversation_state(services, Some(cron.cron_service.clone())),
+        conversation: conversation_state,
         remote_agent: build_remote_agent_state(services),
         agent: AgentRouterState {
             agent_registry: services.agent_registry.clone(),
@@ -155,6 +163,7 @@ pub async fn build_module_states(services: &AppServices) -> (ModuleStates, Chann
         office: build_office_state(services),
         shell: build_shell_state(services),
         assistant,
+        static_file,
     };
 
     (states, channel_components)

@@ -384,6 +384,7 @@ dependencies = [
  "aionui-realtime",
  "aionui-runtime",
  "aionui-shell",
+ "aionui-static-file",
  "aionui-system",
  "aionui-team",
  "anyhow",
@@ -536,12 +537,15 @@ dependencies = [
  "aionui-db",
  "aionui-extension",
  "aionui-realtime",
+ "aionui-static-file",
  "async-trait",
  "axum",
+ "http 1.4.0",
  "regex",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 
@@ -750,6 +754,17 @@ dependencies = [
  "tracing",
  "which",
  "wiremock",
+]
+
+[[package]]
+name = "aionui-static-file"
+version = "0.1.4"
+dependencies = [
+ "aionui-common",
+ "mime_guess",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
