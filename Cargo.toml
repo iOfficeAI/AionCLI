@@ -10,6 +10,7 @@ members = [
     "crates/aionui-auth",
     "crates/aionui-system",
     "crates/aionui-file",
+    "crates/aionui-static-file",
     "crates/aionui-office",
     "crates/aionui-shell",
     "crates/aionui-ai-agent",
@@ -39,6 +40,7 @@ aionui-runtime = { path = "crates/aionui-runtime" }
 aionui-auth = { path = "crates/aionui-auth" }
 aionui-system = { path = "crates/aionui-system" }
 aionui-file = { path = "crates/aionui-file" }
+aionui-static-file = { path = "crates/aionui-static-file" }
 aionui-office = { path = "crates/aionui-office" }
 aionui-shell = { path = "crates/aionui-shell" }
 aionui-ai-agent = { path = "crates/aionui-ai-agent" }
@@ -118,6 +120,9 @@ dirs = "6"
 
 # Regex
 regex = "1"
+
+# Async stream utilities
+tokio-util = { version = "0.7", features = ["io"] }
 
 # File system
 include_dir = "0.7"
