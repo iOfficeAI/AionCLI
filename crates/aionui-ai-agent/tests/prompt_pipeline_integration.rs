@@ -44,6 +44,7 @@ async fn fixture_params(
         skills: vec![],
         preset_assistant_id: None,
         session_mode: None,
+        current_model_id: None,
         cron_job_id: None,
         team_mcp_stdio_config: None,
         guide_mcp_config: None,

@@ -201,7 +201,14 @@ impl AcpAgentManager {
                 })
                 .filter(|m| !m.is_empty())
                 .map(ModeId::new),
-            snapshot.and_then(|s| s.current_model_id.clone()),
+            snapshot.and_then(|s| s.current_model_id.clone()).or_else(|| {
+                params
+                    .config
+                    .current_model_id
+                    .as_ref()
+                    .filter(|m| !m.is_empty())
+                    .map(|m| ModelId::new(m.clone()))
+            }),
             snapshot.map(|s| s.config_selections.clone()).unwrap_or_default(),
         );
 

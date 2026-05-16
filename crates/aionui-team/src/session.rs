@@ -670,7 +670,13 @@ impl TeamSession {
             .service
             .upgrade()
             .ok_or_else(|| TeamError::InvalidRequest("spawn_agent requires a live TeamSessionService".into()))?;
-        let model = req.model.as_deref().unwrap_or(&caller.model).to_owned();
+        let model = match req.model.as_deref().filter(|m| !m.is_empty()) {
+            Some(m) => m.to_owned(),
+            None => service
+                .default_model_for_backend(&backend)
+                .await
+                .unwrap_or_else(|| caller.model.clone()),
+        };
         let new_agent = service
             .persist_spawned_agent(
                 &self.team.id,

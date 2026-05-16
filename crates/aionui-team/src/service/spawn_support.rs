@@ -177,6 +177,23 @@ impl TeamSessionService {
         None
     }
 
+    pub(crate) async fn default_model_for_backend(&self, backend: &str) -> Option<String> {
+        let row = self.agent_metadata_repo.find_builtin_by_backend(backend).await.ok()??;
+        let json: serde_json::Value = serde_json::from_str(row.available_models.as_deref()?).ok()?;
+        if let Some(id) = json.get("current_model_id").and_then(|v| v.as_str())
+            && !id.is_empty()
+        {
+            return Some(id.to_owned());
+        }
+        let arr = json
+            .get("available_models")
+            .and_then(|v| v.as_array())
+            .or_else(|| json.as_array())?;
+        arr.first()
+            .and_then(|e| e.get("id").and_then(|v| v.as_str()))
+            .map(|s| s.to_owned())
+    }
+
     pub async fn spawn_agent_in_session(
         &self,
         team_id: &str,
