@@ -384,7 +384,6 @@ pub async fn create_router(services: &AppServices) -> Router {
         }
     });
 
-
     create_router_with_states(services, states)
 }
 
