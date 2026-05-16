@@ -23,7 +23,7 @@ use aionui_db::{AgentMetadataRow, IAgentMetadataRepository, UpdateAgentHandshake
 use aionui_runtime::resolve_command_path;
 use serde_json::Value;
 use tokio::sync::{RwLock, mpsc};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 /// Capacity of the catalog-sync MPSC channel. A single writer thread
 /// drains it serially, so the bound just sizes the burst we can absorb
@@ -111,7 +111,7 @@ impl AgentRegistry {
             return Ok(());
         };
 
-        if let Some(meta) = decode_row(row) {
+        if let Some((meta, _)) = decode_row(row) {
             self.by_id.write().await.insert(meta.id.clone(), meta);
         }
         Ok(())
@@ -137,18 +137,17 @@ impl AgentRegistry {
 
         let mut map = HashMap::with_capacity(rows.len());
         for row in rows {
-            let Some(meta) = decode_row(row) else {
+            let Some((meta, reason)) = decode_row(row) else {
                 continue;
             };
+            log_probe_result(&meta, &reason);
             map.insert(meta.id.clone(), meta);
         }
-        // Capture len before the write-lock await so the debug! macro arg
-        // doesn't hold a RwLockReadGuard / Arguments<'_> across an await
-        // point (both !Send, which would poison handler futures via
-        // invalidate_and_rehydrate).
-        let row_count = map.len();
+        // Snapshot the summary off the local map before transferring it
+        // into the lock — `log_availability_summary` borrows the values
+        // and we don't want that borrow to outlive the move.
+        log_availability_summary(map.values(), "AgentRegistry hydrated");
         *self.by_id.write().await = map;
-        debug!(rows = row_count, "AgentRegistry hydrated");
         Ok(())
     }
 
@@ -157,10 +156,13 @@ impl AgentRegistry {
     pub async fn refresh_availability(&self) {
         let mut guard = self.by_id.write().await;
         for meta in guard.values_mut() {
-            meta.resolved_command = probe_resolved_command(meta);
+            let (path, reason) = probe_with_reason(meta);
+            meta.resolved_command = path;
             meta.available = meta.resolved_command.is_some()
                 || (meta.enabled && meta.command.is_none() && meta.agent_source == AgentSource::Internal);
+            log_probe_result(meta, &reason);
         }
+        log_availability_summary(guard.values(), "AgentRegistry refresh_availability complete");
     }
 
     /// Refetch every row from the repository, then re-resolve PATH.
@@ -233,6 +235,37 @@ impl AgentRegistry {
         rows
     }
 
+    /// Like [`Self::list_all_including_hidden`] but pairs every row
+    /// with a freshly-computed availability reason so callers (the
+    /// `doctor` command, diagnostic UIs) can explain *why* a row is
+    /// unavailable without depending on logs or re-implementing the
+    /// probe rules.
+    ///
+    /// Reasons are only attached to rows whose `available` flag is
+    /// `false`. Internal rows (e.g. the aionrs row) intentionally
+    /// have an empty `command`, so the underlying probe always
+    /// reports `NoCommand` for them — surfacing that as a "reason"
+    /// when `available = true` would just confuse the caller, so we
+    /// suppress it here.
+    pub async fn diagnostic_snapshot(&self) -> Vec<(AgentMetadata, Option<UnavailableReason>)> {
+        let mut rows: Vec<(AgentMetadata, Option<UnavailableReason>)> = self
+            .by_id
+            .read()
+            .await
+            .values()
+            .map(|m| {
+                let reason = if m.available {
+                    None
+                } else {
+                    probe_resolved_command(m).err()
+                };
+                (m.clone(), reason)
+            })
+            .collect();
+        rows.sort_by(|(a, _), (b, _)| a.sort_order.cmp(&b.sort_order).then_with(|| a.name.cmp(&b.name)));
+        rows
+    }
+
     /// Clone-cheap handle to the underlying repo, for service-layer
     /// helpers that need direct CRUD access without going through the
     /// registry cache.
@@ -250,8 +283,11 @@ fn is_visible(meta: &AgentMetadata) -> bool {
 }
 
 /// Turn a DB row into the public `AgentMetadata`, probing the command
-/// on disk so `available` reflects the current PATH state.
-fn decode_row(row: AgentMetadataRow) -> Option<AgentMetadata> {
+/// on disk so `available` reflects the current PATH state. Returns
+/// the probe reason alongside the row so the caller can log a single
+/// uniform `(meta, reason)` line per agent without re-running the
+/// probe.
+fn decode_row(row: AgentMetadataRow) -> Option<(AgentMetadata, Option<UnavailableReason>)> {
     let agent_type = parse_agent_type(&row.agent_type)?;
     let agent_source = parse_agent_source(&row.agent_source)?;
     let agent_source_info = decode_json_field(row.agent_source_info.as_deref(), "agent_source_info")
@@ -300,10 +336,105 @@ fn decode_row(row: AgentMetadataRow) -> Option<AgentMetadata> {
         handshake,
     };
 
-    meta.resolved_command = probe_resolved_command(&meta);
+    let (path, reason) = probe_with_reason(&meta);
+    meta.resolved_command = path;
     meta.available = meta.resolved_command.is_some()
         || (meta.enabled && meta.command.is_none() && meta.agent_source == AgentSource::Internal);
-    Some(meta)
+    Some((meta, reason))
+}
+
+/// Wrapper around [`probe_resolved_command`] that returns both the
+/// resolved path (if any) and the failure reason as a tuple, so the
+/// hydrate / refresh loops can persist the path and emit a single
+/// uniform log line per row.
+fn probe_with_reason(meta: &AgentMetadata) -> (Option<PathBuf>, Option<UnavailableReason>) {
+    match probe_resolved_command(meta) {
+        Ok(path) => (Some(path), None),
+        Err(reason) => (None, Some(reason)),
+    }
+}
+
+/// Emit a single per-row line summarizing the probe outcome. Available
+/// rows go to `debug!` (one per startup × N agents is noisy at info);
+/// unavailable rows go to `info!` so the default backend.log surfaces
+/// the reason without needing `--log-level debug` after a user
+/// reports "no agent works".
+fn log_probe_result(meta: &AgentMetadata, reason: &Option<UnavailableReason>) {
+    let backend = meta.backend.as_deref().unwrap_or("-");
+    let source = format!("{:?}", meta.agent_source);
+    match (meta.available, reason) {
+        (true, _) => {
+            debug!(
+                id = %meta.id,
+                name = %meta.name,
+                backend,
+                source = %source,
+                command = meta.command.as_deref().unwrap_or("-"),
+                resolved = %meta
+                    .resolved_command
+                    .as_deref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "<internal>".to_owned()),
+                "agent   available"
+            );
+        }
+        (false, Some(reason)) => {
+            info!(
+                id = %meta.id,
+                name = %meta.name,
+                backend,
+                source = %source,
+                command = meta.command.as_deref().unwrap_or("-"),
+                reason = %reason,
+                "agent unavailable"
+            );
+        }
+        (false, None) => {
+            // Probe succeeded internally but `available` still false —
+            // shouldn't happen given current rules, but we'd want to
+            // know if it does.
+            warn!(
+                id = %meta.id,
+                name = %meta.name,
+                backend,
+                source = %source,
+                "agent marked unavailable without a probe reason — registry invariant violated"
+            );
+        }
+    }
+}
+
+/// One-line summary at the end of hydrate / refresh: total / available
+/// / unavailable counts plus a comma-joined list of unavailable
+/// `id:reason` pairs (truncated to the first 12 to keep log lines
+/// bounded). Goes to `info!` so it's visible at the default level.
+fn log_availability_summary<'a, I>(rows: I, message: &'static str)
+where
+    I: IntoIterator<Item = &'a AgentMetadata>,
+{
+    let mut total = 0usize;
+    let mut available = 0usize;
+    let mut unavailable_ids: Vec<String> = Vec::new();
+    for meta in rows {
+        total += 1;
+        if meta.available {
+            available += 1;
+        } else {
+            unavailable_ids.push(meta.id.clone());
+        }
+    }
+    let unavailable = total - available;
+    let preview: String = if unavailable_ids.is_empty() {
+        String::new()
+    } else {
+        let cap = unavailable_ids.len().min(12);
+        let mut joined = unavailable_ids[..cap].join(", ");
+        if unavailable_ids.len() > cap {
+            joined.push_str(&format!(", … (+{} more)", unavailable_ids.len() - cap));
+        }
+        joined
+    };
+    info!(total, available, unavailable, unavailable_ids = %preview, "{}", message);
 }
 
 fn parse_agent_type(raw: &str) -> Option<AgentType> {
@@ -375,38 +506,84 @@ impl CatalogSender {
     }
 }
 
+/// Why a row's spawn command failed to resolve at hydrate/refresh time.
+/// Carried alongside the resolved path so callers (logging, the
+/// `doctor` command) can explain availability without re-running the
+/// probe themselves. The variants line up 1:1 with the early-return
+/// branches in [`probe_resolved_command`].
+#[derive(Debug, Clone)]
+pub enum UnavailableReason {
+    /// Row is user-disabled (`enabled = 0`). The probe short-circuits
+    /// without touching `$PATH`.
+    Disabled,
+    /// Row has no `command` set. Internal rows legitimately fall in
+    /// this bucket (handled in `decode_row`); for everyone else this
+    /// is a seed-data bug.
+    NoCommand,
+    /// Bridge binary (`agent_source_info.bridge_binary`, e.g. `bun`
+    /// for `bun x @pkg`) is not on `$PATH`.
+    BridgeMissing { bridge: String },
+    /// Primary CLI (`agent_source_info.binary_name`, e.g. `claude`
+    /// for the bridged Claude row) is not on `$PATH`.
+    PrimaryMissing { binary: String },
+    /// Spawn command itself (`command` field) is not on `$PATH`. For
+    /// direct-CLI rows this is the same binary as `binary_name`; for
+    /// bridge rows it's the bridge.
+    CommandMissing { command: String },
+}
+
+impl std::fmt::Display for UnavailableReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Disabled => f.write_str("row disabled by user"),
+            Self::NoCommand => f.write_str("no spawn command configured"),
+            Self::BridgeMissing { bridge } => write!(f, "bridge binary `{bridge}` not on $PATH"),
+            Self::PrimaryMissing { binary } => write!(f, "primary binary `{binary}` not on $PATH"),
+            Self::CommandMissing { command } => write!(f, "spawn command `{command}` not on $PATH"),
+        }
+    }
+}
+
 /// Resolve the spawn command to an absolute path via `$PATH`. Returns
-/// `None` when the row is disabled, the command is missing, or any
-/// required binary (spawn command, bridge binary, primary CLI) is not
-/// on `$PATH`. The value is the single source of truth for
-/// `available` — callers never re-run `which()` themselves.
+/// `Ok(path)` when every required binary is present, or `Err(reason)`
+/// pinpointing the first missing piece. The value is the single
+/// source of truth for `available` — callers never re-run `which()`
+/// themselves.
 ///
 /// Bridge-based rows (e.g. `bun x @pkg`) require both `bun` (the spawn
 /// command) and the wrapped CLI (`claude`, recorded in
 /// `agent_source_info.binary_name`) to be present. Direct-CLI rows
 /// have `spawn command == primary binary`, so the primary-binary check
 /// is a no-op for them.
-fn probe_resolved_command(meta: &AgentMetadata) -> Option<PathBuf> {
+fn probe_resolved_command(meta: &AgentMetadata) -> Result<PathBuf, UnavailableReason> {
     if !meta.enabled {
-        return None;
+        return Err(UnavailableReason::Disabled);
     }
-    let cmd = meta.command.as_deref().filter(|s| !s.is_empty())?;
+    let Some(cmd) = meta.command.as_deref().filter(|s| !s.is_empty()) else {
+        return Err(UnavailableReason::NoCommand);
+    };
 
     if let Some(bridge) = meta.agent_source_info.bridge_binary.as_deref()
         && bridge != cmd
         && resolve_command_path(bridge).is_none()
     {
-        return None;
+        return Err(UnavailableReason::BridgeMissing {
+            bridge: bridge.to_owned(),
+        });
     }
     if let Some(primary) = meta.agent_source_info.binary_name.as_deref()
         && primary != cmd
         && meta.agent_source_info.bridge_binary.as_deref() != Some(primary)
         && resolve_command_path(primary).is_none()
     {
-        return None;
+        return Err(UnavailableReason::PrimaryMissing {
+            binary: primary.to_owned(),
+        });
     }
 
-    resolve_command_path(cmd)
+    resolve_command_path(cmd).ok_or_else(|| UnavailableReason::CommandMissing {
+        command: cmd.to_owned(),
+    })
 }
 
 #[cfg(test)]
@@ -592,6 +769,40 @@ mod tests {
         assert!(refreshed.handshake.available_models.is_none());
         assert!(refreshed.handshake.config_options.is_none());
         assert!(refreshed.handshake.available_commands.is_none());
+    }
+
+    /// `diagnostic_snapshot` returns one entry per row, populates a
+    /// reason for every unavailable row, and leaves available rows
+    /// without one. The CI host doesn't have the seeded CLIs
+    /// installed, so the bridge/CLI rows are reliably unavailable
+    /// here — the assertion exploits that to lock the contract.
+    #[tokio::test]
+    async fn diagnostic_snapshot_pairs_rows_with_reasons() {
+        let reg = registry().await;
+        let snapshot = reg.diagnostic_snapshot().await;
+        assert_eq!(snapshot.len(), 20, "every row appears once");
+
+        for (meta, reason) in &snapshot {
+            match (meta.available, reason) {
+                (true, None) => {}
+                (false, Some(_)) => {}
+                (true, Some(r)) => panic!("available row {} has unexpected reason {:?}", meta.id, r),
+                (false, None) => panic!(
+                    "unavailable row {} (source={:?}) is missing a reason",
+                    meta.id, meta.agent_source
+                ),
+            }
+        }
+
+        // The internal aionrs row is always available — its reason
+        // slot must be None (sanity check that "available" doesn't
+        // accidentally co-occur with a reason).
+        let aionrs = snapshot
+            .iter()
+            .find(|(m, _)| m.agent_type == AgentType::Aionrs)
+            .expect("aionrs seed row");
+        assert!(aionrs.0.available);
+        assert!(aionrs.1.is_none());
     }
 
     /// An empty snapshot is a no-op — no column gets overwritten.
