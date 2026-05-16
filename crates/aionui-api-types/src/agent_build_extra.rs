@@ -24,6 +24,8 @@ pub struct AcpBuildExtra {
     #[serde(default)]
     pub session_mode: Option<String>,
     #[serde(default)]
+    pub current_model_id: Option<String>,
+    #[serde(default)]
     pub cron_job_id: Option<String>,
     #[serde(default)]
     pub team_mcp_stdio_config: Option<TeamMcpStdioConfig>,

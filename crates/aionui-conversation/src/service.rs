@@ -591,6 +591,18 @@ impl ConversationService {
         Ok(())
     }
 
+    pub async fn save_acp_runtime_mode(&self, conversation_id: &str, mode: &str) -> Result<(), AppError> {
+        let params = SaveRuntimeStateParams {
+            current_mode_id: Some(Some(mode)),
+            ..Default::default()
+        };
+        self.acp_session_repo
+            .save_runtime_state(conversation_id, &params)
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to persist runtime mode: {e}")))?;
+        Ok(())
+    }
+
     /// Delete a conversation (messages cascade via FK).
     ///
     /// Broadcasts `conversation.listChanged(deleted)`.

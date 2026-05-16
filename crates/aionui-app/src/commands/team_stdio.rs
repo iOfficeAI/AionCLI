@@ -109,8 +109,18 @@ struct SendMessageParams {
 struct SpawnAgentParams {
     /// Agent display name.
     name: String,
-    /// AI backend (whitelist: claude, codex).
-    backend: String,
+    /// AI backend type: "claude" or "codex". Default when omitted.
+    #[serde(default)]
+    agent_type: Option<String>,
+    /// Model override for the new agent.
+    #[serde(default)]
+    model: Option<String>,
+    /// Preset assistant identifier.
+    #[serde(default)]
+    custom_agent_id: Option<String>,
+    /// Legacy backend field (prefer agent_type).
+    #[serde(default)]
+    backend: Option<String>,
     /// Agent role (default: "teammate").
     #[serde(default)]
     role: Option<String>,
@@ -177,6 +187,9 @@ struct ListModelsParams {
 struct DescribeAssistantParams {
     /// The preset assistant ID from the "Available Preset Assistants" catalog.
     custom_agent_id: String,
+    /// Locale for the description (e.g. "en", "zh"). Default when omitted.
+    #[serde(default)]
+    locale: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -208,6 +221,9 @@ impl TeamStdioServer {
             "team_spawn_agent",
             &serde_json::json!({
                 "name": params.name,
+                "agent_type": params.agent_type,
+                "model": params.model,
+                "custom_agent_id": params.custom_agent_id,
                 "backend": params.backend,
                 "role": params.role,
             }),
@@ -323,7 +339,7 @@ impl TeamStdioServer {
         );
         self.forward_to_tcp(
             "team_describe_assistant",
-            &serde_json::json!({ "custom_agent_id": params.custom_agent_id }),
+            &serde_json::json!({ "custom_agent_id": params.custom_agent_id, "locale": params.locale }),
         )
         .await
     }

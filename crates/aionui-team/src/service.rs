@@ -900,6 +900,10 @@ impl TeamSessionService {
                 .conversation_service
                 .update_extra(&agent.conversation_id, patch)
                 .await;
+            let _ = self
+                .conversation_service
+                .save_acp_runtime_mode(&agent.conversation_id, mode)
+                .await;
         }
 
         Ok(())
