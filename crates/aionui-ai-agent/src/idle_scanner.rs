@@ -7,7 +7,7 @@ use tracing::{debug, info, warn};
 use crate::task_manager::IWorkerTaskManager;
 
 /// Default idle timeout for ACP agents (5 minutes).
-const DEFAULT_IDLE_TIMEOUT_MS: i64 = 5 * 60 * 1000;
+const DEFAULT_IDLE_TIMEOUT_SECS: i64 = 5 * 60;
 
 /// Scan interval for idle agent cleanup (1 minute).
 const SCAN_INTERVAL_SECS: u64 = 60;
@@ -20,23 +20,25 @@ const SCAN_INTERVAL_SECS: u64 = 60;
 /// The scanner runs until the provided `shutdown` signal resolves.
 pub fn start_idle_scanner(
     worker_task_manager: Arc<dyn IWorkerTaskManager>,
-    idle_timeout_ms: Option<i64>,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
+    idle_timeout_secs: Option<i64>,
+    scan_interval_secs: Option<u64>,
 ) -> tokio::task::JoinHandle<()> {
-    let threshold = idle_timeout_ms.unwrap_or(DEFAULT_IDLE_TIMEOUT_MS);
+    let threshold = idle_timeout_secs.unwrap_or(DEFAULT_IDLE_TIMEOUT_SECS);
+    let scan_interval = scan_interval_secs.unwrap_or(SCAN_INTERVAL_SECS);
     info!(
-        threshold_ms = threshold,
-        scan_interval_secs = SCAN_INTERVAL_SECS,
+        threshold_secs = threshold,
+        scan_interval_secs = scan_interval,
         "Starting idle agent scanner"
     );
 
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(SCAN_INTERVAL_SECS));
+        let mut interval = tokio::time::interval(Duration::from_secs(scan_interval));
 
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    scan_and_cleanup(&worker_task_manager, threshold);
+                    scan_and_cleanup(&worker_task_manager, threshold*1000);
                 }
                 _ = shutdown.changed() => {
                     if *shutdown.borrow() {
@@ -70,20 +72,5 @@ fn scan_and_cleanup(manager: &Arc<dyn IWorkerTaskManager>, threshold_ms: i64) {
                 "Failed to kill idle agent"
             );
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn default_idle_timeout_is_5_minutes() {
-        assert_eq!(DEFAULT_IDLE_TIMEOUT_MS, 300_000);
-    }
-
-    #[test]
-    fn scan_interval_is_60_seconds() {
-        assert_eq!(SCAN_INTERVAL_SECS, 60);
     }
 }

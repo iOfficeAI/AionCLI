@@ -1,8 +1,5 @@
 //! Application entry point: assembles all crates into an Axum server with DI and middleware.
-pub mod bridge;
-pub mod guide_stdio;
 mod state_builders;
-pub mod team_stdio;
 
 use std::path::PathBuf;
 use std::sync::Arc;

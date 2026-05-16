@@ -15,7 +15,7 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::{schemars, service::ServiceExt, tool, tool_router, transport};
 use serde::Deserialize;
 
-pub async fn run_guide_stdio() -> ExitCode {
+pub async fn run_team_guide() -> ExitCode {
     // Debug breadcrumb
     let _ = std::fs::write(
         "/tmp/mcp-guide-stdio-spawned.txt",
