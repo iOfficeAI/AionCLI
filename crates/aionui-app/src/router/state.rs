@@ -110,7 +110,7 @@ pub async fn build_module_states(services: &AppServices) -> (ModuleStates, Chann
         std::env::current_exe()
             .ok()
             .and_then(|p| p.canonicalize().ok())
-            .unwrap_or_else(|| std::path::PathBuf::from("aionui-backend")),
+            .unwrap_or_else(|| std::path::PathBuf::from("aioncli")),
     );
 
     let agent_service = AgentService::new(services.agent_registry.clone(), services.data_dir.clone());

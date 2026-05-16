@@ -1,4 +1,4 @@
-//! Subcommand implementations for the `aionui-backend` binary.
+//! Subcommand implementations for the `aioncli` binary.
 //!
 //! This file is a façade — module declarations and re-exports only.
 //! All logic lives in the submodules.

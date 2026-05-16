@@ -24,7 +24,7 @@ impl AppConfig {
 
     /// Path to the SQLite database file.
     pub fn database_path(&self) -> PathBuf {
-        self.data_dir.join("aionui-backend.db")
+        self.data_dir.join("aioncli.db")
     }
 }
 
@@ -78,6 +78,6 @@ mod tests {
             data_dir: PathBuf::from("/tmp/aionui"),
             ..Default::default()
         };
-        assert_eq!(config.database_path(), PathBuf::from("/tmp/aionui/aionui-backend.db"));
+        assert_eq!(config.database_path(), PathBuf::from("/tmp/aionui/aioncli.db"));
     }
 }

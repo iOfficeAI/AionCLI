@@ -796,10 +796,10 @@ async fn sb1_bridge_config_generation() {
         port: env.server.port(),
         token: env.server.auth_token().to_string(),
         slot_id: "lead-1".into(),
-        binary_path: "/bin/aionui-backend".into(),
+        binary_path: "/bin/aioncli".into(),
     };
 
-    let spec = TeamMcpStdioServerSpec::from_config("/bin/aionui-backend", &config);
+    let spec = TeamMcpStdioServerSpec::from_config("/bin/aioncli", &config);
     let env_map: std::collections::HashMap<_, _> = spec.env.iter().cloned().collect();
     assert_eq!(env_map[TeamMcpStdioConfig::ENV_PORT], env.server.port().to_string());
     assert_eq!(env_map[TeamMcpStdioConfig::ENV_TOKEN], "test-token-123");

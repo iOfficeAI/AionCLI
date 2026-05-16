@@ -1,4 +1,4 @@
-//! `aionui-backend doctor` subcommand: agent CLI detection self-check.
+//! `aioncli doctor` subcommand: agent CLI detection self-check.
 //!
 //! Hydrates the agent registry against the real on-disk database and
 //! prints a per-agent availability table to stdout. Mirrors the
@@ -32,7 +32,7 @@ pub async fn run_doctor(cli: &Cli, merged_path: &str) -> Result<ExitCode> {
 
     // Use the real on-disk DB so the report reflects the user's actual
     // catalog (including custom agents they've added via the UI).
-    let db_path = cli.data_dir.join("aionui-backend.db");
+    let db_path = cli.data_dir.join("aioncli.db");
     maybe_copy_legacy_database(&db_path)?;
     let database = init_database(&db_path).await?;
 

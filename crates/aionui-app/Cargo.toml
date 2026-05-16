@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [[bin]]
-name = "aionui-backend"
+name = "aioncli"
 path = "src/main.rs"
 
 [features]

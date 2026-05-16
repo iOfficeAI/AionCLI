@@ -879,7 +879,7 @@ mod tests {
     }
 
     fn backend_path() -> Arc<PathBuf> {
-        Arc::new(PathBuf::from("/tmp/aionui-backend-test"))
+        Arc::new(PathBuf::from("/tmp/aioncli-test"))
     }
 
     /// Mock agent whose `send_message` pushes the received payload into a
@@ -1128,7 +1128,7 @@ mod tests {
         let session = start_session().await;
         let spec = session.stdio_spec("lead-1");
         assert_eq!(spec.name, "aionui-team-t1");
-        assert_eq!(spec.command, "/tmp/aionui-backend-test");
+        assert_eq!(spec.command, "/tmp/aioncli-test");
         assert_eq!(spec.args, vec!["mcp-bridge".to_string()]);
         assert!(spec.env.iter().any(|(k, v)| k == "TEAM_AGENT_SLOT_ID" && v == "lead-1"));
         session.stop();

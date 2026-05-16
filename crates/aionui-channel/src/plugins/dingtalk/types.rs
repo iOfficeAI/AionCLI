@@ -801,12 +801,12 @@ mod tests {
                     topic: "/v1.0/im/bot/messages/get".into(),
                 },
             ],
-            ua: Some("aionui-backend".into()),
+            ua: Some("aioncli".into()),
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["clientId"], "my_client_id");
         assert_eq!(json["clientSecret"], "my_secret");
-        assert_eq!(json["ua"], "aionui-backend");
+        assert_eq!(json["ua"], "aioncli");
         assert_eq!(json["subscriptions"][0]["type"], "EVENT");
         assert_eq!(json["subscriptions"][0]["topic"], "*");
         assert_eq!(json["subscriptions"][1]["type"], "CALLBACK");

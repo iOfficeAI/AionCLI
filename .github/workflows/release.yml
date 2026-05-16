@@ -21,7 +21,7 @@ permissions:
   contents: write
 
 env:
-  BINARY_NAME: aionui-backend
+  BINARY_NAME: aioncli
   CARGO_TERM_COLOR: always
   CARGO_HTTP_TIMEOUT: "600"
   CARGO_NET_RETRY: "10"
@@ -64,25 +64,25 @@ jobs:
           # deliberately drop it.
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            binary_name: aionui-backend
+            binary_name: aioncli
           # Linux aarch64: keep `cross` (its image happens to not trip the
           # aws-lc-sys check and also yields an older GLIBC baseline).
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
-            binary_name: aionui-backend
+            binary_name: aioncli
             use_cross: true
           - os: macos-latest
             target: x86_64-apple-darwin
-            binary_name: aionui-backend
+            binary_name: aioncli
           - os: macos-latest
             target: aarch64-apple-darwin
-            binary_name: aionui-backend
+            binary_name: aioncli
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            binary_name: aionui-backend.exe
+            binary_name: aioncli.exe
           - os: windows-latest
             target: aarch64-pc-windows-msvc
-            binary_name: aionui-backend.exe
+            binary_name: aioncli.exe
 
     steps:
       - uses: actions/checkout@v6
@@ -130,7 +130,7 @@ jobs:
           VERSION: ${{ needs.prepare-release.outputs.version }}
         run: |
           mkdir -p dist
-          ARCHIVE="aionui-backend-v${VERSION}-${{ matrix.target }}.tar.gz"
+          ARCHIVE="aioncli-v${VERSION}-${{ matrix.target }}.tar.gz"
           tar -C target/${{ matrix.target }}/release -czf "dist/${ARCHIVE}" ${{ matrix.binary_name }}
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
 
@@ -141,7 +141,7 @@ jobs:
           VERSION: ${{ needs.prepare-release.outputs.version }}
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          $archive = "aionui-backend-v${env:VERSION}-${{ matrix.target }}.zip"
+          $archive = "aioncli-v${env:VERSION}-${{ matrix.target }}.zip"
           Compress-Archive -Path "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" -DestinationPath "dist/${archive}" -Force
           "ARCHIVE=${archive}" | Out-File -FilePath $env:GITHUB_ENV -Append
 
@@ -169,7 +169,7 @@ jobs:
         shell: bash
         run: |
           cd artifacts
-          sha256sum aionui-backend-* > aionui-backend-checksums.txt
+          sha256sum aioncli-* > aioncli-checksums.txt
 
       - name: Upload release assets
         shell: bash

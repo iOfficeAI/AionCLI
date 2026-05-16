@@ -72,7 +72,7 @@ fn make_factory(
         agent_registry,
         acp_agent_service,
         data_dir: PathBuf::from("/tmp/aionrs-test"),
-        backend_binary_path: Arc::new(PathBuf::from("/tmp/aionrs-test/aionui-backend")),
+        backend_binary_path: Arc::new(PathBuf::from("/tmp/aionrs-test/aioncli")),
         guide_mcp_config: None,
     })
 }

@@ -136,7 +136,7 @@ impl AppServices {
         // the stdio MCP bridge spawned by ACP CLIs when a team session is
         // attached to a conversation (phase1 mcp.md §4.6 single-binary model).
         let backend_binary_path =
-            Arc::new(std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("aionui-backend")));
+            Arc::new(std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("aioncli")));
 
         // Start Guide MCP server. Failure is non-fatal: solo agents simply
         // won't get the `aion_create_team` tool.

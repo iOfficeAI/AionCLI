@@ -33,7 +33,7 @@ pub struct TeamMcpStdioServerSpec {
 impl TeamMcpStdioServerSpec {
     /// Build the spec from the persisted stdio config plus runtime context.
     ///
-    /// `backend_binary_path` is the absolute path to the `aionui-backend`
+    /// `backend_binary_path` is the absolute path to the `aioncli`
     /// executable (phase1 single-binary constraint — no standalone bridge).
     /// `team_id` is read from `cfg.team_id` rather than taken as a separate
     /// parameter so the wire-level server name stays in sync with the
@@ -79,16 +79,16 @@ mod tests {
             port: 12345,
             token: "tok-abc".into(),
             slot_id: "slot-1".into(),
-            binary_path: "/usr/bin/aionui-backend".into(),
+            binary_path: "/usr/bin/aioncli".into(),
         }
     }
 
     #[test]
     fn from_config_fills_all_fields() {
-        let spec = TeamMcpStdioServerSpec::from_config("/usr/bin/aionui-backend", &sample_cfg());
+        let spec = TeamMcpStdioServerSpec::from_config("/usr/bin/aioncli", &sample_cfg());
 
         assert_eq!(spec.name, "aionui-team-team-42");
-        assert_eq!(spec.command, "/usr/bin/aionui-backend");
+        assert_eq!(spec.command, "/usr/bin/aioncli");
         assert_eq!(spec.args, vec!["mcp-bridge".to_owned()]);
         assert_eq!(spec.env.len(), 3);
     }
@@ -111,7 +111,7 @@ mod tests {
 
     #[test]
     fn into_sdk_serializes_as_stdio_variant() {
-        let spec = TeamMcpStdioServerSpec::from_config("/bin/aionui-backend", &sample_cfg());
+        let spec = TeamMcpStdioServerSpec::from_config("/bin/aioncli", &sample_cfg());
         let sdk = spec.into_sdk();
 
         let json = serde_json::to_value(&sdk).expect("serialize");
@@ -119,7 +119,7 @@ mod tests {
         // `Stdio` variant is `#[serde(untagged)]` inside `McpServer`, so the
         // JSON is the raw `McpServerStdio` shape — no `"type":"stdio"` tag.
         assert_eq!(json["name"], "aionui-team-team-42");
-        assert_eq!(json["command"], "/bin/aionui-backend");
+        assert_eq!(json["command"], "/bin/aioncli");
         assert_eq!(json["args"], serde_json::json!(["mcp-bridge"]));
 
         let env = json["env"].as_array().expect("env array");

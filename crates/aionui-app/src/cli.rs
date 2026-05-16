@@ -1,4 +1,4 @@
-//! CLI argument definitions for the `aionui-backend` binary.
+//! CLI argument definitions for the `aioncli` binary.
 //!
 //! Kept separate from `main.rs` to isolate the clap surface (struct + enum +
 //! attribute soup) from the runtime entry point. Visibility is `pub(crate)`
@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "aionui-backend", about = "AionUi Backend Server")]
+#[command(name = "aioncli", about = "AionUi Backend Server")]
 pub(crate) struct Cli {
     /// Host address to listen on.
     #[arg(long, default_value_t = String::from(aionui_common::constants::DEFAULT_HOST))]

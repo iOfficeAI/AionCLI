@@ -1,4 +1,4 @@
-//! `aionui-backend` (no subcommand): the main HTTP server.
+//! `aioncli` (no subcommand): the main HTTP server.
 
 use std::process::ExitCode;
 use std::time::Instant;

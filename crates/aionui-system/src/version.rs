@@ -86,7 +86,7 @@ impl VersionCheckService {
                 .http_client
                 .get(&url)
                 .header("Accept", "application/vnd.github+json")
-                .header("User-Agent", "aionui-backend")
+                .header("User-Agent", "aioncli")
                 .send()
                 .await
                 .map_err(|e| AppError::BadGateway(format!("GitHub API request failed: {e}")))?;
