@@ -9,7 +9,7 @@ use tracing::{info, warn};
 
 use aionui_app::{AppServices, create_router};
 
-use super::ServerEnvironment;
+use crate::bootstrap::ServerEnvironment;
 
 /// Start the HTTP server with fully constructed services.
 pub async fn run_server(env: ServerEnvironment, services: AppServices) -> Result<ExitCode> {

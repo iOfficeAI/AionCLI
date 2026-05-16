@@ -1,3 +1,8 @@
+//! Module-level router states + their builders.
+//!
+//! `ModuleStates` is the bundle returned by `build_module_states`; each
+//! `build_*_state` constructs one `*RouterState` from `AppServices`.
+
 use std::sync::Arc;
 
 use aionui_ai_agent::{AgentRouterState, AgentService, RemoteAgentRouterState, RemoteAgentService};
@@ -34,7 +39,32 @@ use aionui_system::{
 };
 use aionui_team::{TeamRouterState, TeamSessionService};
 
-use crate::{AppServices, ModuleStates, derive_encryption_key};
+use crate::config::derive_encryption_key;
+use crate::services::AppServices;
+
+/// All module-level router states bundled into a single struct.
+///
+/// Reduces parameter bloat on router constructors and makes it easy for
+/// tests to override individual modules.
+pub struct ModuleStates {
+    pub system: SystemRouterState,
+    pub conversation: ConversationRouterState,
+    pub remote_agent: RemoteAgentRouterState,
+    pub agent: AgentRouterState,
+
+    pub connection_test: ConnectionTestRouterState,
+    pub file: FileRouterState,
+    pub mcp: McpRouterState,
+    pub extension: ExtensionRouterState,
+    pub hub: HubRouterState,
+    pub skill: SkillRouterState,
+    pub channel: ChannelRouterState,
+    pub team: TeamRouterState,
+    pub cron: CronRouterState,
+    pub office: OfficeRouterState,
+    pub shell: ShellRouterState,
+    pub assistant: AssistantRouterState,
+}
 
 fn default_allowed_roots() -> Vec<std::path::PathBuf> {
     vec![
