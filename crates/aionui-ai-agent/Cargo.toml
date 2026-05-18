@@ -37,6 +37,7 @@ aion-mcp.workspace = true
 uuid.workspace = true
 agent-client-protocol = { version = "0.11.1", features = ["unstable_session_model", "unstable_session_close", "unstable_session_usage", "unstable_session_fork", "unstable_session_additional_directories", "unstable_session_resume"] }
 tokio-util = { version = "0.7", features = ["compat"] }
+rusqlite.workspace = true
 
 [features]
 # Enables the `AgentInstance::Mock` variant used by downstream test harnesses

@@ -88,6 +88,7 @@ clap = { version = "4", features = ["derive"] }
 
 # Database
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 # Auth / Crypto
 jsonwebtoken = "9"
