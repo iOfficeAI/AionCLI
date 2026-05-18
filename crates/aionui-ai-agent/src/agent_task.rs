@@ -356,7 +356,13 @@ impl AgentInstance {
         match self {
             Self::Acp(m) => {
                 let sdk_model = m.model().await;
-                let model_info = sdk_model.map(map_sdk_model_to_payload);
+                let sdk_info = sdk_model.map(map_sdk_model_to_payload);
+                let cc_switch_info = if m.is_claude_backend() {
+                    crate::cc_switch::read_claude_model_info()
+                } else {
+                    None
+                };
+                let model_info = merge_model_info(sdk_info, cc_switch_info);
                 Ok(GetModelInfoResponse { model_info })
             }
             Self::Aionrs(_) | Self::OpenClaw(_) | Self::Nanobot(_) | Self::Remote(_) => {
@@ -488,5 +494,61 @@ fn map_sdk_model_to_payload(m: agent_client_protocol::schema::SessionModelState)
         current_model_id: Some(current_id),
         current_model_label: Some(current_label),
         available_models: available,
+    }
+}
+
+fn merge_model_info(
+    sdk_info: Option<ModelInfoPayload>,
+    cc_switch_info: Option<ModelInfoPayload>,
+) -> Option<ModelInfoPayload> {
+    sdk_info.or(cc_switch_info)
+}
+
+#[cfg(test)]
+mod cc_switch_model_merge_tests {
+    use super::*;
+
+    #[test]
+    fn merge_prefers_sdk_model_over_cc_switch() {
+        let sdk_payload = ModelInfoPayload {
+            current_model_id: Some("default".into()),
+            current_model_label: Some("Claude Sonnet 4.6".into()),
+            available_models: vec![ModelInfoEntry {
+                id: "default".into(),
+                label: "Claude Sonnet 4.6".into(),
+            }],
+        };
+        let cc_switch_payload = ModelInfoPayload {
+            current_model_id: Some("default".into()),
+            current_model_label: Some("DeepSeek V4".into()),
+            available_models: vec![ModelInfoEntry {
+                id: "default".into(),
+                label: "DeepSeek V4".into(),
+            }],
+        };
+
+        let result = merge_model_info(Some(sdk_payload), Some(cc_switch_payload));
+        assert_eq!(result.unwrap().current_model_label.as_deref(), Some("Claude Sonnet 4.6"));
+    }
+
+    #[test]
+    fn merge_falls_back_to_cc_switch_when_sdk_none() {
+        let cc_switch_payload = ModelInfoPayload {
+            current_model_id: Some("default".into()),
+            current_model_label: Some("DeepSeek V4".into()),
+            available_models: vec![ModelInfoEntry {
+                id: "default".into(),
+                label: "DeepSeek V4".into(),
+            }],
+        };
+
+        let result = merge_model_info(None, Some(cc_switch_payload));
+        assert_eq!(result.unwrap().current_model_label.as_deref(), Some("DeepSeek V4"));
+    }
+
+    #[test]
+    fn merge_returns_none_when_both_none() {
+        let result = merge_model_info(None, None);
+        assert!(result.is_none());
     }
 }
