@@ -94,30 +94,14 @@ pub(super) async fn build(
     if meta.backend.as_deref() == Some("claude") {
         let cc_switch_env = crate::cc_switch::read_claude_provider_env();
         if !cc_switch_env.is_empty() {
-            let mut injected: Vec<&str> = Vec::new();
-            let mut skipped: Vec<&str> = Vec::new();
-
+            let keys: Vec<&str> = cc_switch_env.keys().map(|k| k.as_str()).collect();
             for (name, value) in &cc_switch_env {
-                if std::env::var(name).is_err() {
-                    env.push(aionui_common::EnvVar {
-                        name: name.clone(),
-                        value: value.clone(),
-                    });
-                    injected.push(name.as_str());
-                } else {
-                    skipped.push(name.as_str());
-                }
+                env.push(aionui_common::EnvVar {
+                    name: name.clone(),
+                    value: value.clone(),
+                });
             }
-
-            if !injected.is_empty() {
-                tracing::info!(?injected, "cc-switch: env vars injected as fallback");
-            }
-            if !skipped.is_empty() {
-                tracing::info!(
-                    ?skipped,
-                    "cc-switch: env vars skipped (already inherited from parent process)"
-                );
-            }
+            tracing::info!(?keys, "cc-switch: env vars injected");
         }
     }
 
