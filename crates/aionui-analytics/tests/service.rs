@@ -7,6 +7,7 @@ async fn missing_dirs_degrade_not_error() {
     let resp = svc
         .build(UsageRequest {
             trend_granularity: "day".into(),
+            trend_dimension: "agent".into(),
             time_range: "all".into(),
             refresh: false,
             sessions_limit: 200,
@@ -36,6 +37,7 @@ async fn remote_request_sanitizes_project_path() {
     let resp = svc
         .build(UsageRequest {
             trend_granularity: "day".into(),
+            trend_dimension: "agent".into(),
             time_range: "all".into(),
             refresh: false,
             sessions_limit: 200,
@@ -72,6 +74,7 @@ async fn remote_sanitizes_both_claude_and_codex_projects() {
     let resp = svc
         .build(UsageRequest {
             trend_granularity: "day".into(),
+            trend_dimension: "agent".into(),
             time_range: "all".into(),
             refresh: false,
             sessions_limit: 200,

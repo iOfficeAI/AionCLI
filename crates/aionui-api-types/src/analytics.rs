@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Default, Deserialize)]
 pub struct AgentUsageQuery {
     pub trend_granularity: Option<String>,
+    /// 趋势维度：agent | project | model，默认 agent。
+    pub trend_dimension: Option<String>,
     pub refresh: Option<bool>,
     pub time_range: Option<String>,
     pub sessions_limit: Option<u32>,
@@ -52,8 +54,8 @@ pub struct UsageByModel {
 #[derive(Debug, Serialize)]
 pub struct TrendPoint {
     pub bucket: String,
-    /// agent 名 → 该桶 total_tokens。
-    pub by_agent: std::collections::BTreeMap<String, u64>,
+    /// 分段名 (agent/project/model) → 该桶 total_tokens。
+    pub by_segment: std::collections::BTreeMap<String, u64>,
 }
 
 #[derive(Debug, Serialize)]

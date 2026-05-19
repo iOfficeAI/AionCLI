@@ -41,6 +41,7 @@ async fn get_agent_usage(
         .service
         .build(UsageRequest {
             trend_granularity: q.trend_granularity.unwrap_or_else(|| "day".into()),
+            trend_dimension: q.trend_dimension.unwrap_or_else(|| "agent".into()),
             time_range: q.time_range.unwrap_or_else(|| "30d".into()),
             refresh: q.refresh.unwrap_or(false),
             sessions_limit: q.sessions_limit.unwrap_or(200),

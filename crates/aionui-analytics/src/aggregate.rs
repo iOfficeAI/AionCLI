@@ -6,10 +6,12 @@ use std::collections::BTreeMap;
 
 /// 把 sessions 聚合为响应 (纯函数, 无 IO)。
 /// `time_range` 仅写入响应回显; 事件级时间过滤由 service 在调用前完成。
+/// `trend_dimension`: 趋势内层分段维度，可选 "agent" | "project" | "model"，默认行为同 "agent"。
 pub fn aggregate(
     sessions: Vec<ParsedSession>,
     granularity: &str,
     time_range: &str,
+    trend_dimension: &str,
     sessions_limit: u32,
     sessions_offset: u32,
 ) -> AgentUsageResponse {
@@ -35,6 +37,12 @@ pub fn aggregate(
         a.messages += s.message_count;
         let m = by_model.entry((an, s.model.clone())).or_default();
         m.sessions += 1;
+        // 根据 trend_dimension 确定本 session 的分段 key（session 级别，事件共享）
+        let seg: String = match trend_dimension {
+            "project" => s.project.clone(),
+            "model" => s.model.clone(),
+            _ => an.to_string(), // 默认 "agent"
+        };
         for e in &s.events {
             a.input += e.input_tokens;
             a.output += e.output_tokens;
@@ -45,7 +53,7 @@ pub fn aggregate(
             m.cache_read += e.cache_read_tokens;
             m.cache_creation += e.cache_creation_tokens;
             let bucket = bucket_key(e.at, gran);
-            *trend.entry(bucket).or_default().entry(an.to_string()).or_insert(0) += e.total();
+            *trend.entry(bucket).or_default().entry(seg.clone()).or_insert(0) += e.total();
         }
     }
 
@@ -81,9 +89,9 @@ pub fn aggregate(
 
     let trend_points: Vec<TrendPoint> = trend
         .into_iter()
-        .map(|(bucket, by_agent)| TrendPoint {
+        .map(|(bucket, by_segment)| TrendPoint {
             bucket,
-            by_agent: by_agent.into_iter().collect(),
+            by_segment: by_segment.into_iter().collect(),
         })
         .collect();
 

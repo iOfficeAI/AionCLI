@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 pub struct UsageRequest {
     pub trend_granularity: String,
+    pub trend_dimension: String,
     pub time_range: String,
     pub refresh: bool,
     pub sessions_limit: u32,
@@ -56,6 +57,7 @@ impl AgentUsageService {
             all,
             &req.trend_granularity,
             &req.time_range,
+            &req.trend_dimension,
             req.sessions_limit.clamp(1, 1000),
             req.sessions_offset,
         );
