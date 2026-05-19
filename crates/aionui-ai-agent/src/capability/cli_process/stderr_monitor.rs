@@ -1,13 +1,19 @@
 use aionui_common::AppError;
+#[cfg(any(unix, windows))]
+use tracing::{debug, error};
 
-/// Send SIGKILL to a process by PID.
+/// Force-kill a process by PID, plus any descendants.
 ///
-/// Uses the system `kill` command to avoid a `libc` dependency.
+/// Uses platform-native shell commands so we don't pull in a `libc`/`winapi`
+/// dependency just for this one call site:
+/// * Unix: `kill -9 <pid>`
+/// * Windows: `taskkill /F /T /PID <pid>` (`/T` walks the process tree —
+///   the ACP CLI typically spawns a node/bun child that must die with it)
+///
 /// If the process has already exited, this is a no-op.
 pub(super) fn force_kill(pid: u32) -> Result<(), AppError> {
     #[cfg(unix)]
     {
-        use tracing::{debug, error};
         let result = std::process::Command::new("kill")
             .args(["-9", &pid.to_string()])
             .output();
@@ -28,11 +34,113 @@ pub(super) fn force_kill(pid: u32) -> Result<(), AppError> {
             }
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        // `taskkill` exit codes:
+        //   0   — process killed
+        //   128 — "not found" (already exited): treat as success, identical to
+        //         the unix branch's behaviour
+        //   other — unexpected; surface as Internal so callers can log
+        let result = std::process::Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .output();
+
+        match result {
+            Ok(output) if output.status.success() => {
+                debug!(pid, "taskkill /F /T succeeded");
+                Ok(())
+            }
+            Ok(output) if output.status.code() == Some(128) => {
+                debug!(pid, "Process already exited before taskkill");
+                Ok(())
+            }
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let code = output.status.code();
+                error!(pid, ?code, %stderr, "taskkill returned unexpected status");
+                Err(AppError::Internal(format!(
+                    "taskkill failed for pid {pid} (exit {code:?}): {stderr}"
+                )))
+            }
+            Err(e) => {
+                error!(pid, error = %e, "Failed to execute taskkill");
+                Err(AppError::Internal(format!("Failed to kill process {pid}: {e}")))
+            }
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         Err(AppError::Internal(format!(
             "Force kill not supported on this platform for pid {pid}"
         )))
+    }
+}
+
+#[cfg(test)]
+mod force_kill_tests {
+    use super::force_kill;
+    use std::process::Command;
+    use std::time::{Duration, Instant};
+
+    /// Spawn a long-running OS process for the host platform.
+    /// Returns the [`std::process::Child`] so the test can clean up if needed.
+    fn spawn_blocker() -> std::process::Child {
+        if cfg!(windows) {
+            // PowerShell sleeps without using up CPU and is shipped with every
+            // Windows runner image.
+            Command::new("powershell")
+                .args(["-NoProfile", "-Command", "Start-Sleep -Seconds 60"])
+                .spawn()
+                .expect("spawn powershell sleep")
+        } else {
+            Command::new("sh")
+                .args(["-c", "sleep 60"])
+                .spawn()
+                .expect("spawn sleep")
+        }
+    }
+
+    /// Wait up to `timeout` for the OS to reap the process; `try_wait` returns
+    /// `Ok(Some(_))` once exited.
+    fn wait_for_exit(child: &mut std::process::Child, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => return true,
+                Ok(None) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                _ => return false,
+            }
+        }
+    }
+
+    #[test]
+    fn force_kill_terminates_running_process() {
+        let mut child = spawn_blocker();
+        let pid = child.id();
+
+        force_kill(pid).expect("force_kill should succeed for live pid");
+
+        assert!(
+            wait_for_exit(&mut child, Duration::from_secs(5)),
+            "process pid={pid} should exit after force_kill",
+        );
+    }
+
+    #[test]
+    fn force_kill_already_exited_pid_is_ok() {
+        let mut child = spawn_blocker();
+        let pid = child.id();
+        // Reap it ourselves so the kernel removes the entry.
+        let _ = child.kill();
+        let _ = child.wait();
+
+        // The pid may have been recycled by the OS in theory, but the practical
+        // expectation is "kill returns success when nothing matches" — both the
+        // unix `kill` non-zero exit and Windows `taskkill` rc=128 are mapped to
+        // Ok in `force_kill`, so this should not produce an error.
+        force_kill(pid).expect("force_kill on dead pid must not error");
     }
 }
 

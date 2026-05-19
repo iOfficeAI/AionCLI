@@ -572,10 +572,25 @@ impl crate::agent_task::IAgentTask for AcpAgentManager {
 
         let process = Arc::clone(&self.process);
         let grace = Duration::from_millis(ACP_KILL_GRACE_MS);
+        let conversation_id = self.params.conversation_id.clone();
+        let pid = process.pid();
 
         tokio::spawn(async move {
             if let Err(e) = process.kill(grace).await {
-                error!(error = %ErrorChain(&e), "Failed to kill ACP process");
+                // Tag the failure with conversation_id + pid so Sentry can
+                // group these and ops can correlate with the matching
+                // "Killing ACP agent" log line. ELECTRON-1E9: an unannotated
+                // failure here on Windows left the CLI subprocess running
+                // while the manager believed it had been torn down,
+                // producing the "no reply / second send hangs" symptom.
+                error!(
+                    %conversation_id,
+                    pid,
+                    error = %ErrorChain(&e),
+                    "Failed to kill ACP process"
+                );
+            } else {
+                debug!(%conversation_id, pid, "ACP process kill completed");
             }
         });
 
