@@ -12,8 +12,9 @@ use axum::extract::{Extension, Json, Path, State};
 use axum::routing::{get, patch, post, put};
 
 use aionui_api_types::{
-    AcpHealthCheckRequest, AcpHealthCheckResponse, AgentMetadata, ApiResponse, CustomAgentUpsertRequest,
-    DeleteCustomAgentResponse, SetEnabledRequest, TryConnectCustomAgentRequest, TryConnectCustomAgentResponse,
+    AcpHealthCheckRequest, AcpHealthCheckResponse, AgentMetadata, AgentWarmupRequest, AgentWarmupResponse, ApiResponse,
+    CustomAgentUpsertRequest, DeleteCustomAgentResponse, SetEnabledRequest, TryConnectCustomAgentRequest,
+    TryConnectCustomAgentResponse,
 };
 use aionui_auth::CurrentUser;
 use aionui_common::AppError;
@@ -24,6 +25,7 @@ pub fn agent_routes(state: AgentRouterState) -> Router {
     Router::new()
         .route("/api/agents", get(list_agents))
         .route("/api/agents/refresh", post(refresh_agents))
+        .route("/api/agents/warmup", post(warmup_agents))
         .route("/api/agents/health-check", post(health_check))
         .route("/api/agents/{id}/enabled", patch(set_agent_enabled))
         .route("/api/agents/custom", post(create_custom))
@@ -44,6 +46,15 @@ async fn refresh_agents(
     Extension(_user): Extension<CurrentUser>,
 ) -> Result<Json<ApiResponse<Vec<AgentMetadata>>>, AppError> {
     Ok(Json(ApiResponse::ok(state.service.refresh_agents().await?)))
+}
+
+async fn warmup_agents(
+    State(state): State<AgentRouterState>,
+    Extension(_user): Extension<CurrentUser>,
+    body: Result<Json<AgentWarmupRequest>, JsonRejection>,
+) -> Result<Json<ApiResponse<AgentWarmupResponse>>, AppError> {
+    let Json(req) = body.map_err(|e| AppError::BadRequest(e.to_string()))?;
+    Ok(Json(ApiResponse::ok(state.service.warmup_agents(req).await?)))
 }
 
 async fn health_check(

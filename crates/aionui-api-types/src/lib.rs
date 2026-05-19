@@ -37,7 +37,10 @@ pub use agent_build_extra::{
     AcpBuildExtra, AcpModelInfo, AionrsBuildExtra, OpenClawBuildExtra, OpenClawGatewayConfig, RemoteBuildExtra,
     SlashCommandItem,
 };
-pub use agent_discovery::{AgentEnvEntry, AgentHandshake, AgentMetadata, AgentSource, AgentSourceInfo, BehaviorPolicy};
+pub use agent_discovery::{
+    AgentEnvEntry, AgentHandshake, AgentMetadata, AgentSource, AgentSourceInfo, AgentWarmupReason, AgentWarmupRequest,
+    AgentWarmupResponse, AgentWarmupResult, AgentWarmupStatus, BehaviorPolicy,
+};
 pub use assistant::{
     AssistantResponse, AssistantSource, CreateAssistantRequest, ImportAssistantsRequest, ImportAssistantsResult,
     ImportError, SetAssistantStateRequest, UpdateAssistantRequest,
