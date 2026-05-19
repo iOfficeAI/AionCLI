@@ -354,6 +354,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "aionui-analytics"
+version = "0.1.4"
+dependencies = [
+ "aionui-api-types",
+ "aionui-common",
+ "axum",
+ "chrono",
+ "dashmap",
+ "dirs",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "walkdir",
+]
+
+[[package]]
 name = "aionui-api-types"
 version = "0.1.7"
 dependencies = [
