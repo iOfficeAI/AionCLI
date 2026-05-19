@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.7](https://github.com/iOfficeAI/AionCore/compare/v0.1.6...v0.1.7) (2026-05-19)
+
+
+### Bug Fixes
+
+* **ai-agent:** surface ACP startup crashes and accept work_dir paths (ELECTRON-1BT) ([#305](https://github.com/iOfficeAI/AionCore/issues/305)) ([7aa29a7](https://github.com/iOfficeAI/AionCore/commit/7aa29a78a2fa5013b9a4845217ba89d4b045822b))
+
 ## [0.1.6](https://github.com/iOfficeAI/AionCore/compare/v0.1.5...v0.1.6) (2026-05-19)
 
 
