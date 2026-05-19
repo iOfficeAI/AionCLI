@@ -137,6 +137,17 @@ impl Default for AgentUsageService {
 }
 
 fn time_range_cutoff(tr: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    use chrono::{Local, TimeZone};
+    if tr == "today" {
+        // 本地自然日 00:00 起 (桌面应用: 服务与 UI 同机, 本地时区即用户视角的"今天")
+        let local_midnight = Local::now().date_naive().and_hms_opt(0, 0, 0)?;
+        return Some(
+            Local
+                .from_local_datetime(&local_midnight)
+                .single()?
+                .with_timezone(&chrono::Utc),
+        );
+    }
     let days = match tr {
         "7d" => 7,
         "90d" => 90,
@@ -152,4 +163,40 @@ fn sanitize_project(p: &str) -> String {
         .and_then(|s| s.to_str())
         .unwrap_or("unknown")
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::time_range_cutoff;
+    use chrono::{Local, TimeZone, Utc};
+
+    #[test]
+    fn today_cutoff_is_local_midnight() {
+        let cut = time_range_cutoff("today").expect("today must yield a cutoff");
+        // 本地当日 00:00 对应的 UTC 时刻
+        let local_midnight = Local::now().date_naive().and_hms_opt(0, 0, 0).unwrap();
+        let expected = Local.from_local_datetime(&local_midnight).unwrap().with_timezone(&Utc);
+        assert_eq!(cut, expected, "today cutoff 必须是本地当日 00:00 对应的 UTC 时刻");
+
+        // 今天发生的事件(此刻)不应被切掉; 昨天此刻应被切掉
+        let now = Utc::now();
+        assert!(now >= cut, "现在的事件应保留 (>= today cutoff)");
+        assert!(now - chrono::Duration::days(1) < cut, "昨天此刻应被切掉 (< today cutoff)");
+    }
+
+    #[test]
+    fn existing_ranges_unchanged() {
+        assert!(time_range_cutoff("all").is_none());
+        let now = Utc::now();
+        // 用秒级容差 (±5s) 而非 num_days() — 后者截断且对调用时刻的微秒漂移敏感会 flake
+        for (tr, days) in [("7d", 7i64), ("90d", 90), ("garbage", 30)] {
+            let cut = time_range_cutoff(tr).unwrap();
+            let expected_secs = chrono::Duration::days(days).num_seconds();
+            let actual_secs = (now - cut).num_seconds();
+            assert!(
+                (actual_secs - expected_secs).abs() <= 5,
+                "{tr}: cutoff 应为 now-{days}d (±5s), 实测差 {actual_secs}s"
+            );
+        }
+    }
 }
