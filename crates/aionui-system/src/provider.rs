@@ -56,6 +56,7 @@ impl ProviderService {
             model_enabled: model_enabled_json.as_deref(),
             model_health: model_health_json.as_deref(),
             bedrock_config: bedrock_json.as_deref(),
+            is_full_url: req.is_full_url,
         };
 
         let row = self.repo.create(params).await?;
@@ -91,6 +92,7 @@ impl ProviderService {
             model_enabled: model_enabled_json.as_ref().map(|s| Some(s.as_str())),
             model_health: model_health_json.as_ref().map(|s| Some(s.as_str())),
             bedrock_config: bedrock_json.as_ref().map(|s| Some(s.as_str())),
+            is_full_url: req.is_full_url,
         };
 
         let row = self.repo.update(id, params).await?;
@@ -140,6 +142,7 @@ impl ProviderService {
             model_enabled,
             model_health,
             bedrock_config,
+            is_full_url: row.is_full_url,
             created_at: row.created_at,
             updated_at: row.updated_at,
         })
@@ -290,6 +293,7 @@ mod tests {
             model_enabled: None,
             model_health: None,
             bedrock_config: None,
+            is_full_url: false,
         }
     }
 

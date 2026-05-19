@@ -160,6 +160,7 @@ mod tests {
                 model_enabled: None,
                 model_health: None,
                 bedrock_config: None,
+                is_full_url: false,
             })
             .await
             .unwrap();

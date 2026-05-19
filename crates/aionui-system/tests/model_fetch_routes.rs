@@ -66,6 +66,7 @@ async fn create_provider(db: &aionui_db::Database, platform: &str, base_url: &st
             model_enabled: None,
             model_health: None,
             bedrock_config: None,
+            is_full_url: false,
         })
         .await
         .unwrap();
