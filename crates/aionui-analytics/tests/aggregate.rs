@@ -212,3 +212,48 @@ fn regex_like_iso_week(s: &str) -> bool {
         && b[5] == b'W'
         && b[6..8].iter().all(u8::is_ascii_digit)
 }
+
+#[test]
+fn token_kind_breakdown_sums_match_segment_totals() {
+    use aionui_analytics::types::UsageEvent;
+    let mut s = session(); // 默认 Codex, project "/work/p"
+    s.events = vec![UsageEvent {
+        at: Utc.with_ymd_and_hms(2026, 5, 16, 12, 0, 0).unwrap(),
+        input_tokens: 10,
+        output_tokens: 20,
+        cache_read_tokens: 30,
+        cache_creation_tokens: 40,
+    }];
+    let resp = aggregate(vec![s], "day", "all", "agent", 200, 0);
+    let p = &resp.trend.points[0];
+    assert_eq!(p.by_token_kind.input, 10);
+    assert_eq!(p.by_token_kind.output, 20);
+    assert_eq!(p.by_token_kind.cache_read, 30);
+    assert_eq!(p.by_token_kind.cache_creation, 40);
+    let kind_sum =
+        p.by_token_kind.input + p.by_token_kind.output + p.by_token_kind.cache_read + p.by_token_kind.cache_creation;
+    let seg_sum: u64 = p.by_segment.values().sum();
+    assert_eq!(kind_sum, seg_sum, "by_token_kind 四项和必须等于 by_segment 总和");
+}
+
+#[test]
+fn by_project_aggregates_per_project() {
+    let mut s1 = session();
+    s1.project = "/work/alpha".into();
+    s1.events = vec![ev(16, 100)];
+    let mut s2 = session();
+    s2.project = "/work/beta".into();
+    s2.events = vec![ev(16, 250)];
+    let resp = aggregate(vec![s1, s2], "day", "all", "agent", 200, 0);
+    let mut got: std::collections::BTreeMap<String, u64> = Default::default();
+    for bp in &resp.by_project {
+        got.insert(bp.project.clone(), bp.total_tokens);
+    }
+    assert_eq!(got.get("/work/alpha").copied(), Some(100));
+    assert_eq!(got.get("/work/beta").copied(), Some(250));
+    let proj_total: u64 = resp.by_project.iter().map(|p| p.total_tokens).sum();
+    let model_total: u64 = resp.by_model.iter().map(|m| m.total_tokens).sum();
+    let agent_total: u64 = resp.summary.by_agent.iter().map(|a| a.total_tokens).sum();
+    assert_eq!(proj_total, model_total);
+    assert_eq!(model_total, agent_total);
+}

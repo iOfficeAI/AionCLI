@@ -1,6 +1,7 @@
 use crate::types::ParsedSession;
 use aionui_api_types::{
-    AgentUsageResponse, SessionRow, TrendPoint, UsageByAgent, UsageByModel, UsageSummary, UsageTrend,
+    AgentUsageResponse, SessionRow, TokenKindBreakdown, TrendPoint, UsageByAgent, UsageByModel, UsageByProject,
+    UsageSummary, UsageTrend,
 };
 use std::collections::BTreeMap;
 
@@ -29,6 +30,9 @@ pub fn aggregate(
     let mut by_agent: BTreeMap<&'static str, Acc> = BTreeMap::new();
     let mut by_model: BTreeMap<(&'static str, String), Acc> = BTreeMap::new();
     let mut trend: BTreeMap<String, BTreeMap<String, u64>> = BTreeMap::new();
+    let mut by_project: BTreeMap<(&'static str, String), Acc> = BTreeMap::new();
+    // 每个 bucket 的 token 类型分层 (input, output, cache_read, cache_creation)
+    let mut trend_kind: BTreeMap<String, (u64, u64, u64, u64)> = BTreeMap::new();
 
     for s in &sessions {
         let an = s.agent.as_str();
@@ -37,6 +41,8 @@ pub fn aggregate(
         a.messages += s.message_count;
         let m = by_model.entry((an, s.model.clone())).or_default();
         m.sessions += 1;
+        let pj = by_project.entry((an, s.project.clone())).or_default();
+        pj.sessions += 1;
         // 根据 trend_dimension 确定本 session 的分段 key（session 级别，事件共享）
         let seg: String = match trend_dimension {
             "project" => s.project.clone(),
@@ -52,8 +58,17 @@ pub fn aggregate(
             m.output += e.output_tokens;
             m.cache_read += e.cache_read_tokens;
             m.cache_creation += e.cache_creation_tokens;
+            pj.input += e.input_tokens;
+            pj.output += e.output_tokens;
+            pj.cache_read += e.cache_read_tokens;
+            pj.cache_creation += e.cache_creation_tokens;
             let bucket = bucket_key(e.at, gran);
-            *trend.entry(bucket).or_default().entry(seg.clone()).or_insert(0) += e.total();
+            *trend.entry(bucket.clone()).or_default().entry(seg.clone()).or_insert(0) += e.total();
+            let tk = trend_kind.entry(bucket).or_default();
+            tk.0 += e.input_tokens;
+            tk.1 += e.output_tokens;
+            tk.2 += e.cache_read_tokens;
+            tk.3 += e.cache_creation_tokens;
         }
     }
 
@@ -87,11 +102,34 @@ pub fn aggregate(
         })
         .collect();
 
+    let by_project_vec: Vec<UsageByProject> = by_project
+        .iter()
+        .map(|((agent, project), pj)| UsageByProject {
+            agent: agent.to_string(),
+            project: project.clone(),
+            sessions: pj.sessions,
+            input_tokens: pj.input,
+            output_tokens: pj.output,
+            cache_read_tokens: pj.cache_read,
+            cache_creation_tokens: pj.cache_creation,
+            total_tokens: pj.input + pj.output + pj.cache_read + pj.cache_creation,
+        })
+        .collect();
+
     let trend_points: Vec<TrendPoint> = trend
         .into_iter()
-        .map(|(bucket, by_segment)| TrendPoint {
-            bucket,
-            by_segment: by_segment.into_iter().collect(),
+        .map(|(bucket, by_segment)| {
+            let tk = trend_kind.get(&bucket).copied().unwrap_or((0, 0, 0, 0));
+            TrendPoint {
+                bucket,
+                by_segment: by_segment.into_iter().collect(),
+                by_token_kind: TokenKindBreakdown {
+                    input: tk.0,
+                    output: tk.1,
+                    cache_read: tk.2,
+                    cache_creation: tk.3,
+                },
+            }
         })
         .collect();
 
@@ -119,6 +157,7 @@ pub fn aggregate(
         sources: Vec::new(),
         summary,
         by_model: by_model_vec,
+        by_project: by_project_vec,
         trend: UsageTrend {
             granularity: gran.to_string(),
             points: trend_points,

@@ -40,8 +40,8 @@ pub use agent_build_extra::{
 };
 pub use agent_discovery::{AgentEnvEntry, AgentHandshake, AgentMetadata, AgentSource, AgentSourceInfo, BehaviorPolicy};
 pub use analytics::{
-    AgentUsageQuery, AgentUsageResponse, SessionRow, TrendPoint, UsageByAgent, UsageByModel, UsageSourceStatus,
-    UsageSummary, UsageTrend,
+    AgentUsageQuery, AgentUsageResponse, SessionRow, TokenKindBreakdown, TrendPoint, UsageByAgent, UsageByModel,
+    UsageByProject, UsageSourceStatus, UsageSummary, UsageTrend,
 };
 pub use assistant::{
     AssistantResponse, AssistantSource, CreateAssistantRequest, ImportAssistantsRequest, ImportAssistantsResult,
