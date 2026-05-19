@@ -142,20 +142,21 @@ impl CliAgentProcess {
         env
     }
 
-    /// Find the native Claude Code binary, skipping superset wrapper scripts.
-    /// Mirrors the logic in `~/.superset/bin/claude` (find_real_binary).
+    /// Find the native Claude Code binary so `claude-agent-sdk` can spawn it
+    /// directly via `CLAUDE_CODE_EXECUTABLE`.
+    ///
+    /// Walks `PATH` in declared order. The actual binary check is delegated
+    /// to `aionui_runtime::resolve_command_in`, which honours `PATHEXT` on
+    /// Windows and adds the `.cmd / .ps1 / .bat` shim fallback for
+    /// npm-installed CLIs.
     fn find_native_claude() -> Option<String> {
-        let path_var = std::env::var("PATH").unwrap_or_default();
-        let home = std::env::var("HOME").unwrap_or_default();
-        let superset_bin = format!("{home}/.superset/bin");
-
-        for dir in path_var.split(':') {
-            if dir.is_empty() || dir == superset_bin || dir.contains(".superset") {
+        let path_var = std::env::var_os("PATH")?;
+        for dir in std::env::split_paths(&path_var) {
+            if dir.as_os_str().is_empty() {
                 continue;
             }
-            let candidate = std::path::Path::new(dir).join("claude");
-            if candidate.is_file() {
-                return Some(candidate.to_string_lossy().into_owned());
+            if let Some(found) = aionui_runtime::resolve_command_in("claude", &dir) {
+                return Some(found.to_string_lossy().into_owned());
             }
         }
         None

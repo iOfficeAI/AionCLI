@@ -13,7 +13,7 @@ build *FLAGS: lint-fix fmt
     #!/usr/bin/env bash
     set -euo pipefail
     cargo build --release
-    new_sum=$(shasum -a 256 target/release/aionui-backend | cut -d' ' -f1)
+    new_sum=$(shasum -a 256 target/release/aioncore | cut -d' ' -f1)
     force=false
     for flag in {{FLAGS}}; do
         if [[ "$flag" == "--force" || "$flag" == "-f" ]]; then
@@ -27,8 +27,8 @@ build *FLAGS: lint-fix fmt
     if [[ "$new_sum" == "$old_sum" ]]; then
         echo -e "\n⏭️  Binary unchanged — skipping install (sha256: ${new_sum:0:16}…)"
     else
-        cp target/release/aionui-backend ~/.cargo/bin/
-        codesign --force --sign - ~/.cargo/bin/aionui-backend
+        cp target/release/aioncore ~/.cargo/bin/
+        codesign --force --sign - ~/.cargo/bin/aioncore
         echo "$new_sum" > target/.build-sum
         echo -e "\n✅ Build complete — sha256: ${new_sum:0:16}…"
     fi
@@ -39,7 +39,7 @@ build-debug *FLAGS:
     #!/usr/bin/env bash
     set -euo pipefail
     cargo build
-    new_sum=$(shasum -a 256 target/debug/aionui-backend | cut -d' ' -f1)
+    new_sum=$(shasum -a 256 target/debug/aioncore | cut -d' ' -f1)
     force=false
     for flag in {{FLAGS}}; do
         if [[ "$flag" == "--force" || "$flag" == "-f" ]]; then
@@ -58,8 +58,8 @@ build-debug *FLAGS:
     fi
 
 install:
-    cp target/release/aionui-backend ~/.cargo/bin/
-    codesign --force --sign - ~/.cargo/bin/aionui-backend
+    cp target/release/aioncore ~/.cargo/bin/
+    codesign --force --sign - ~/.cargo/bin/aioncore
 
 # Run all tests
 test:
@@ -86,11 +86,11 @@ check: lint fmt-check test
 
 # Run the server (debug)
 run *ARGS:
-    cargo run --bin aionui-backend -- {{ARGS}}
+    cargo run --bin aioncore -- {{ARGS}}
 
 # Run the server (release)
 run-release *ARGS:
-    cargo run --release --bin aionui-backend -- {{ARGS}}
+    cargo run --release --bin aioncore -- {{ARGS}}
 
 # Pre-push gate: format, lint, auto-commit fixes, test, then push
 push *ARGS: lint-fix fmt _auto-commit-fixes test
