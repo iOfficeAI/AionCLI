@@ -93,3 +93,68 @@ async fn remote_sanitizes_both_claude_and_codex_projects() {
     assert!(projects.contains(&"claude-proj"));
     assert!(projects.contains(&"codex-proj"));
 }
+
+#[tokio::test]
+async fn handler_returns_apiresponse_envelope() {
+    use aionui_analytics::routes::{AnalyticsRouterState, analytics_routes};
+    use aionui_analytics::service::AgentUsageService;
+    use tower::ServiceExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let app = analytics_routes(AnalyticsRouterState {
+        service: AgentUsageService::with_home(tmp.path().join("nohome")),
+    });
+    let res = app
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/api/analytics/agent-usage?time_range=all")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["success"], true);
+    assert!(v["data"]["sources"].is_array());
+}
+
+#[tokio::test]
+async fn webui_remote_header_triggers_project_sanitize() {
+    use aionui_analytics::routes::{AnalyticsRouterState, WEBUI_REMOTE_HEADER, analytics_routes};
+    use aionui_analytics::service::AgentUsageService;
+    use tower::ServiceExt;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    let cdir = home.join(".claude/projects/encoded");
+    std::fs::create_dir_all(&cdir).unwrap();
+    std::fs::write(
+        cdir.join("s.jsonl"),
+        r#"{"type":"assistant","timestamp":"2026-05-17T10:00:00.000Z","cwd":"/Users/secret/proj","sessionId":"s1","message":{"model":"claude-opus-4-7","role":"assistant","usage":{"input_tokens":1,"output_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}"#,
+    )
+    .unwrap();
+
+    let mk = || {
+        analytics_routes(AnalyticsRouterState {
+            service: AgentUsageService::with_home(home.to_path_buf()),
+        })
+    };
+    let get = |with_header: bool| {
+        let mut b = axum::http::Request::builder().uri("/api/analytics/agent-usage?time_range=all");
+        if with_header {
+            b = b.header(WEBUI_REMOTE_HEADER, "1");
+        }
+        b.body(axum::body::Body::empty()).unwrap()
+    };
+
+    let res = mk().oneshot(get(false)).await.unwrap();
+    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["data"]["sessions"][0]["project"], "/Users/secret/proj");
+
+    let res = mk().oneshot(get(true)).await.unwrap();
+    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["data"]["sessions"][0]["project"], "proj");
+}

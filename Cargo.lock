@@ -367,6 +367,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tower",
  "tracing",
  "walkdir",
 ]
@@ -386,6 +387,7 @@ version = "0.1.7"
 dependencies = [
  "aion-config",
  "aionui-ai-agent",
+ "aionui-analytics",
  "aionui-api-types",
  "aionui-assets",
  "aionui-assistant",

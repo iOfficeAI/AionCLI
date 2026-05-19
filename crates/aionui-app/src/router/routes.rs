@@ -10,6 +10,7 @@ use axum::{Router, middleware};
 use tower_http::cors::{Any, CorsLayer};
 
 use aionui_ai_agent::{agent_routes, remote_agent_routes};
+use aionui_analytics::analytics_routes;
 use aionui_assets::{AssetRouterState, asset_routes};
 use aionui_assistant::assistant_routes;
 use aionui_auth::{
@@ -177,6 +178,10 @@ pub fn create_router_with_all_state(services: &AppServices, states: ModuleStates
     let assistant_authenticated =
         assistant_routes(states.assistant).route_layer(from_fn_with_state(auth_mw_state.clone(), auth_middleware));
 
+    // Analytics routes protected by auth middleware (webui-remote header triggers project sanitize)
+    let analytics_authenticated =
+        analytics_routes(states.analytics).route_layer(from_fn_with_state(auth_mw_state.clone(), auth_middleware));
+
     // Guide MCP diagnostic endpoint protected by auth middleware
     let guide_mcp_authenticated = Router::new()
         .route("/api/system/guide-mcp", get(guide_mcp_status))
@@ -211,6 +216,7 @@ pub fn create_router_with_all_state(services: &AppServices, states: ModuleStates
         .merge(office_authenticated)
         .merge(shell_authenticated)
         .merge(assistant_authenticated)
+        .merge(analytics_authenticated)
         .merge(guide_mcp_authenticated);
 
     // Conditionally merge WeChat login SSE route (feature-gated)
