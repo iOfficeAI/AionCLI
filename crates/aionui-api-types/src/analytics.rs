@@ -52,10 +52,32 @@ pub struct UsageByModel {
 }
 
 #[derive(Debug, Serialize)]
+pub struct UsageByProject {
+    pub agent: String,
+    pub project: String,
+    pub sessions: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub total_tokens: u64,
+}
+
+#[derive(Debug, Serialize, Default)]
+pub struct TokenKindBreakdown {
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_creation: u64,
+}
+
+#[derive(Debug, Serialize)]
 pub struct TrendPoint {
     pub bucket: String,
     /// 分段名 (agent/project/model) → 该桶 total_tokens。
     pub by_segment: std::collections::BTreeMap<String, u64>,
+    /// 该桶按 token 类型的分层 (四项之和 == by_segment 所有值之和)。
+    pub by_token_kind: TokenKindBreakdown,
 }
 
 #[derive(Debug, Serialize)]
@@ -82,6 +104,7 @@ pub struct AgentUsageResponse {
     pub sources: Vec<UsageSourceStatus>,
     pub summary: UsageSummary,
     pub by_model: Vec<UsageByModel>,
+    pub by_project: Vec<UsageByProject>,
     pub trend: UsageTrend,
     pub time_range: String,
     pub sessions_total: u64,
