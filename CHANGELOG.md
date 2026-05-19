@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.1.5](https://github.com/iOfficeAI/AionCore/compare/v0.1.4...v0.1.5) (2026-05-19)
+
+
+### Features
+
+* **ai-agent:** add cc-switch provider env injection for Claude ACP ([#291](https://github.com/iOfficeAI/AionCore/issues/291)) ([a7b93e7](https://github.com/iOfficeAI/AionCore/commit/a7b93e7dde78a7b254e26e2d2e25d7b9b885ad5b))
+
+
+### Bug Fixes
+
+* **channel:** pass model via extra for non-aionrs conversations ([#298](https://github.com/iOfficeAI/AionCore/issues/298)) ([eb65dfe](https://github.com/iOfficeAI/AionCore/commit/eb65dfed2a9f2ea3d9cb11699c276ba76690c03e))
+
+
+### Code Refactoring
+
+* rename binary from aioncli to aioncore ([#293](https://github.com/iOfficeAI/AionCore/issues/293)) ([ae78cd1](https://github.com/iOfficeAI/AionCore/commit/ae78cd19f599fb3c8845ba5d3e208a75bf310368))
+
 ## [0.1.4](https://github.com/iOfficeAI/AionCLI/compare/v0.1.3...v0.1.4) (2026-05-16)
 
 
