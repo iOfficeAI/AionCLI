@@ -98,6 +98,8 @@ pub struct ProviderResponse {
     pub model_health: Option<HashMap<String, ModelHealthStatus>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bedrock_config: Option<BedrockConfig>,
+    #[serde(default)]
+    pub is_full_url: bool,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -131,6 +133,8 @@ pub struct CreateProviderRequest {
     pub model_health: Option<HashMap<String, ModelHealthStatus>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bedrock_config: Option<BedrockConfig>,
+    #[serde(default)]
+    pub is_full_url: bool,
 }
 
 fn default_true() -> bool {
@@ -154,6 +158,7 @@ pub struct UpdateProviderRequest {
     pub model_enabled: Option<HashMap<String, bool>>,
     pub model_health: Option<HashMap<String, ModelHealthStatus>>,
     pub bedrock_config: Option<BedrockConfig>,
+    pub is_full_url: Option<bool>,
 }
 
 /// Request body for `POST /api/providers/:id/models`.
@@ -423,6 +428,7 @@ mod tests {
             model_enabled: Some(HashMap::from([("claude-sonnet-4-20250514".into(), true)])),
             model_health: None,
             bedrock_config: None,
+            is_full_url: false,
             created_at: 1712345678000,
             updated_at: 1712345678000,
         };
@@ -455,6 +461,7 @@ mod tests {
             model_enabled: None,
             model_health: None,
             bedrock_config: None,
+            is_full_url: false,
             created_at: 0,
             updated_at: 0,
         };
@@ -575,6 +582,7 @@ mod tests {
             model_enabled: None,
             model_health: None,
             bedrock_config: None,
+            is_full_url: false,
         };
         let json = serde_json::to_value(&req).unwrap();
         assert!(json.get("id").is_none());
@@ -848,5 +856,32 @@ mod tests {
         assert_eq!(mkr["details"].as_array().unwrap().len(), 3);
         assert_eq!(mkr["details"][0]["masked_key"], "sk-***abcd");
         assert_eq!(mkr["details"][2]["error"], "Invalid API key");
+    }
+
+    // -- is_full_url --
+
+    #[test]
+    fn test_create_provider_request_with_is_full_url() {
+        let raw = json!({
+            "platform": "custom",
+            "name": "Custom Proxy",
+            "base_url": "https://proxy.example.com/v1/chat/completions",
+            "api_key": "sk-test",
+            "is_full_url": true
+        });
+        let req: CreateProviderRequest = serde_json::from_value(raw).unwrap();
+        assert!(req.is_full_url);
+    }
+
+    #[test]
+    fn test_create_provider_request_is_full_url_defaults_false() {
+        let raw = json!({
+            "platform": "openai",
+            "name": "OpenAI",
+            "base_url": "https://api.openai.com",
+            "api_key": "sk-test"
+        });
+        let req: CreateProviderRequest = serde_json::from_value(raw).unwrap();
+        assert!(!req.is_full_url);
     }
 }
