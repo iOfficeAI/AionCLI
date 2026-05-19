@@ -171,3 +171,44 @@ fn trend_splits_by_model_dimension() {
     let trend_total: u64 = point.by_segment.values().sum();
     assert_eq!(trend_total, summary_total, "趋势分段之和应等于 summary total");
 }
+
+#[test]
+fn week_granularity_uses_iso_week_bucket_keys() {
+    // 单会话两事件: 2026-05-16 (周六, ISO W20) 与 2026-05-18 (周一, ISO W21)
+    // → week 粒度下应落入两个不同的 "YYYY-Www" 桶。
+    let s = ParsedSession {
+        agent: Agent::Codex,
+        session_id: "w1".into(),
+        project: "/work/p".into(),
+        model: "gpt-5.1-codex".into(),
+        started_at: Utc.with_ymd_and_hms(2026, 5, 16, 12, 0, 0).unwrap(),
+        last_active_at: Utc.with_ymd_and_hms(2026, 5, 18, 12, 0, 0).unwrap(),
+        events: vec![ev(16, 100), ev(18, 200)],
+        message_count: 2,
+    };
+    let resp = aggregate(vec![s], "week", "all", "agent", 200, 0);
+
+    assert_eq!(resp.trend.granularity, "week");
+    // 每个桶 key 必须是 ISO 周格式 YYYY-Www
+    for p in &resp.trend.points {
+        assert!(
+            regex_like_iso_week(&p.bucket),
+            "bucket {:?} 不是 ISO 周格式 YYYY-Www",
+            p.bucket
+        );
+    }
+    // 跨两个 ISO 周 → 两个桶, 之和 = 300
+    assert_eq!(resp.trend.points.len(), 2, "跨 W20/W21 应有两个周桶");
+    let sum: u64 = resp.trend.points.iter().flat_map(|p| p.by_segment.values()).sum();
+    assert_eq!(sum, 300);
+}
+
+// 轻量校验 "YYYY-Www" (无需引入 regex crate)
+fn regex_like_iso_week(s: &str) -> bool {
+    let b = s.as_bytes();
+    s.len() == 8
+        && b[0..4].iter().all(u8::is_ascii_digit)
+        && b[4] == b'-'
+        && b[5] == b'W'
+        && b[6..8].iter().all(u8::is_ascii_digit)
+}
