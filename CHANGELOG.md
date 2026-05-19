@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.6](https://github.com/iOfficeAI/AionCore/compare/v0.1.5...v0.1.6) (2026-05-19)
+
+
+### Bug Fixes
+
+* **ai-agent:** force-kill ACP processes on Windows (ELECTRON-1E9) ([#303](https://github.com/iOfficeAI/AionCore/issues/303)) ([e60fdd3](https://github.com/iOfficeAI/AionCore/commit/e60fdd31332512398715ed056a7f60eeee42a752))
+* **ai-agent:** make find_native_claude cross-platform (ELECTRON-1CG) ([#299](https://github.com/iOfficeAI/AionCore/issues/299)) ([fda9239](https://github.com/iOfficeAI/AionCore/commit/fda92398caa9384d8f0cdc11cf0a3616047448af))
+* **ai-agent:** return 409 when remote WS not connected on cancel (ELECTRON-1CV) ([#302](https://github.com/iOfficeAI/AionCore/issues/302)) ([dc87f1c](https://github.com/iOfficeAI/AionCore/commit/dc87f1c37352be6cd820503ed4c38be4098d26ed))
+
+
+### Documentation
+
+* catch up with aionui-backend → AionCore rename ([#301](https://github.com/iOfficeAI/AionCore/issues/301)) ([40a7e83](https://github.com/iOfficeAI/AionCore/commit/40a7e83618bb62b145378e333e26b66dc0061c89))
+
 ## [0.1.5](https://github.com/iOfficeAI/AionCore/compare/v0.1.4...v0.1.5) (2026-05-19)
 
 
