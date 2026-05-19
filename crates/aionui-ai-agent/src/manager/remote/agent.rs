@@ -315,6 +315,11 @@ impl crate::agent_task::IAgentTask for RemoteAgentManager {
     }
 
     async fn cancel(&self) -> Result<(), AppError> {
+        if self.ws_sink.lock().await.is_none() {
+            return Err(AppError::Conflict(
+                "WebSocket not connected; nothing to cancel".into(),
+            ));
+        }
         let payload = json!({ "type": "session/cancel", "data": {} });
         self.ws_send(&payload).await?;
 
