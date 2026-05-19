@@ -6,7 +6,7 @@
 //! assumption, which was fragile in two ways:
 //!
 //! 1. Dev: Electron launches the backend through a symlink
-//!    (`~/.cargo/bin/aionui-backend` → `target/debug/aionui-backend`) and
+//!    (`~/.cargo/bin/aioncore` → `target/debug/aioncore`) and
 //!    `std::env::current_exe().parent()` would resolve to the symlink's
 //!    directory, not the real binary's, missing the `assets/` sibling.
 //! 2. Prod: `AionUi/scripts/prepareAionuiBackend.js` only copies the
