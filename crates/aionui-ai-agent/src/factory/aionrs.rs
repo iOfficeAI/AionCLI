@@ -400,7 +400,8 @@ mod tests {
 
     #[test]
     fn resolve_non_openai_keeps_default_max_tokens() {
-        let (base_url, compat) = resolve_aionrs_url_and_compat("custom", "https://api.deepseek.com/v1", "openai", false);
+        let (base_url, compat) =
+            resolve_aionrs_url_and_compat("custom", "https://api.deepseek.com/v1", "openai", false);
         assert_eq!(base_url.as_deref(), Some("https://api.deepseek.com"));
         assert!(compat.max_tokens_field.is_none());
     }
@@ -419,7 +420,8 @@ mod tests {
 
     #[test]
     fn resolve_anthropic_no_compat_overrides() {
-        let (base_url, compat) = resolve_aionrs_url_and_compat("anthropic", "https://api.anthropic.com", "anthropic", false);
+        let (base_url, compat) =
+            resolve_aionrs_url_and_compat("anthropic", "https://api.anthropic.com", "anthropic", false);
         assert_eq!(base_url.as_deref(), Some("https://api.anthropic.com"));
         assert!(compat.max_tokens_field.is_none());
         assert!(compat.api_path.is_none());
@@ -458,12 +460,8 @@ mod tests {
 
     #[test]
     fn resolve_full_url_false_still_normalizes() {
-        let (base_url, compat) = resolve_aionrs_url_and_compat(
-            "custom",
-            "https://api.deepseek.com/v1",
-            "openai",
-            false,
-        );
+        let (base_url, compat) =
+            resolve_aionrs_url_and_compat("custom", "https://api.deepseek.com/v1", "openai", false);
         assert_eq!(base_url.as_deref(), Some("https://api.deepseek.com"));
         assert!(compat.api_path.is_none());
     }
