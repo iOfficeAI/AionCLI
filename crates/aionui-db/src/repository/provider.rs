@@ -40,6 +40,7 @@ pub struct CreateProviderParams<'a> {
     pub model_enabled: Option<&'a str>,
     pub model_health: Option<&'a str>,
     pub bedrock_config: Option<&'a str>,
+    pub is_full_url: bool,
 }
 
 /// Parameters for updating an existing provider.
@@ -59,4 +60,5 @@ pub struct UpdateProviderParams<'a> {
     pub model_enabled: Option<Option<&'a str>>,
     pub model_health: Option<Option<&'a str>>,
     pub bedrock_config: Option<Option<&'a str>>,
+    pub is_full_url: Option<bool>,
 }

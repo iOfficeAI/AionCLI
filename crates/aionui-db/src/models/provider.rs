@@ -27,6 +27,9 @@ pub struct Provider {
     pub model_health: Option<String>,
     /// JSON object: Bedrock-specific configuration.
     pub bedrock_config: Option<String>,
+    /// When true, base_url is treated as a complete endpoint URL.
+    /// The system will NOT append paths like /v1/chat/completions.
+    pub is_full_url: bool,
     pub created_at: TimestampMs,
     pub updated_at: TimestampMs,
 }

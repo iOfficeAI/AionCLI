@@ -47,8 +47,8 @@ impl IProviderRepository for SqliteProviderRepository {
             "INSERT INTO providers \
                 (id, platform, name, base_url, api_key_encrypted, models, enabled, \
                  capabilities, context_limit, model_protocols, model_enabled, \
-                 model_health, bedrock_config, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 model_health, bedrock_config, is_full_url, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(params.platform)
@@ -63,6 +63,7 @@ impl IProviderRepository for SqliteProviderRepository {
         .bind(params.model_enabled)
         .bind(params.model_health)
         .bind(params.bedrock_config)
+        .bind(params.is_full_url)
         .bind(now)
         .bind(now)
         .execute(&self.pool)
@@ -88,6 +89,7 @@ impl IProviderRepository for SqliteProviderRepository {
             model_enabled: params.model_enabled.map(String::from),
             model_health: params.model_health.map(String::from),
             bedrock_config: params.bedrock_config.map(String::from),
+            is_full_url: params.is_full_url,
             created_at: now,
             updated_at: now,
         })
@@ -106,7 +108,7 @@ impl IProviderRepository for SqliteProviderRepository {
                 platform = ?, name = ?, base_url = ?, api_key_encrypted = ?, \
                 models = ?, enabled = ?, capabilities = ?, context_limit = ?, \
                 model_protocols = ?, model_enabled = ?, model_health = ?, \
-                bedrock_config = ?, updated_at = ? \
+                bedrock_config = ?, is_full_url = ?, updated_at = ? \
              WHERE id = ?",
         )
         .bind(&merged.platform)
@@ -121,6 +123,7 @@ impl IProviderRepository for SqliteProviderRepository {
         .bind(&merged.model_enabled)
         .bind(&merged.model_health)
         .bind(&merged.bedrock_config)
+        .bind(merged.is_full_url)
         .bind(merged.updated_at)
         .bind(id)
         .execute(&self.pool)
@@ -176,6 +179,7 @@ fn merge_update(existing: Provider, params: UpdateProviderParams<'_>) -> Provide
         bedrock_config: params
             .bedrock_config
             .map_or(existing.bedrock_config, |v| v.map(String::from)),
+        is_full_url: params.is_full_url.unwrap_or(existing.is_full_url),
         created_at: existing.created_at,
         updated_at: now,
     }
@@ -207,6 +211,7 @@ mod tests {
             model_enabled: None,
             model_health: None,
             bedrock_config: None,
+            is_full_url: false,
         }
     }
 
