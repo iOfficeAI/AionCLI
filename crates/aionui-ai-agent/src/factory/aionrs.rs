@@ -94,7 +94,8 @@ pub(super) async fn build(
 
     let provider = map_aionrs_provider(&row.platform, &model_id, row.model_protocols.as_deref());
 
-    let (base_url, compat_overrides) = resolve_aionrs_url_and_compat(&row.platform, &row.base_url, &provider);
+    let (base_url, compat_overrides) =
+        resolve_aionrs_url_and_compat(&row.platform, &row.base_url, &provider, row.is_full_url);
 
     let bedrock_config = if row.platform == "bedrock" {
         resolve_bedrock_config(row.bedrock_config.as_deref())
@@ -196,8 +197,15 @@ fn resolve_aionrs_url_and_compat(
     platform: &str,
     raw_base_url: &str,
     mapped_provider: &str,
+    is_full_url: bool,
 ) -> (Option<String>, AionrsCompatOverrides) {
     let mut compat = AionrsCompatOverrides::default();
+
+    if is_full_url {
+        let trimmed = raw_base_url.trim_end_matches('/');
+        compat.api_path = Some(String::new());
+        return (Some(trimmed.to_owned()), compat);
+    }
 
     if platform == "gemini" {
         let trimmed = raw_base_url.trim_end_matches('/');
@@ -384,7 +392,7 @@ mod tests {
 
     #[test]
     fn resolve_openai_official_sets_max_completion_tokens() {
-        let (base_url, compat) = resolve_aionrs_url_and_compat("custom", "https://api.openai.com/v1", "openai");
+        let (base_url, compat) = resolve_aionrs_url_and_compat("custom", "https://api.openai.com/v1", "openai", false);
         assert_eq!(base_url.as_deref(), Some("https://api.openai.com"));
         assert_eq!(compat.max_tokens_field.as_deref(), Some("max_completion_tokens"));
         assert!(compat.api_path.is_none());
@@ -392,7 +400,7 @@ mod tests {
 
     #[test]
     fn resolve_non_openai_keeps_default_max_tokens() {
-        let (base_url, compat) = resolve_aionrs_url_and_compat("custom", "https://api.deepseek.com/v1", "openai");
+        let (base_url, compat) = resolve_aionrs_url_and_compat("custom", "https://api.deepseek.com/v1", "openai", false);
         assert_eq!(base_url.as_deref(), Some("https://api.deepseek.com"));
         assert!(compat.max_tokens_field.is_none());
     }
@@ -400,7 +408,7 @@ mod tests {
     #[test]
     fn resolve_gemini_prepends_path_and_sets_api_path() {
         let (base_url, compat) =
-            resolve_aionrs_url_and_compat("gemini", "https://generativelanguage.googleapis.com", "openai");
+            resolve_aionrs_url_and_compat("gemini", "https://generativelanguage.googleapis.com", "openai", false);
         assert_eq!(
             base_url.as_deref(),
             Some("https://generativelanguage.googleapis.com/v1beta/openai")
@@ -411,9 +419,52 @@ mod tests {
 
     #[test]
     fn resolve_anthropic_no_compat_overrides() {
-        let (base_url, compat) = resolve_aionrs_url_and_compat("anthropic", "https://api.anthropic.com", "anthropic");
+        let (base_url, compat) = resolve_aionrs_url_and_compat("anthropic", "https://api.anthropic.com", "anthropic", false);
         assert_eq!(base_url.as_deref(), Some("https://api.anthropic.com"));
         assert!(compat.max_tokens_field.is_none());
+        assert!(compat.api_path.is_none());
+    }
+
+    #[test]
+    fn resolve_full_url_mode_uses_url_as_is() {
+        let (base_url, compat) = resolve_aionrs_url_and_compat(
+            "custom",
+            "https://proxy.example.com/v1/chat/completions",
+            "openai",
+            true,
+        );
+        assert_eq!(
+            base_url.as_deref(),
+            Some("https://proxy.example.com/v1/chat/completions")
+        );
+        assert_eq!(compat.api_path.as_deref(), Some(""));
+        assert!(compat.max_tokens_field.is_none());
+    }
+
+    #[test]
+    fn resolve_full_url_mode_strips_trailing_slash() {
+        let (base_url, compat) = resolve_aionrs_url_and_compat(
+            "custom",
+            "https://proxy.example.com/v1/chat/completions/",
+            "openai",
+            true,
+        );
+        assert_eq!(
+            base_url.as_deref(),
+            Some("https://proxy.example.com/v1/chat/completions")
+        );
+        assert_eq!(compat.api_path.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn resolve_full_url_false_still_normalizes() {
+        let (base_url, compat) = resolve_aionrs_url_and_compat(
+            "custom",
+            "https://api.deepseek.com/v1",
+            "openai",
+            false,
+        );
+        assert_eq!(base_url.as_deref(), Some("https://api.deepseek.com"));
         assert!(compat.api_path.is_none());
     }
 
