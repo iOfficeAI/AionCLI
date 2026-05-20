@@ -106,15 +106,17 @@ pub(super) async fn build(
         }
     }
 
-    let command_spec = if let Some(entry) = resolve_preinstalled_entry(&meta.args, &deps.data_dir) {
+    let command_spec = if let Some((entry, trailing)) = resolve_preinstalled_entry(&meta.args, &deps.data_dir) {
         info!(
             ctx.conversation_id,
             entry = %entry.display(),
             "using pre-installed package"
         );
+        let mut run_args = vec!["run".into(), entry.to_string_lossy().into_owned()];
+        run_args.extend(trailing);
         CommandSpec {
             command: meta.resolved_command.clone().unwrap_or_default(),
-            args: vec!["run".into(), entry.to_string_lossy().into_owned()],
+            args: run_args,
             env,
             cwd,
         }
@@ -183,12 +185,12 @@ pub(super) async fn build(
 }
 
 /// Check if a pre-installed entry point is available for the given args.
-/// Parses the `bun x` args to extract package spec, then checks on disk.
-fn resolve_preinstalled_entry(args: &[String], data_dir: &Path) -> Option<PathBuf> {
-    use aionui_runtime::acp_package::{entry_point, parse_bun_x_args};
+/// Returns the entry path and any trailing args (e.g. `--acp` for codebuddy).
+fn resolve_preinstalled_entry(args: &[String], data_dir: &Path) -> Option<(PathBuf, Vec<String>)> {
+    use aionui_runtime::acp_package::{entry_point, parse_bun_x_args_full};
 
     let args_json = serde_json::to_string(args).ok()?;
-    let spec = parse_bun_x_args(&args_json)?;
+    let (spec, trailing) = parse_bun_x_args_full(&args_json)?;
     let entry = entry_point(data_dir, &spec);
     if entry.is_none() {
         warn!(
@@ -197,5 +199,5 @@ fn resolve_preinstalled_entry(args: &[String], data_dir: &Path) -> Option<PathBu
             "pre-installed package not available, falling back to bun-x"
         );
     }
-    entry
+    entry.map(|e| (e, trailing))
 }

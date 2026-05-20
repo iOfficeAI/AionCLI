@@ -192,16 +192,22 @@ pub fn cleanup_stale(data_dir: &Path, active_specs: &[&AcpPackageSpec]) {
 /// - `["x","--bun","@scope/pkg@version"]`
 /// - `["x","--bun","@scope/pkg@version","--extra-flags"]`
 pub fn parse_bun_x_args(args_json: &str) -> Option<AcpPackageSpec> {
+    parse_bun_x_args_full(args_json).map(|(spec, _)| spec)
+}
+
+/// Like `parse_bun_x_args` but also returns trailing arguments after the package specifier.
+/// e.g. `["x","--bun","@tencent-ai/codebuddy-code@2.97.0","--acp"]` → (spec, ["--acp"])
+pub fn parse_bun_x_args_full(args_json: &str) -> Option<(AcpPackageSpec, Vec<String>)> {
     let args: Vec<String> = serde_json::from_str(args_json).ok()?;
 
-    // Find the package specifier: first arg after "--bun" that starts with '@' or a letter
     let bun_idx = args.iter().position(|a| a == "--bun")?;
     let pkg_arg = args.get(bun_idx + 1)?;
 
-    // Split "package@version" — handle scoped packages like @scope/name@version
     let (package, version) = split_package_version(pkg_arg)?;
 
-    Some(AcpPackageSpec { package, version })
+    let trailing: Vec<String> = args[bun_idx + 2..].to_vec();
+
+    Some((AcpPackageSpec { package, version }, trailing))
 }
 
 /// Split `@scope/name@version` or `name@version` into (package, version).
