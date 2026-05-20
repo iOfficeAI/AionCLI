@@ -8,7 +8,9 @@
 //! 5. chmod 0o755 (Unix only).
 //! 6. Atomic rename `bun.tmp` -> `bun[.exe]`.
 //! 7. Create `bunx[.exe]` — symlink on Unix, copy on Windows.
-//! 8. Write `bun.stamp` JSON.
+//! 8. Create `node[.exe]` — symlink on Unix, copy on Windows — so
+//!    `#!/usr/bin/env node` shebangs in npm packages resolve to bun.
+//! 9. Write `bun.stamp` JSON.
 
 use std::fs::{self, File};
 use std::io::{BufReader, Read, Write};
@@ -41,6 +43,10 @@ pub fn bun_filename() -> &'static str {
 
 pub fn bunx_filename() -> &'static str {
     if cfg!(windows) { "bunx.exe" } else { "bunx" }
+}
+
+pub fn node_filename() -> &'static str {
+    if cfg!(windows) { "node.exe" } else { "node" }
 }
 
 /// Returns true when `<dir>/bun[.exe]` exists and `<dir>/bun.stamp`
@@ -128,6 +134,22 @@ pub fn extract_into(dir: &Path, blob: &[u8], expected_sha: &str, version: &str) 
             fs::copy(&bun_path, &bunx_path)?;
         }
 
+        // node: symlink (Unix) or copy (Windows).
+        // Many npm packages use `#!/usr/bin/env node` shebangs; placing a
+        // `node` alias in the bundled bun directory ensures they resolve
+        // to bun (which is Node-compatible) even when no standalone Node
+        // installation exists on the host.
+        let node_path = dir.join(node_filename());
+        let _ = fs::remove_file(&node_path);
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&bun_path, &node_path)?;
+        }
+        #[cfg(windows)]
+        {
+            fs::copy(&bun_path, &node_path)?;
+        }
+
         // Stamp.
         let stamp = Stamp {
             sha256: expected_sha.into(),
@@ -192,7 +214,7 @@ mod tests {
     }
 
     #[test]
-    fn extract_happy_path_creates_bun_and_bunx() {
+    fn extract_happy_path_creates_bun_and_bunx_and_node() {
         let payload = b"#!/bin/sh\necho fake-bun\n";
         let blob = make_blob(payload);
         let expected_sha = sha_hex(payload);
@@ -203,6 +225,7 @@ mod tests {
 
         assert!(bun_path.is_file(), "bun file must exist");
         assert!(dir.join(bunx_filename()).exists(), "bunx must exist");
+        assert!(dir.join(node_filename()).exists(), "node must exist");
         assert!(dir.join("bun.stamp").is_file(), "stamp must exist");
 
         let contents = std::fs::read(&bun_path).unwrap();
