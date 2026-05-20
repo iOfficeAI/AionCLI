@@ -5,6 +5,7 @@
 //! [`resolve_bun`] to obtain a usable executable path and [`bun_bin_dir`]
 //! to prepend the runtime directory to child-process `PATH`.
 
+pub mod acp_package;
 mod cache;
 mod embed;
 mod extract;

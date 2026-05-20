@@ -1,3 +1,4 @@
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::agent_task::AgentInstance;
@@ -8,7 +9,7 @@ use crate::manager::acp::{AcpAgentManager, CatalogForwarder};
 use crate::types::BuildTaskOptions;
 use aionui_api_types::AcpBuildExtra;
 use aionui_common::{AppError, CommandSpec};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 pub(super) async fn build(
     deps: Arc<AgentFactoryDeps>,
@@ -105,11 +106,25 @@ pub(super) async fn build(
         }
     }
 
-    let command_spec = CommandSpec {
-        command,
-        args,
-        env,
-        cwd,
+    let command_spec = if let Some(entry) = resolve_preinstalled_entry(&meta.args, &deps.data_dir) {
+        info!(
+            ctx.conversation_id,
+            entry = %entry.display(),
+            "using pre-installed package"
+        );
+        CommandSpec {
+            command: meta.resolved_command.clone().unwrap_or_default(),
+            args: vec!["run".into(), entry.to_string_lossy().into_owned()],
+            env,
+            cwd,
+        }
+    } else {
+        CommandSpec {
+            command,
+            args,
+            env,
+            cwd,
+        }
     };
     let session_snapshot = deps.acp_agent_service.load_snapshot_state(&ctx.conversation_id).await;
 
@@ -165,4 +180,22 @@ pub(super) async fn build(
     deps.acp_agent_service.attach(ctx.conversation_id, domain_rx).await;
 
     Ok(instance)
+}
+
+/// Check if a pre-installed entry point is available for the given args.
+/// Parses the `bun x` args to extract package spec, then checks on disk.
+fn resolve_preinstalled_entry(args: &[String], data_dir: &Path) -> Option<PathBuf> {
+    use aionui_runtime::acp_package::{entry_point, parse_bun_x_args};
+
+    let args_json = serde_json::to_string(args).ok()?;
+    let spec = parse_bun_x_args(&args_json)?;
+    let entry = entry_point(data_dir, &spec);
+    if entry.is_none() {
+        warn!(
+            package = %spec.package,
+            version = %spec.version,
+            "pre-installed package not available, falling back to bun-x"
+        );
+    }
+    entry
 }

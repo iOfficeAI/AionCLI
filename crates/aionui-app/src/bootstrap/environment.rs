@@ -3,7 +3,7 @@
 use std::time::Instant;
 
 use anyhow::Result;
-use tracing::info;
+use tracing::{info, warn};
 
 use aionui_app::AppConfig;
 use aionui_db::Database;
@@ -81,5 +81,39 @@ pub async fn init_data_layer(config: &AppConfig) -> Result<Database> {
     let database = aionui_db::init_database(&db_path).await?;
     info!(elapsed_ms = boot.elapsed().as_millis(), "startup: database initialized");
 
+    ensure_acp_packages(&config.data_dir, &database).await;
+    info!(elapsed_ms = boot.elapsed().as_millis(), "startup: acp packages ready");
+
     Ok(database)
+}
+
+/// Pre-install ACP packages so runtime spawns avoid `bun x` install overhead.
+/// Queries `agent_metadata` for bun-launched agents and installs their packages.
+/// Failures are logged but never block startup (graceful degradation).
+async fn ensure_acp_packages(data_dir: &std::path::Path, database: &Database) {
+    use aionui_db::{IAgentMetadataRepository, SqliteAgentMetadataRepository};
+    use aionui_runtime::acp_package::{ensure_packages, parse_bun_x_args};
+
+    const PREINSTALL_IDS: &[&str] = &["2d23ff1c", "8e1acf31"];
+
+    let repo = SqliteAgentMetadataRepository::new(database.pool().clone());
+    let all_rows = match repo.list_all().await {
+        Ok(rows) => rows,
+        Err(e) => {
+            warn!(error = %e, "failed to query agent_metadata for ACP packages");
+            return;
+        }
+    };
+
+    let specs: Vec<_> = all_rows
+        .iter()
+        .filter(|row| row.command.as_deref() == Some("bun") && PREINSTALL_IDS.contains(&row.id.as_str()))
+        .filter_map(|row| row.args.as_deref().and_then(parse_bun_x_args))
+        .collect();
+
+    if specs.is_empty() {
+        return;
+    }
+
+    ensure_packages(data_dir, &specs).await;
 }
