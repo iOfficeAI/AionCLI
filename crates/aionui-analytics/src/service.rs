@@ -181,7 +181,10 @@ mod tests {
         // 今天发生的事件(此刻)不应被切掉; 昨天此刻应被切掉
         let now = Utc::now();
         assert!(now >= cut, "现在的事件应保留 (>= today cutoff)");
-        assert!(now - chrono::Duration::days(1) < cut, "昨天此刻应被切掉 (< today cutoff)");
+        assert!(
+            now - chrono::Duration::days(1) < cut,
+            "昨天此刻应被切掉 (< today cutoff)"
+        );
     }
 
     #[test]
