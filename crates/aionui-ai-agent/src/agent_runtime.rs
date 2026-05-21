@@ -237,4 +237,34 @@ mod tests {
         let res = tokio::time::timeout(std::time::Duration::from_millis(50), rx.recv()).await;
         assert!(res.is_err());
     }
+
+    #[tokio::test]
+    async fn reset_for_new_turn_overrides_finished() {
+        let rt = runtime();
+        rt.emit_finish(None);
+        assert_eq!(rt.status(), Some(ConversationStatus::Finished));
+
+        rt.reset_for_new_turn(ConversationStatus::Running);
+        assert_eq!(rt.status(), Some(ConversationStatus::Running));
+    }
+
+    #[tokio::test]
+    async fn reset_for_new_turn_then_emit_finish_sends_event() {
+        let rt = runtime();
+        rt.emit_finish(None);
+        assert_eq!(rt.status(), Some(ConversationStatus::Finished));
+
+        rt.reset_for_new_turn(ConversationStatus::Running);
+        let mut rx = rt.subscribe();
+        rt.emit_finish(Some("sess-2".into()));
+        assert_eq!(rt.status(), Some(ConversationStatus::Finished));
+
+        let ev = rx.recv().await.expect("finish event after reset");
+        match ev {
+            AgentStreamEvent::Finish(data) => {
+                assert_eq!(data.session_id.as_deref(), Some("sess-2"));
+            }
+            other => panic!("expected Finish, got {other:?}"),
+        }
+    }
 }

@@ -9,7 +9,7 @@ use crate::manager::acp::{
 };
 use crate::protocol::acp::AcpProtocol;
 use crate::protocol::error::AcpError;
-use crate::protocol::events::AgentStreamEvent;
+use crate::protocol::events::{AgentStreamEvent, FinishEventData};
 use crate::registry::CatalogSender;
 use crate::shared_kernel::{ModeId, ModelId, SessionId as DomainSessionId};
 use crate::types::SendMessageData;
@@ -490,7 +490,7 @@ impl AcpAgentManager {
     /// `pending_model_notice`) and prepends the appropriate block when set.
     async fn ensure_session_and_send(&self, data: &SendMessageData) -> Result<(), AppError> {
         let sid = self.ensure_session_opened().await?;
-        self.runtime.transition_to(ConversationStatus::Running);
+        self.runtime.reset_for_new_turn(ConversationStatus::Running);
 
         let content = {
             let mut s = self.session.write().await;
@@ -585,15 +585,19 @@ impl crate::agent_task::IAgentTask for AcpAgentManager {
     async fn cancel(&self) -> Result<(), AppError> {
         info!("Cancelling ACP session");
         let session_id = self.session.read().await.session_id().map(ToOwned::to_owned);
-        if let Some(sid) = session_id {
-            self.protocol.cancel(CancelNotification::new(SessionId::new(sid)));
+        if let Some(sid) = &session_id {
+            self.protocol
+                .cancel(CancelNotification::new(SessionId::new(sid.as_str())));
         }
         self.permission_router.cancel_all();
 
-        // m1 fix: mark task as Finished on explicit stop, so external
-        // status() observers see a consistent terminal state. Idempotent —
-        // if send_message already emitted Finish, this is a no-op.
-        self.runtime.emit_finish(None);
+        // Force status to Finished and emit unconditionally, bypassing the
+        // absorbing-state guard. This ensures StreamRelay always receives
+        // its terminal event regardless of prior state.
+        self.runtime.reset_for_new_turn(ConversationStatus::Finished);
+        self.runtime
+            .emit(AgentStreamEvent::Finish(FinishEventData { session_id: None }));
+
         Ok(())
     }
 
