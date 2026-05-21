@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.8](https://github.com/iOfficeAI/AionCore/compare/v0.1.7...v0.1.8) (2026-05-21)
+
+
+### Features
+
+* add is_full_url flag for provider URL resolution ([#307](https://github.com/iOfficeAI/AionCore/issues/307)) ([3aa15da](https://github.com/iOfficeAI/AionCore/commit/3aa15da0c70a15da097e5bd839b83c4c0c720bf1))
+
+
+### Bug Fixes
+
+* **ai-agent:** prevent stuck session after ACP cancel ([#313](https://github.com/iOfficeAI/AionCore/issues/313)) ([3a84bfe](https://github.com/iOfficeAI/AionCore/commit/3a84bfec1bfffd589d091efdd7b157ea1c3b2960))
+* **runtime:** create node symlink in bundled bun directory (ELECTRON-1EY) ([#310](https://github.com/iOfficeAI/AionCore/issues/310)) ([c0ad26b](https://github.com/iOfficeAI/AionCore/commit/c0ad26bb74008609a8dac815758aabc2284a8066))
+
 ## [0.1.7](https://github.com/iOfficeAI/AionCore/compare/v0.1.6...v0.1.7) (2026-05-19)
 
 
