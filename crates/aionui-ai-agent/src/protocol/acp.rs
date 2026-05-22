@@ -550,7 +550,7 @@ fn is_streaming_chunk(body: &str) -> bool {
         return false;
     };
     let kind = value
-        .pointer("/params/update/sessionUpdate")
+        .pointer("/update/sessionUpdate")
         .and_then(serde_json::Value::as_str);
     matches!(kind, Some(k) if STREAMING_KINDS.contains(&k))
 }
@@ -696,11 +696,11 @@ mod tests {
         tracing::subscriber::with_default(subscriber, || {
             log_agent_notify(
                 "session/update",
-                r#"{"params":{"update":{"sessionUpdate":"agent_message_chunk"}}}"#,
+                r#"{"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk"}}"#,
             );
             log_agent_notify(
                 "session/update",
-                r#"{"params":{"update":{"sessionUpdate":"current_mode_update","modeId":"yolo"}}}"#,
+                r#"{"sessionId":"s1","update":{"sessionUpdate":"current_mode_update","modeId":"yolo"}}"#,
             );
         });
 
@@ -725,10 +725,12 @@ mod tests {
 
     #[test]
     fn is_streaming_chunk_recognises_prompt_stream_kinds() {
-        let body_chunk =
-            r#"{"params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hi"}}}}"#;
-        let mode_update = r#"{"params":{"update":{"sessionUpdate":"current_mode_update","modeId":"yolo"}}}"#;
-        let unknown = r#"{"params":{"update":{"sessionUpdate":"future_unknown_kind"}}}"#;
+        // SDK delivers `params` already unwrapped — `body` here mirrors what
+        // the log helpers receive: the JSON-RPC params object with `sessionId`
+        // and `update` at the top level.
+        let body_chunk = r#"{"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hi"}}}"#;
+        let mode_update = r#"{"sessionId":"s1","update":{"sessionUpdate":"current_mode_update","modeId":"yolo"}}"#;
+        let unknown = r#"{"sessionId":"s1","update":{"sessionUpdate":"future_unknown_kind"}}"#;
         let malformed = "not json";
 
         assert!(is_streaming_chunk(body_chunk));
