@@ -1527,6 +1527,7 @@ fn merge_json(base: &mut serde_json::Value, patch: &serde_json::Value) {
 
 #[derive(Debug, Default, PartialEq, Eq)]
 struct AssistantLineage<'a> {
+    agent_type: &'a str,
     preset_assistant_id: &'a str,
     custom_agent_id: &'a str,
     agent_id: &'a str,
@@ -1537,11 +1538,12 @@ struct AssistantLineage<'a> {
 }
 
 impl<'a> AssistantLineage<'a> {
-    fn from_extra(extra: &'a serde_json::Value) -> Self {
+    fn from_response_and_extra(response: &'a ConversationResponse, extra: &'a serde_json::Value) -> Self {
         fn s<'a>(extra: &'a serde_json::Value, key: &str) -> &'a str {
             extra.get(key).and_then(serde_json::Value::as_str).unwrap_or("")
         }
         Self {
+            agent_type: response.r#type.serde_name(),
             preset_assistant_id: s(extra, "preset_assistant_id"),
             custom_agent_id: s(extra, "custom_agent_id"),
             agent_id: s(extra, "agent_id"),
@@ -1561,11 +1563,11 @@ impl<'a> AssistantLineage<'a> {
 }
 
 fn log_conversation_created(response: &ConversationResponse, extra: &serde_json::Value) {
-    let lineage = AssistantLineage::from_extra(extra);
+    let lineage = AssistantLineage::from_response_and_extra(response, extra);
     if lineage.has_any_identity() {
         info!(
             conversation_id = %response.id,
-            conversation_type = %response.r#type.serde_name(),
+            agent_type = lineage.agent_type,
             preset_assistant_id = lineage.preset_assistant_id,
             custom_agent_id = lineage.custom_agent_id,
             agent_id = lineage.agent_id,
@@ -1578,7 +1580,7 @@ fn log_conversation_created(response: &ConversationResponse, extra: &serde_json:
     } else {
         info!(
             conversation_id = %response.id,
-            conversation_type = %response.r#type.serde_name(),
+            agent_type = lineage.agent_type,
             "Conversation created (no assistant)"
         );
     }
@@ -1642,8 +1644,27 @@ mod tests {
         assert_eq!(base, json!({"a": 1}));
     }
 
+    fn response_with_type(agent_type: aionui_common::AgentType) -> ConversationResponse {
+        ConversationResponse {
+            id: "conv-1".into(),
+            name: "test".into(),
+            r#type: agent_type,
+            model: None,
+            status: ConversationStatus::Pending,
+            source: None,
+            pinned: false,
+            pinned_at: None,
+            channel_chat_id: None,
+            created_at: 0,
+            modified_at: 0,
+            extra: json!({}),
+        }
+    }
+
     #[test]
     fn assistant_lineage_extracts_acp_builtin_fields() {
+        use aionui_common::AgentType;
+        let response = response_with_type(AgentType::Acp);
         let extra = json!({
             "agent_id": "abc-123",
             "agent_name": "Claude Code",
@@ -1651,7 +1672,8 @@ mod tests {
             "current_model_id": "opus",
             "session_mode": "default",
         });
-        let lineage = AssistantLineage::from_extra(&extra);
+        let lineage = AssistantLineage::from_response_and_extra(&response, &extra);
+        assert_eq!(lineage.agent_type, "acp");
         assert_eq!(lineage.agent_id, "abc-123");
         assert_eq!(lineage.agent_name, "Claude Code");
         assert_eq!(lineage.backend, "claude");
@@ -1664,19 +1686,25 @@ mod tests {
 
     #[test]
     fn assistant_lineage_extracts_aionrs_preset_id() {
+        use aionui_common::AgentType;
+        let response = response_with_type(AgentType::Aionrs);
         let extra = json!({ "preset_assistant_id": "preset-xyz" });
-        let lineage = AssistantLineage::from_extra(&extra);
+        let lineage = AssistantLineage::from_response_and_extra(&response, &extra);
+        assert_eq!(lineage.agent_type, "aionrs");
         assert_eq!(lineage.preset_assistant_id, "preset-xyz");
         assert!(lineage.has_any_identity());
     }
 
     #[test]
     fn assistant_lineage_extracts_acp_custom_agent_id() {
+        use aionui_common::AgentType;
+        let response = response_with_type(AgentType::Acp);
         let extra = json!({
             "custom_agent_id": "custom-1",
             "backend": "openrouter",
         });
-        let lineage = AssistantLineage::from_extra(&extra);
+        let lineage = AssistantLineage::from_response_and_extra(&response, &extra);
+        assert_eq!(lineage.agent_type, "acp");
         assert_eq!(lineage.custom_agent_id, "custom-1");
         assert_eq!(lineage.backend, "openrouter");
         assert!(lineage.has_any_identity());
@@ -1684,18 +1712,23 @@ mod tests {
 
     #[test]
     fn assistant_lineage_no_identity_when_extra_lacks_assistant_fields() {
+        use aionui_common::AgentType;
+        let response = response_with_type(AgentType::Acp);
         let extra = json!({ "workspace": "/project" });
-        let lineage = AssistantLineage::from_extra(&extra);
+        let lineage = AssistantLineage::from_response_and_extra(&response, &extra);
+        assert_eq!(lineage.agent_type, "acp");
         assert!(!lineage.has_any_identity());
     }
 
     #[test]
     fn assistant_lineage_treats_non_string_fields_as_missing() {
+        use aionui_common::AgentType;
+        let response = response_with_type(AgentType::Acp);
         let extra = json!({
             "agent_id": 42,
             "agent_name": null,
         });
-        let lineage = AssistantLineage::from_extra(&extra);
+        let lineage = AssistantLineage::from_response_and_extra(&response, &extra);
         assert_eq!(lineage.agent_id, "");
         assert_eq!(lineage.agent_name, "");
         assert!(!lineage.has_any_identity());
