@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.9](https://github.com/iOfficeAI/AionCore/compare/v0.1.8...v0.1.9) (2026-05-22)
+
+
+### Features
+
+* **acp,conversation:** elevate ACP protocol + assistant lineage logs to info ([#318](https://github.com/iOfficeAI/AionCore/issues/318)) ([fbcb299](https://github.com/iOfficeAI/AionCore/commit/fbcb29962da5ca4f52516663d592b57815875873))
+
 ## [0.1.8](https://github.com/iOfficeAI/AionCore/compare/v0.1.7...v0.1.8) (2026-05-21)
 
 
