@@ -45,21 +45,30 @@ async fn migration_007_rewrites_three_builtin_agents() {
         );
     }
 
-    let claude = rows.iter().find(|r| r.get::<String, _>("binary_name") == "claude").unwrap();
+    let claude = rows
+        .iter()
+        .find(|r| r.get::<String, _>("binary_name") == "claude")
+        .unwrap();
     let claude_args: String = claude.get("args");
     assert!(
         claude_args.contains("@agentclientprotocol/claude-agent-acp@"),
         "claude args must reference the claude-agent-acp package: {claude_args}"
     );
 
-    let codex = rows.iter().find(|r| r.get::<String, _>("binary_name") == "codex").unwrap();
+    let codex = rows
+        .iter()
+        .find(|r| r.get::<String, _>("binary_name") == "codex")
+        .unwrap();
     let codex_args: String = codex.get("args");
     assert!(
         codex_args.contains("@zed-industries/codex-acp@"),
         "codex args must reference codex-acp package: {codex_args}"
     );
 
-    let codebuddy = rows.iter().find(|r| r.get::<String, _>("binary_name") == "codebuddy").unwrap();
+    let codebuddy = rows
+        .iter()
+        .find(|r| r.get::<String, _>("binary_name") == "codebuddy")
+        .unwrap();
     let codebuddy_args: String = codebuddy.get("args");
     assert!(
         codebuddy_args.contains("@tencent-ai/codebuddy-code@"),
