@@ -4,7 +4,7 @@
 //! is spawned** (including the tokio runtime). It rewrites
 //! `std::env::var("PATH")` to include:
 //!
-//! 1. The bundled bun directory (highest priority).
+//! 1. The bundled node directory (highest priority).
 //! 2. Platform extra bins (`~/.bun/bin`, `~/.cargo/bin`, etc.).
 //! 3. The current `PATH` (inherited from the launching process).
 //! 4. The login-shell `PATH` (Unix only, 3s timeout) — fixes
@@ -28,9 +28,9 @@ pub unsafe fn enhance_process_path() -> String {
     let current = std::env::var("PATH").unwrap_or_default();
     let login = login_shell_path();
     let extras = platform_extra_bins();
-    let bun_dir = crate::bun_bin_dir();
+    let node_dir = crate::node_bin_dir();
 
-    let merged = merge_paths(bun_dir.as_deref(), &extras, &current, login.as_deref());
+    let merged = merge_paths(node_dir.as_deref(), &extras, &current, login.as_deref());
 
     if merged == current {
         tracing::warn!("PATH enhancement produced no changes; continuing with inherited PATH");
@@ -38,7 +38,7 @@ pub unsafe fn enhance_process_path() -> String {
         tracing::info!(
             login = login.is_some(),
             extra_bin_count = extras.len(),
-            bun_bundled = bun_dir.is_some(),
+            node_bundled = node_dir.is_some(),
             original_len = current.len(),
             merged_len = merged.len(),
             "PATH enhanced at startup"
@@ -54,8 +54,8 @@ pub unsafe fn enhance_process_path() -> String {
 
 // Placeholder helpers — filled in by later tasks.
 
-fn merge_paths(bun_dir: Option<&Path>, extras: &[PathBuf], current: &str, login: Option<&str>) -> String {
-    // Order: bun_dir, extras, current, login. First-occurrence wins.
+fn merge_paths(runtime_dir: Option<&Path>, extras: &[PathBuf], current: &str, login: Option<&str>) -> String {
+    // Order: runtime_dir, extras, current, login. First-occurrence wins.
     // `env::split_paths` and `env::join_paths` honour the OS-specific
     // separator (':' on Unix, ';' on Windows) and handle quoting.
     let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
@@ -70,7 +70,7 @@ fn merge_paths(bun_dir: Option<&Path>, extras: &[PathBuf], current: &str, login:
         }
     };
 
-    if let Some(p) = bun_dir {
+    if let Some(p) = runtime_dir {
         push(p.to_path_buf());
     }
     for p in extras {
@@ -252,15 +252,15 @@ mod tests {
     }
 
     #[test]
-    fn merge_paths_with_bun_dir_at_front() {
+    fn merge_paths_with_node_dir_at_front() {
         let s = sep();
         let current = format!("/a{s}/b");
-        let bun = PathBuf::from("/bun");
+        let node = PathBuf::from("/node");
 
-        let result = merge_paths(Some(&bun), &[], &current, None);
+        let result = merge_paths(Some(&node), &[], &current, None);
         let parts: Vec<&str> = result.split(s).collect();
 
-        assert_eq!(parts, vec!["/bun", "/a", "/b"]);
+        assert_eq!(parts, vec!["/node", "/a", "/b"]);
     }
 
     #[test]
@@ -281,17 +281,17 @@ mod tests {
     }
 
     #[test]
-    fn merge_paths_bun_dir_deduplicates_if_already_in_current() {
+    fn merge_paths_node_dir_deduplicates_if_already_in_current() {
         let s = sep();
-        let current = format!("/bun{s}/a");
-        let bun = PathBuf::from("/bun");
+        let current = format!("/node{s}/a");
+        let node = PathBuf::from("/node");
 
-        let result = merge_paths(Some(&bun), &[], &current, None);
+        let result = merge_paths(Some(&node), &[], &current, None);
         let parts: Vec<&str> = result.split(s).collect();
 
-        // /bun appears first (from bun_dir), then /a from current.
-        // Second /bun (inside current) is dedup'd.
-        assert_eq!(parts, vec!["/bun", "/a"]);
+        // /node appears first (from node_dir), then /a from current.
+        // Second /node (inside current) is dedup'd.
+        assert_eq!(parts, vec!["/node", "/a"]);
     }
 
     #[test]

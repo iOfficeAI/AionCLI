@@ -19,7 +19,7 @@
 //!   so the child doesn't inherit debug/agent state that belongs to the
 //!   parent (matches v1 `acpConnectors.ts::getCleanAgentEnv`).
 //!
-//! Enhanced `PATH` (including the bundled bun directory) is handled
+//! Enhanced `PATH` (including the bundled node directory) is handled
 //! once at process startup by [`crate::enhance_process_path`]; Builder
 //! does not re-inject it.
 
@@ -280,8 +280,7 @@ fn strip_pollution(cmd: &mut Command) {
 /// Resolve `program` through `resolve_command_path` so callers don't have
 /// to. If the input already contains a path separator (relative or
 /// absolute) we leave it alone — only bare command names go through
-/// the resolver, where the bundled-bun shim and Windows `.cmd / .ps1 /
-/// .bat` fallbacks live.
+/// the resolver, where Windows `.cmd / .ps1 / .bat` fallbacks live.
 fn resolve_program(program: &OsStr) -> OsString {
     if let Some(s) = program.to_str()
         && !s.is_empty()
