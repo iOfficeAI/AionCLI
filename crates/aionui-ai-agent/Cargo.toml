@@ -50,6 +50,7 @@ test-support = []
 [dev-dependencies]
 tempfile = "3"
 tokio = { workspace = true, features = ["full"] }
+tracing-subscriber.workspace = true
 aionui-common.workspace = true
 aionui-extension.workspace = true
 aionui-db.workspace = true

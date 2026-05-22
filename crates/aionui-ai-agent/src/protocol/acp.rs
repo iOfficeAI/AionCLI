@@ -663,8 +663,70 @@ mod tests {
     }
 
     #[test]
+    fn log_agent_notify_filters_streaming_chunks_at_info_level() {
+        use std::io::Write;
+        use std::sync::{Arc, Mutex};
+        use tracing::Level;
+        use tracing_subscriber::fmt;
+
+        #[derive(Clone)]
+        struct SharedBuf(Arc<Mutex<Vec<u8>>>);
+        impl Write for SharedBuf {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let buffer = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let make_writer = {
+            let buffer = Arc::clone(&buffer);
+            move || SharedBuf(Arc::clone(&buffer))
+        };
+
+        let subscriber = fmt::Subscriber::builder()
+            .with_max_level(Level::INFO)
+            .with_writer(make_writer)
+            .with_ansi(false)
+            .finish();
+
+        tracing::subscriber::with_default(subscriber, || {
+            log_agent_notify(
+                "session/update",
+                r#"{"params":{"update":{"sessionUpdate":"agent_message_chunk"}}}"#,
+            );
+            log_agent_notify(
+                "session/update",
+                r#"{"params":{"update":{"sessionUpdate":"current_mode_update","modeId":"yolo"}}}"#,
+            );
+        });
+
+        let captured = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
+        assert!(
+            !captured.contains("agent_message_chunk"),
+            "streaming chunk should NOT appear at info level: {captured}"
+        );
+        assert!(
+            captured.contains("current_mode_update"),
+            "non-streaming update should appear at info level: {captured}"
+        );
+        assert!(
+            captured.contains("agent_notify"),
+            "structured `direction` field should be `agent_notify`: {captured}"
+        );
+        assert!(
+            captured.contains("session/update"),
+            "structured `method` field should be present: {captured}"
+        );
+    }
+
+    #[test]
     fn is_streaming_chunk_recognises_prompt_stream_kinds() {
-        let body_chunk = r#"{"params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hi"}}}}"#;
+        let body_chunk =
+            r#"{"params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hi"}}}}"#;
         let mode_update = r#"{"params":{"update":{"sessionUpdate":"current_mode_update","modeId":"yolo"}}}"#;
         let unknown = r#"{"params":{"update":{"sessionUpdate":"future_unknown_kind"}}}"#;
         let malformed = "not json";
