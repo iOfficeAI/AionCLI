@@ -298,7 +298,7 @@ impl ConversationService {
 
         self.broadcast_list_changed(&response.id, "created", response.source.as_ref());
 
-        info!(conversation_id = %response.id, "Conversation created");
+        log_conversation_created(&response, &extra);
 
         Ok(response)
     }
@@ -1525,6 +1525,65 @@ fn merge_json(base: &mut serde_json::Value, patch: &serde_json::Value) {
     }
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+struct AssistantLineage<'a> {
+    preset_assistant_id: &'a str,
+    custom_agent_id: &'a str,
+    agent_id: &'a str,
+    agent_name: &'a str,
+    backend: &'a str,
+    current_model_id: &'a str,
+    session_mode: &'a str,
+}
+
+impl<'a> AssistantLineage<'a> {
+    fn from_extra(extra: &'a serde_json::Value) -> Self {
+        fn s<'a>(extra: &'a serde_json::Value, key: &str) -> &'a str {
+            extra.get(key).and_then(serde_json::Value::as_str).unwrap_or("")
+        }
+        Self {
+            preset_assistant_id: s(extra, "preset_assistant_id"),
+            custom_agent_id: s(extra, "custom_agent_id"),
+            agent_id: s(extra, "agent_id"),
+            agent_name: s(extra, "agent_name"),
+            backend: s(extra, "backend"),
+            current_model_id: s(extra, "current_model_id"),
+            session_mode: s(extra, "session_mode"),
+        }
+    }
+
+    fn has_any_identity(&self) -> bool {
+        !self.preset_assistant_id.is_empty()
+            || !self.custom_agent_id.is_empty()
+            || !self.agent_id.is_empty()
+            || !self.agent_name.is_empty()
+    }
+}
+
+fn log_conversation_created(response: &ConversationResponse, extra: &serde_json::Value) {
+    let lineage = AssistantLineage::from_extra(extra);
+    if lineage.has_any_identity() {
+        info!(
+            conversation_id = %response.id,
+            conversation_type = %response.r#type.serde_name(),
+            preset_assistant_id = lineage.preset_assistant_id,
+            custom_agent_id = lineage.custom_agent_id,
+            agent_id = lineage.agent_id,
+            agent_name = lineage.agent_name,
+            backend = lineage.backend,
+            current_model_id = lineage.current_model_id,
+            session_mode = lineage.session_mode,
+            "Conversation created from assistant"
+        );
+    } else {
+        info!(
+            conversation_id = %response.id,
+            conversation_type = %response.r#type.serde_name(),
+            "Conversation created (no assistant)"
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1581,5 +1640,64 @@ mod tests {
         let patch = json!({});
         merge_json(&mut base, &patch);
         assert_eq!(base, json!({"a": 1}));
+    }
+
+    #[test]
+    fn assistant_lineage_extracts_acp_builtin_fields() {
+        let extra = json!({
+            "agent_id": "abc-123",
+            "agent_name": "Claude Code",
+            "backend": "claude",
+            "current_model_id": "opus",
+            "session_mode": "default",
+        });
+        let lineage = AssistantLineage::from_extra(&extra);
+        assert_eq!(lineage.agent_id, "abc-123");
+        assert_eq!(lineage.agent_name, "Claude Code");
+        assert_eq!(lineage.backend, "claude");
+        assert_eq!(lineage.current_model_id, "opus");
+        assert_eq!(lineage.session_mode, "default");
+        assert_eq!(lineage.preset_assistant_id, "");
+        assert_eq!(lineage.custom_agent_id, "");
+        assert!(lineage.has_any_identity());
+    }
+
+    #[test]
+    fn assistant_lineage_extracts_aionrs_preset_id() {
+        let extra = json!({ "preset_assistant_id": "preset-xyz" });
+        let lineage = AssistantLineage::from_extra(&extra);
+        assert_eq!(lineage.preset_assistant_id, "preset-xyz");
+        assert!(lineage.has_any_identity());
+    }
+
+    #[test]
+    fn assistant_lineage_extracts_acp_custom_agent_id() {
+        let extra = json!({
+            "custom_agent_id": "custom-1",
+            "backend": "openrouter",
+        });
+        let lineage = AssistantLineage::from_extra(&extra);
+        assert_eq!(lineage.custom_agent_id, "custom-1");
+        assert_eq!(lineage.backend, "openrouter");
+        assert!(lineage.has_any_identity());
+    }
+
+    #[test]
+    fn assistant_lineage_no_identity_when_extra_lacks_assistant_fields() {
+        let extra = json!({ "workspace": "/project" });
+        let lineage = AssistantLineage::from_extra(&extra);
+        assert!(!lineage.has_any_identity());
+    }
+
+    #[test]
+    fn assistant_lineage_treats_non_string_fields_as_missing() {
+        let extra = json!({
+            "agent_id": 42,
+            "agent_name": null,
+        });
+        let lineage = AssistantLineage::from_extra(&extra);
+        assert_eq!(lineage.agent_id, "");
+        assert_eq!(lineage.agent_name, "");
+        assert!(!lineage.has_any_identity());
     }
 }
