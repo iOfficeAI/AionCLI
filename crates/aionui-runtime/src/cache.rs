@@ -65,6 +65,21 @@ pub fn bun_dir(version: &str, sha256: &str) -> Option<PathBuf> {
     runtime_root().map(|root| root.join(bun_dir_name(version, sha256)))
 }
 
+/// Per-version node cache directory name: `node-<version>-<sha12>`.
+///
+/// `sha12` is the first 12 hex chars of the node binary sha256 — embedding
+/// it means version bumps and content-level bumps both produce a new dir
+/// so stale bytes never shadow a new build.
+pub fn node_dir_name(version: &str, sha256: &str) -> String {
+    let sha12 = &sha256[..12.min(sha256.len())];
+    format!("node-{version}-{sha12}")
+}
+
+/// Full path for a specific (version, sha) node cache directory.
+pub fn node_dir(version: &str, sha256: &str) -> Option<PathBuf> {
+    runtime_root().map(|root| root.join(node_dir_name(version, sha256)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,5 +112,17 @@ mod tests {
         let dir = bun_dir("1.1.38", "deadbeefcafebabe").expect("cache available");
         let name = dir.file_name().unwrap().to_string_lossy().into_owned();
         assert_eq!(name, "bun-1.1.38-deadbeefcafe");
+    }
+
+    #[test]
+    fn node_dir_name_format() {
+        assert_eq!(node_dir_name("22.11.0", "deadbeefcafebabe"), "node-22.11.0-deadbeefcafe");
+    }
+
+    #[test]
+    fn node_dir_embeds_version_and_sha() {
+        let dir = node_dir("22.11.0", "deadbeefcafebabe").expect("cache available");
+        let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+        assert_eq!(name, "node-22.11.0-deadbeefcafe");
     }
 }
