@@ -39,7 +39,7 @@ use aionui_common::ErrorChain;
 use tokio::process::{ChildStdin, ChildStdout};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::protocol::error::AcpError;
 use crate::protocol::events::{self as stream_event, AgentStreamEvent};
@@ -473,7 +473,7 @@ async fn handle_session_notification(
     notification: SessionNotification,
     event_tx: &broadcast::Sender<AgentStreamEvent>,
 ) {
-    log_agent_event("session/update", &json_str(&notification));
+    log_agent_notify("session/update", &json_str(&notification));
 
     let events = stream_event::session_notification_to_events(&notification);
     for event in events {
@@ -493,7 +493,7 @@ async fn handle_permission_request(
     responder: Responder<RequestPermissionResponse>,
     event_tx: &mpsc::Sender<PermissionRequest>,
 ) {
-    log_agent_event("session/request_permission", &json_str(&request));
+    log_agent_request("session/request_permission", &json_str(&request));
 
     let (response_tx, response_rx) = oneshot::channel();
 
@@ -529,33 +529,75 @@ fn json_or_err<T: serde::Serialize + std::fmt::Debug, E: std::fmt::Debug>(result
     }
 }
 
-/// Log an outgoing ACP request from AionUi to the agent (`→`).
-fn log_client_request(method: &str, body: &str) {
-    debug!("[ACP] {method} ->\n -> {body}");
-}
-
-/// Log an incoming ACP response from the agent (`←`).
-fn log_agent_response(method: &str, body: &str) {
-    debug!("[ACP] {method} <-\n <- {body}");
-}
-
-/// Log a fire-and-forget notification from AionUi to the agent (`⚡`).
-fn log_client_notify(method: &str, body: &str) {
-    debug!("[ACP] {method} ⚡⚡\n ⚡⚡ {body}");
-}
-
-/// Log an inbound event from the agent (`←`).
+/// Returns `true` when the `session/update` notification body carries a
+/// piece of the prompt-reply stream (high-frequency, high-volume content).
 ///
-/// Currently spans two semantically distinct paths — `session/update`
-/// (agent notification) and `session/request_permission` (agent request).
-/// Task 2 will split this into `log_agent_notify` and `log_agent_request`.
-fn log_agent_event(method: &str, body: &str) {
-    debug!("[ACP] {method} <-\n <- {body}");
+/// Unknown / new `sessionUpdate` kinds default to `false` so newly added
+/// metadata events stay visible at `info!` until explicitly classified.
+fn is_streaming_chunk(body: &str) -> bool {
+    // Streaming chunks of the prompt reply: token-level message / thought
+    // text, and the incremental tool_call / plan structures the agent emits
+    // mid-response. Their `_update` siblings are part of the same stream.
+    const STREAMING_KINDS: &[&str] = &[
+        "agent_message_chunk",
+        "agent_thought_chunk",
+        "user_message_chunk",
+        "tool_call",
+        "tool_call_update",
+        "plan",
+    ];
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
+        return false;
+    };
+    let kind = value
+        .pointer("/params/update/sessionUpdate")
+        .and_then(serde_json::Value::as_str);
+    matches!(kind, Some(k) if STREAMING_KINDS.contains(&k))
 }
 
-/// Log an outgoing client response from AionUi back to the agent (`→`).
+/// Log a JSON-RPC request from AionUi to the ACP agent.
+/// `session/prompt` carries large user input and stays at debug.
+fn log_client_request(method: &str, body: &str) {
+    if method == "session/prompt" {
+        debug!(direction = "client_request", method, body, "[ACP]");
+    } else {
+        info!(direction = "client_request", method, body, "[ACP]");
+    }
+}
+
+/// Log a JSON-RPC response from the ACP agent.
+/// `session/prompt` reply is large; stays at debug.
+fn log_agent_response(method: &str, body: &str) {
+    if method == "session/prompt" {
+        debug!(direction = "agent_response", method, body, "[ACP]");
+    } else {
+        info!(direction = "agent_response", method, body, "[ACP]");
+    }
+}
+
+/// Log a fire-and-forget notification from AionUi to the agent.
+fn log_client_notify(method: &str, body: &str) {
+    info!(direction = "client_notify", method, body, "[ACP]");
+}
+
+/// Log an inbound notification from the agent.
+/// `session/update` requires per-kind filtering — streaming chunks stay at debug.
+fn log_agent_notify(method: &str, body: &str) {
+    if method == "session/update" && is_streaming_chunk(body) {
+        debug!(direction = "agent_notify", method, body, "[ACP]");
+    } else {
+        info!(direction = "agent_notify", method, body, "[ACP]");
+    }
+}
+
+/// Log an inbound request from the agent (e.g. session/request_permission).
+fn log_agent_request(method: &str, body: &str) {
+    info!(direction = "agent_request", method, body, "[ACP]");
+}
+
+/// Log a JSON-RPC response from AionUi back to the agent.
 fn log_client_response(method: &str, body: &str) {
-    debug!("[ACP] {method} ->\n -> {body}");
+    info!(direction = "client_response", method, body, "[ACP]");
 }
 
 impl std::fmt::Debug for AcpProtocol {
@@ -618,5 +660,18 @@ mod tests {
         let seen_during = simulated_load(&flag, Arc::clone(&flag_probe)).await;
         assert!(seen_during, "flag should be true inside guarded scope");
         assert!(!flag.load(Ordering::Acquire), "flag should be false after guard drop");
+    }
+
+    #[test]
+    fn is_streaming_chunk_recognises_prompt_stream_kinds() {
+        let body_chunk = r#"{"params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hi"}}}}"#;
+        let mode_update = r#"{"params":{"update":{"sessionUpdate":"current_mode_update","modeId":"yolo"}}}"#;
+        let unknown = r#"{"params":{"update":{"sessionUpdate":"future_unknown_kind"}}}"#;
+        let malformed = "not json";
+
+        assert!(is_streaming_chunk(body_chunk));
+        assert!(!is_streaming_chunk(mode_update));
+        assert!(!is_streaming_chunk(unknown), "unknown kinds default to keep");
+        assert!(!is_streaming_chunk(malformed), "malformed bodies default to keep");
     }
 }
