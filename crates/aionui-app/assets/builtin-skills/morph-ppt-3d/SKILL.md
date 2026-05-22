@@ -14,8 +14,8 @@ This file covers **3D-specific additions** and an **enriched design system** com
 
 If `officecli` is missing:
 
-- **macOS / Linux**: `curl -fsSL https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh | bash`
-- **Windows (PowerShell)**: `irm https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.ps1 | iex`
+- **macOS / Linux**: `curl -fsSL https://d.officecli.ai/install.sh | bash`
+- **Windows (PowerShell)**: `irm https://d.officecli.ai/install.ps1 | iex`
 
 Verify with `officecli --version` (open a new terminal if PATH hasn't picked up). If install fails, download a binary from https://github.com/iOfficeAI/OfficeCLI/releases.
 
@@ -41,16 +41,16 @@ When the user gives a topic but no `.glb` file, **proactively help them find a m
 
 Based on the user's topic, suggest what kind of 3D model would work:
 
-| Topic type         | Model suggestion                    | Example                                           |
-| ------------------ | ----------------------------------- | ------------------------------------------------- |
-| Product/brand      | The actual product or a similar one | "coffee brand" → coffee cup, coffee machine, bean |
-| Animal/character   | The animal or mascot                | "fox mascot" → fox 3D model                       |
-| Architecture/space | Building, room, or structure        | "new office" → office building, interior          |
-| Vehicle/transport  | The vehicle itself                  | "EV launch" → car, motorcycle, bicycle            |
-| Food/cooking       | The dish or ingredient              | "Japanese food" → sushi platter, ramen bowl       |
-| Tech/gadget        | The device                          | "phone launch" → phone, tablet, laptop            |
-| Nature/science     | The subject                         | "solar system" → planet, sun, earth               |
-| Abstract concept   | A symbolic object                   | "teamwork" → puzzle pieces, gears, bridge         |
+| Topic type         | Model suggestion                    | Example                                               |
+| ------------------ | ----------------------------------- | ----------------------------------------------------- |
+| Product/brand      | The actual product or a similar one | "coffee brand" → coffee cup, coffee machine, bean     |
+| Animal/character   | The animal or mascot                | "fox mascot" → fox 3D model                           |
+| Architecture/space | Building, room, or structure        | "new office" → office building, interior              |
+| Vehicle/transport  | The vehicle itself                  | "EV launch" → car, motorcycle, bicycle                |
+| Food/cooking       | The dish or ingredient              | "Japanese food" → sushi platter, ramen bowl           |
+| Tech/gadget        | The device                          | "phone launch" → phone, tablet, laptop                |
+| Nature/science     | The subject                         | "solar system" → planet, sun, earth                   |
+| Abstract concept   | A symbolic object                   | "teamwork" → puzzle pieces, gears, bridge             |
 
 Tell the user: "Your topic is [X]. I suggest using a 3D model of [description]. Here are some free sources to find one:"
 

@@ -9,8 +9,8 @@ description: "Use this skill any time a .pptx file is involved -- as input, outp
 
 If `officecli` is missing:
 
-- **macOS / Linux**: `curl -fsSL https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh | bash`
-- **Windows (PowerShell)**: `irm https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.ps1 | iex`
+- **macOS / Linux**: `curl -fsSL https://d.officecli.ai/install.sh | bash`
+- **Windows (PowerShell)**: `irm https://d.officecli.ai/install.ps1 | iex`
 
 Verify with `officecli --version` (open a new terminal if PATH hasn't picked up). If install fails, download a binary from https://github.com/iOfficeAI/OfficeCLI/releases.
 
@@ -49,12 +49,12 @@ These are the deliverable standards every deck MUST meet. Violating any one = no
 
 **Explicit type hierarchy — do NOT rely on theme defaults.** Theme defaults drift between masters. Set sizes explicitly on every text shape.
 
-| Element              | Minimum         | Typical | Min shape height |
-| -------------------- | --------------- | ------- | ---------------- |
-| Slide title          | **≥ 36pt** bold | 36–44pt | ≥ 2cm            |
-| Section / subtitle   | ≥ 20pt          | 20–24pt | ≥ 1.2cm          |
-| Body text            | **≥ 18pt**      | 18–22pt | ≥ 1cm            |
-| Caption / axis label | ≥ 10pt muted    | 10–12pt | ≥ 0.6cm          |
+| Element | Minimum | Typical | Min shape height |
+|---|---|---|---|
+| Slide title | **≥ 36pt** bold | 36–44pt | ≥ 2cm |
+| Section / subtitle | ≥ 20pt | 20–24pt | ≥ 1.2cm |
+| Body text | **≥ 18pt** | 18–22pt | ≥ 1cm |
+| Caption / axis label | ≥ 10pt muted | 10–12pt | ≥ 0.6cm |
 
 Rule of thumb: **min shape height ≈ font_pt × 0.05cm**. An 18pt sublabel in a 0.8cm-tall box will overflow — `view annotated` catches this.
 
@@ -107,16 +107,16 @@ Standard widescreen is **33.87 × 19.05cm**. Treat it as a 12-column grid intern
 
 Two fonts max — one for headings, one for body. Pair by document register, not by novelty. "Best For" is a prompt, not a decree; if the topic matches a row, use it as the default and move on.
 
-| Header       | Body          | Best For                                    |
-| ------------ | ------------- | ------------------------------------------- |
-| Georgia      | Calibri       | Formal business, finance, executive reports |
-| Arial Black  | Arial         | Bold marketing, product launches            |
-| Calibri      | Calibri Light | Clean corporate, minimal design             |
-| Cambria      | Calibri       | Traditional professional, legal, academic   |
-| Trebuchet MS | Calibri       | Friendly tech, startups, SaaS               |
-| Impact       | Arial         | Bold headlines, event decks, keynotes       |
-| Palatino     | Garamond      | Elegant editorial, luxury, nonprofit        |
-| Consolas     | Calibri       | Developer tools, technical / engineering    |
+| Header | Body | Best For |
+|---|---|---|
+| Georgia | Calibri | Formal business, finance, executive reports |
+| Arial Black | Arial | Bold marketing, product launches |
+| Calibri | Calibri Light | Clean corporate, minimal design |
+| Cambria | Calibri | Traditional professional, legal, academic |
+| Trebuchet MS | Calibri | Friendly tech, startups, SaaS |
+| Impact | Arial | Bold headlines, event decks, keynotes |
+| Palatino | Garamond | Elegant editorial, luxury, nonprofit |
+| Consolas | Calibri | Developer tools, technical / engineering |
 
 Set both fonts explicitly on every shape (`--prop font=Georgia` on title shapes, `--prop font=Calibri` on body shapes) — theme-default inheritance drifts between masters.
 
@@ -124,18 +124,18 @@ Set both fonts explicitly on every shape (`--prop font=Georgia` on title shapes,
 
 One dominant color does 60–70% of visual weight, two supporting tones, one accent used sparingly. Never use 4+ colors in body content. Columns are: **Primary** (dominant — the one color you see first), **Secondary** (the supporting tone), **Accent** (sparing, one-hit emphasis), **Text** (body on light fills), **Muted** (captions / axis labels / footer).
 
-| Theme              | Primary  | Secondary | Accent   | Text     | Muted    |
-| ------------------ | -------- | --------- | -------- | -------- | -------- |
-| Coral Energy       | `F96167` | `F9E795`  | `2F3C7E` | `333333` | `8B7E6A` |
-| Midnight Executive | `1E2761` | `CADCFC`  | `FFFFFF` | `333333` | `8899BB` |
-| Forest & Moss      | `2C5F2D` | `97BC62`  | `F5F5F5` | `2D2D2D` | `6B8E6B` |
-| Charcoal Minimal   | `36454F` | `F2F2F2`  | `212121` | `333333` | `7A8A94` |
-| Warm Terracotta    | `B85042` | `E7E8D1`  | `A7BEAE` | `3D2B2B` | `8C7B75` |
-| Berry & Cream      | `6D2E46` | `A26769`  | `ECE2D0` | `3D2233` | `8C6B7A` |
-| Ocean Gradient     | `065A82` | `1C7293`  | `21295C` | `2B3A4E` | `6B8FAA` |
-| Teal Trust         | `028090` | `00A896`  | `02C39A` | `2D3B3B` | `5E8C8C` |
-| Sage Calm          | `84B59F` | `69A297`  | `50808E` | `2D3D35` | `7A9488` |
-| Cherry Bold        | `990011` | `FCF6F5`  | `2F3C7E` | `333333` | `8B6B6B` |
+| Theme | Primary | Secondary | Accent | Text | Muted |
+|---|---|---|---|---|---|
+| Coral Energy | `F96167` | `F9E795` | `2F3C7E` | `333333` | `8B7E6A` |
+| Midnight Executive | `1E2761` | `CADCFC` | `FFFFFF` | `333333` | `8899BB` |
+| Forest & Moss | `2C5F2D` | `97BC62` | `F5F5F5` | `2D2D2D` | `6B8E6B` |
+| Charcoal Minimal | `36454F` | `F2F2F2` | `212121` | `333333` | `7A8A94` |
+| Warm Terracotta | `B85042` | `E7E8D1` | `A7BEAE` | `3D2B2B` | `8C7B75` |
+| Berry & Cream | `6D2E46` | `A26769` | `ECE2D0` | `3D2233` | `8C6B7A` |
+| Ocean Gradient | `065A82` | `1C7293` | `21295C` | `2B3A4E` | `6B8FAA` |
+| Teal Trust | `028090` | `00A896` | `02C39A` | `2D3B3B` | `5E8C8C` |
+| Sage Calm | `84B59F` | `69A297` | `50808E` | `2D3D35` | `7A9488` |
+| Cherry Bold | `990011` | `FCF6F5` | `2F3C7E` | `333333` | `8B6B6B` |
 
 Pick by topic, not by default — finance reads Midnight Executive, a product launch reads Coral Energy, safety / LOTO reads Cherry Bold. If the closest named theme is not quite right, blend (e.g. Forest primary + gold `D4A843` accent). Use **Text** on light fills, **Muted** for captions / axis / footer, `FFFFFF` or Secondary for body on dark fills.
 
@@ -145,21 +145,20 @@ On dark backgrounds, text and chart series follow the Hard rules contrast floor 
 
 Wrong chart type kills the 3-second test:
 
-| Data shape                           | Use                                                             | Avoid                                    |
-| ------------------------------------ | --------------------------------------------------------------- | ---------------------------------------- |
-| Category comparison (A vs B vs C)    | `column` (vertical) / `bar` (≥ 6 categories, horizontal)        | pie (slices merge), line (no time axis)  |
-| Time series, 1–3 series              | `line`                                                          | area (occlusion), bar (implies discrete) |
-| Part-of-whole, 2–5 slices            | `pie` / `doughnut`                                              | pie with 8+ slices (unreadable)          |
-| Correlation / distribution           | `scatter`                                                       | line (implies ordering)                  |
-| Multiple categories × metrics, dense | stacked `column` or heatmap                                     | one chart per metric — consolidate       |
-| KPI snapshot (single big number)     | **Large-text shape** (60–72pt + ≤ 5-word sublabel), NOT a chart | gauge chart, tiny bar                    |
+| Data shape | Use | Avoid |
+|---|---|---|
+| Category comparison (A vs B vs C) | `column` (vertical) / `bar` (≥ 6 categories, horizontal) | pie (slices merge), line (no time axis) |
+| Time series, 1–3 series | `line` | area (occlusion), bar (implies discrete) |
+| Part-of-whole, 2–5 slices | `pie` / `doughnut` | pie with 8+ slices (unreadable) |
+| Correlation / distribution | `scatter` | line (implies ordering) |
+| Multiple categories × metrics, dense | stacked `column` or heatmap | one chart per metric — consolidate |
+| KPI snapshot (single big number) | **Large-text shape** (60–72pt + ≤ 5-word sublabel), NOT a chart | gauge chart, tiny bar |
 
 Rule of thumb: if > 3 series and > 8 categories, split into two charts or switch to a table.
 
 ### Animation restraint
 
 Each animation is a cognitive interrupt. Limits:
-
 - **≤ 1 animation per slide**, duration **≤ 600ms**.
 - Use only `fade`, `appear`, or a single `zoom-entrance` on a hero slide.
 - Never: `bounce`, `swivel`, `fly-from-edge`, `spin`, multi-object choreography.
@@ -169,16 +168,15 @@ Each animation is a cognitive interrupt. Limits:
 
 Vary layout across slides — repeating the same pattern makes every slide feel identical. Pick one per slide from these building blocks:
 
-| Pattern                                                                       | When to use                                | Key measurement                                |
-| ----------------------------------------------------------------------------- | ------------------------------------------ | ---------------------------------------------- |
-| **Two-column** (text left, visual right)                                      | Concept + evidence; feature + screenshot   | Each col ≈ 14-15cm; gap 1cm                    |
-| **Icon rows** (icon in filled circle + bold header + description)             | Feature lists, benefits, team roles        | Icon circle 1.5-2cm; 3-4 rows max              |
-| **2×2 or 2×3 grid** (card tiles)                                              | Quadrant analysis, SWOT, option comparison | Gap ≥ 0.76cm; consistent card height           |
-| **Half-bleed image** (full left or right half, content overlay on other side) | Hero moments, case study openers           | Image 16-17cm wide; content column ≥ 14cm      |
-| **Large stat callout** (60-72pt number + ≤5-word sublabel below)              | Single KPI, milestone, market size         | Use shape, NOT a chart; sublabel 14-16pt muted |
+| Pattern | When to use | Key measurement |
+|---|---|---|
+| **Two-column** (text left, visual right) | Concept + evidence; feature + screenshot | Each col ≈ 14-15cm; gap 1cm |
+| **Icon rows** (icon in filled circle + bold header + description) | Feature lists, benefits, team roles | Icon circle 1.5-2cm; 3-4 rows max |
+| **2×2 or 2×3 grid** (card tiles) | Quadrant analysis, SWOT, option comparison | Gap ≥ 0.76cm; consistent card height |
+| **Half-bleed image** (full left or right half, content overlay on other side) | Hero moments, case study openers | Image 16-17cm wide; content column ≥ 14cm |
+| **Large stat callout** (60-72pt number + ≤5-word sublabel below) | Single KPI, milestone, market size | Use shape, NOT a chart; sublabel 14-16pt muted |
 
 **Data display quick rules:**
-
 - One big number reads faster than a chart — use a `shape` with 60-72pt bold for a single KPI.
 - Comparison columns (before/after, A vs B) beat a table for 2-3 options.
 - Timelines and process flows: numbered step shapes + connectors, not a bullet list.
@@ -578,11 +576,11 @@ REJECT with `slide N: <issue>` lines, else "Gate 3 PASS" (HTML-text fallback add
 
 Sanity-check cheatsheet — what breaks on the first try. Design + shell traps.
 
-| Pitfall                                  | Correct approach                                                                                        |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| Unquoted `[N]` in zsh/bash               | Always quote paths: `"/slide[1]"`. zsh globs unquoted `[1]` → `no matches found` — #1 first-use stumble |
-| `--name "foo"`                           | All attributes go through `--prop`: `--prop name="foo"`                                                 |
-| `/shape[myname]` (bare name in brackets) | Use `@name=` selector: `/shape[@name=myname]` or `/shape[@id=10007]`                                    |
-| Paths 1-based vs `--index` 0-based       | `/slide[1]` = first slide; `--index 0` = first position                                                 |
-| `$` in `--prop text=`                    | Single-quote: `--prop text='$15M'`. Double-quoted `"$15M"` gets shell-expanded to `M`                   |
-| `\n` / `\t` in `--prop text=`            | CLI does NOT interpret. Use multiple `--type paragraph`, or batch heredoc with JSON `"\n"`              |
+| Pitfall | Correct approach |
+|---|---|
+| Unquoted `[N]` in zsh/bash | Always quote paths: `"/slide[1]"`. zsh globs unquoted `[1]` → `no matches found` — #1 first-use stumble |
+| `--name "foo"` | All attributes go through `--prop`: `--prop name="foo"` |
+| `/shape[myname]` (bare name in brackets) | Use `@name=` selector: `/shape[@name=myname]` or `/shape[@id=10007]` |
+| Paths 1-based vs `--index` 0-based | `/slide[1]` = first slide; `--index 0` = first position |
+| `$` in `--prop text=` | Single-quote: `--prop text='$15M'`. Double-quoted `"$15M"` gets shell-expanded to `M` |
+| `\n` / `\t` in `--prop text=` | CLI does NOT interpret. Use multiple `--type paragraph`, or batch heredoc with JSON `"\n"` |

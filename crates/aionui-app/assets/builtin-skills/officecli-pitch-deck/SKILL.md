@@ -13,8 +13,8 @@ When the pptx base rules cover it, the text here says `→ see pptx v2 §X`. Rea
 
 If `officecli` is missing:
 
-- **macOS / Linux**: `curl -fsSL https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh | bash`
-- **Windows (PowerShell)**: `irm https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.ps1 | iex`
+- **macOS / Linux**: `curl -fsSL https://d.officecli.ai/install.sh | bash`
+- **Windows (PowerShell)**: `irm https://d.officecli.ai/install.ps1 | iex`
 
 Verify with `officecli --version` (open a new terminal if PATH hasn't picked up). If install fails, download a binary from https://github.com/iOfficeAI/OfficeCLI/releases.
 
@@ -61,13 +61,13 @@ If the user says "fundraising deck" but the context is a corporate BU quarterly 
 
 **Read this before writing a single command.** Pick the row that matches the user's description — everything downstream (slide count, which metrics, which recipes, what the team slide must show) derives from this one call.
 
-| Stage             | Revenue band                 | Team         | Slide count | Dominant narrative (weight)                                                                               | Must-have data                                                                               | Common red flag                                                                       |
-| ----------------- | ---------------------------- | ------------ | ----------- | --------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| **Seed**          | $0 – $1M ARR (often pre-rev) | 2 – 8 FTE    | 10 – 12     | Problem (30%) + Solution (25%) + Team (15%) + Market (15%) + Traction (15%)                               | Founder-market fit story; 1 – 2 design-partner / pilot logos; top-down TAM ok                | Over-claiming traction (10 customers = "market proven")                               |
-| **Series A**      | $1 – $5M ARR                 | 10 – 25 FTE  | 12 – 16     | Problem (20%) + Solution (20%) + **Market "why now"** (15%) + Product (15%) + Traction (20%) + Team (10%) | PMF proof (NRR > 110%, low churn), bottom-up TAM/SAM, pipeline / pilots converted            | Bottom-up TAM feels fabricated; CAC not yet meaningful but shown anyway               |
-| **Series B**      | $5 – $30M ARR                | 30 – 100 FTE | 18 – 22     | **Traction + Unit econ (30%)** + Market + Product + Team + Financials (ask)                               | ARR curve starting at 0; NRR, CAC, LTV, payback (< 18 mo ideal); cohort retention; logo wall | No unit-econ slide; CAC payback > 24mo without explanation; Use-of-Funds missing %    |
-| **Series C**      | $30M+ ARR                    | 100+ FTE     | 20 – 24     | **Financials + Scale + Moat (40%)** + Market expansion + Team depth                                       | Multi-year GAAP, rule-of-40, GM trajectory, international expansion plan, defensibility      | No moat slide; revenue growth without margin story; team slide has no prior CEO / CFO |
-| **Bridge / SAFE** | any                          | any          | 8 – 10      | **Specific bridge reason** + runway math + commitments                                                    | Prior round context; specific milestone the bridge funds; committed investor amount          | Treating a bridge like a Series A — too many slides dilutes the ask                   |
+| Stage | Revenue band | Team | Slide count | Dominant narrative (weight) | Must-have data | Common red flag |
+|---|---|---|---|---|---|---|
+| **Seed** | $0 – $1M ARR (often pre-rev) | 2 – 8 FTE | 10 – 12 | Problem (30%) + Solution (25%) + Team (15%) + Market (15%) + Traction (15%) | Founder-market fit story; 1 – 2 design-partner / pilot logos; top-down TAM ok | Over-claiming traction (10 customers = "market proven") |
+| **Series A** | $1 – $5M ARR | 10 – 25 FTE | 12 – 16 | Problem (20%) + Solution (20%) + **Market "why now"** (15%) + Product (15%) + Traction (20%) + Team (10%) | PMF proof (NRR > 110%, low churn), bottom-up TAM/SAM, pipeline / pilots converted | Bottom-up TAM feels fabricated; CAC not yet meaningful but shown anyway |
+| **Series B** | $5 – $30M ARR | 30 – 100 FTE | 18 – 22 | **Traction + Unit econ (30%)** + Market + Product + Team + Financials (ask) | ARR curve starting at 0; NRR, CAC, LTV, payback (< 18 mo ideal); cohort retention; logo wall | No unit-econ slide; CAC payback > 24mo without explanation; Use-of-Funds missing % |
+| **Series C** | $30M+ ARR | 100+ FTE | 20 – 24 | **Financials + Scale + Moat (40%)** + Market expansion + Team depth | Multi-year GAAP, rule-of-40, GM trajectory, international expansion plan, defensibility | No moat slide; revenue growth without margin story; team slide has no prior CEO / CFO |
+| **Bridge / SAFE** | any | any | 8 – 10 | **Specific bridge reason** + runway math + commitments | Prior round context; specific milestone the bridge funds; committed investor amount | Treating a bridge like a Series A — too many slides dilutes the ask |
 
 **Decision procedure.** From one or two user sentences ("Series B, $18M ARR, 120 customers, $35M raise"), pick exactly one stage row. All later choices in this skill reference your stage: which 赛道 template to pull, which recipes are mandatory vs optional, and which Delivery Gate 6 checks fire.
 
@@ -75,12 +75,12 @@ If the user says "fundraising deck" but the context is a corporate BU quarterly 
 
 **Non-SaaS stage overrides.** The ARR / unit-econ shape of Series B fits SaaS. For other verticals, substitute revenue band + unit-econ equivalent + Gate 6.3 grep:
 
-| Vertical                  | Revenue "band" at Series B     | "Unit econ" equivalent                                         | Gate 6.3 substitute                                                                                |
-| ------------------------- | ------------------------------ | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| **Bio / Clinical-stage**  | pre-rev, 20–60 FTE             | burn rate + runway to next milestone (IND / Ph1 readout / BLA) | `shape:contains("ORR")` OR `contains("Pipeline")` OR `contains("BLA")` OR `contains("runway")` ≥ 1 |
-| **Deep Tech / Frontier**  | pre-rev or early pilot rev     | technical milestones + TRL level + benchmark vs SoTA           | `shape:contains("TRL")` OR `contains("benchmark")` ≥ 1                                             |
-| **Marketplace / Network** | GMV $10–100M                   | take rate + cohort retention + liquidity                       | `shape:contains("GMV")` + `contains("take rate")` ≥ 1                                              |
-| **Consumer hardware**     | $2–15M revenue (shipped units) | contribution margin + repeat rate + blended CAC                | `shape:contains("repeat")` OR `contains("contribution")` ≥ 1                                       |
+| Vertical | Revenue "band" at Series B | "Unit econ" equivalent | Gate 6.3 substitute |
+|---|---|---|---|
+| **Bio / Clinical-stage** | pre-rev, 20–60 FTE | burn rate + runway to next milestone (IND / Ph1 readout / BLA) | `shape:contains("ORR")` OR `contains("Pipeline")` OR `contains("BLA")` OR `contains("runway")` ≥ 1 |
+| **Deep Tech / Frontier** | pre-rev or early pilot rev | technical milestones + TRL level + benchmark vs SoTA | `shape:contains("TRL")` OR `contains("benchmark")` ≥ 1 |
+| **Marketplace / Network** | GMV $10–100M | take rate + cohort retention + liquidity | `shape:contains("GMV")` + `contains("take rate")` ≥ 1 |
+| **Consumer hardware** | $2–15M revenue (shipped units) | contribution margin + repeat rate + blended CAC | `shape:contains("repeat")` OR `contains("contribution")` ≥ 1 |
 
 Substitute the analogue grep when running Gate 6.3 on these verticals. False WARN on SaaS CAC/LTV = expected; real concern = vertical-specific analogue present. Bio Series B decks especially: burn + runway-to-milestone IS the "unit econ" story.
 
@@ -135,11 +135,11 @@ Patterns are **layout geometry**; recipes below are **narrative intent**. A slid
 +----------------------------------+
 ```
 
-| Element                 | X   | Y    | Width   | Height | Font / size                     |
-| ----------------------- | --- | ---- | ------- | ------ | ------------------------------- |
-| Title                   | 2cm | 5cm  | 29.87cm | 4cm    | serif bold, ≥ 36pt (44 typical) |
-| Tagline                 | 2cm | 10cm | 29.87cm | 2cm    | sans 18–22pt                    |
-| Meta (round · $ · date) | 2cm | 13cm | 29.87cm | 1.5cm  | sans 12–16pt                    |
+| Element | X | Y | Width | Height | Font / size |
+|---|---|---|---|---|---|
+| Title | 2cm | 5cm | 29.87cm | 4cm | serif bold, ≥ 36pt (44 typical) |
+| Tagline | 2cm | 10cm | 29.87cm | 2cm | sans 18–22pt |
+| Meta (round · $ · date) | 2cm | 13cm | 29.87cm | 1.5cm | sans 12–16pt |
 
 **Use this when** the slide is the first one (Cover recipe 1) — 3-second identity grab. Background is a 180° linear gradient between two dark palette shades (e.g. Professional Navy `1E2761 → 0D1F35`). If the title wraps to 2 lines, **add height (4cm → 5cm), never drop font below 36pt** — sub-36pt on a pitch cover reads as timid regardless of content. Transition: fade.
 
@@ -157,13 +157,13 @@ Title + 3 big-number / label pairs across. The default for Problem / Why-Now / T
 +----------------------------------+
 ```
 
-| Element               | X      | Y      | Width   | Height | Font / size            |
-| --------------------- | ------ | ------ | ------- | ------ | ---------------------- |
-| Title                 | 1.5cm  | 1cm    | 30.87cm | 3cm    | serif bold ≥ 36pt      |
-| Stat 1 number         | 2cm    | 5cm    | 9cm     | 4cm    | serif bold 60–64pt     |
-| Stat 1 label          | 2cm    | 9.5cm  | 9cm     | 2cm    | sans ≥ 16pt (H4 floor) |
-| Stat 2 number / label | 12.5cm | (same) | 9cm     | (same) | (same)                 |
-| Stat 3 number / label | 23cm   | (same) | 9cm     | (same) | (same)                 |
+| Element | X | Y | Width | Height | Font / size |
+|---|---|---|---|---|---|
+| Title | 1.5cm | 1cm | 30.87cm | 3cm | serif bold ≥ 36pt |
+| Stat 1 number | 2cm | 5cm | 9cm | 4cm | serif bold 60–64pt |
+| Stat 1 label | 2cm | 9.5cm | 9cm | 2cm | sans ≥ 16pt (H4 floor) |
+| Stat 2 number / label | 12.5cm | (same) | 9cm | (same) | (same) |
+| Stat 3 number / label | 23cm | (same) | 9cm | (same) | (same) |
 
 **Use this when** you have 2–3 anchoring numbers and the story is "three facts argue the point" — Problem, Why-Now, Market-callout, single-row Traction. Labels ≥ 16pt is the H4 floor (sub-label exception); a number without a label reads as bravado, so never drop labels to 12–14pt to fit more text.
 
@@ -180,11 +180,11 @@ Same geometry as C.2 but 4 columns. Numbers 60pt, width 7cm each.
 +-------------------------------------+
 ```
 
-| Element      | X positions               | Y     | Width   | Height | Font / size     |
-| ------------ | ------------------------- | ----- | ------- | ------ | --------------- |
-| Title        | 1.5cm                     | 1cm   | 30.87cm | 3cm    | serif bold 36pt |
-| Stat numbers | 1.5 / 9.5 / 17.5 / 25.5cm | 5cm   | 7cm     | 4cm    | serif bold 60pt |
-| Stat labels  | (same X)                  | 9.5cm | 7cm     | 2cm    | sans ≥ 16pt     |
+| Element | X positions | Y | Width | Height | Font / size |
+|---|---|---|---|---|---|
+| Title | 1.5cm | 1cm | 30.87cm | 3cm | serif bold 36pt |
+| Stat numbers | 1.5 / 9.5 / 17.5 / 25.5cm | 5cm | 7cm | 4cm | serif bold 60pt |
+| Stat labels | (same X) | 9.5cm | 7cm | 2cm | sans ≥ 16pt |
 
 **Use this when** exactly 4 parallel metrics tell the story and 3 feels under-counted. Prefer C.2 if in doubt — 4 always feels tighter than 3, and wrap risk is real.
 
@@ -206,11 +206,11 @@ Chart takes left 55%, 2–3 stacked callouts on the right. The default for Tract
 +-------------------------------------+
 ```
 
-| Element      | X    | Y    | Width   | Height                                       |
-| ------------ | ---- | ---- | ------- | -------------------------------------------- |
-| Title        | 2cm  | 1cm  | 29.87cm | 3cm                                          |
-| Chart        | 2cm  | 4cm  | 17cm    | 13cm                                         |
-| Stats column | 21cm | 4cm+ | 11cm    | 2.5cm number + 1.5cm label (~3.7cm per pair) |
+| Element | X | Y | Width | Height |
+|---|---|---|---|---|
+| Title | 2cm | 1cm | 29.87cm | 3cm |
+| Chart | 2cm | 4cm | 17cm | 13cm |
+| Stats column | 21cm | 4cm+ | 11cm | 2.5cm number + 1.5cm label (~3.7cm per pair) |
 
 Sub-labels ≥ 16pt (H4 floor). For 5 stats stacked, drop number size to 44pt; 6+ stats means pick a different pattern. Post-batch for column/bar charts: `officecli set "$FILE" "/slide[N]/chart[1]" --prop gap=80` to tighten bar spacing.
 
@@ -235,11 +235,11 @@ Sub-labels ≥ 16pt (H4 floor). For 5 stats stacked, drop number size to 44pt; 6
 +---------------------------------------+
 ```
 
-| Element     | X     | Y positions        | Width | Height | Font / size                   |
-| ----------- | ----- | ------------------ | ----- | ------ | ----------------------------- |
-| Icon circle | 2cm   | 4.5 / 8.5 / 12.5cm | 2.5cm | 2.5cm  | ellipse, accent fill          |
-| Label       | 5.5cm | (icon Y + 0)       | 25cm  | 1.2cm  | sans bold 18pt                |
-| Description | 5.5cm | (icon Y + 1.3cm)   | 25cm  | 1.8cm  | sans ≥ 16pt (H4 floor), muted |
+| Element | X | Y positions | Width | Height | Font / size |
+|---|---|---|---|---|---|
+| Icon circle | 2cm | 4.5 / 8.5 / 12.5cm | 2.5cm | 2.5cm | ellipse, accent fill |
+| Label | 5.5cm | (icon Y + 0) | 25cm | 1.2cm | sans bold 18pt |
+| Description | 5.5cm | (icon Y + 1.3cm) | 25cm | 1.8cm | sans ≥ 16pt (H4 floor), muted |
 
 **Use this when** you have 3 short vertical points that benefit from a visual anchor per row — Solution mechanism, Value pillars, Product loop. Choose C.5b (2×2 grid) when items are parallel and you have exactly 4; choose a horizontal 5-across variant when icons should read side-by-side (e.g. 5-step process).
 
@@ -262,16 +262,16 @@ Sub-labels ≥ 16pt (H4 floor). For 5 stats stacked, drop number size to 44pt; 6
 +-----------------------------+
 ```
 
-| Element                  | X              | Y              | Width   | Height | Font / size            |
-| ------------------------ | -------------- | -------------- | ------- | ------ | ---------------------- |
-| Slide title              | 2cm            | 1cm            | 29.87cm | 2.5cm  | serif bold 32pt        |
-| Card 1 bg (top-left)     | 1.5cm          | 4cm            | 14.5cm  | 7cm    | roundRect              |
-| Card 2 bg (top-right)    | 17.5cm         | 4cm            | 14.5cm  | 7cm    | roundRect              |
-| Card 3 bg (bottom-left)  | 1.5cm          | 12cm           | 14.5cm  | 7cm    | roundRect              |
-| Card 4 bg (bottom-right) | 17.5cm         | 12cm           | 14.5cm  | 7cm    | roundRect              |
-| Icon ellipse (each card) | card_x + 0.5cm | card_y + 0.5cm | 2cm     | 2cm    | —                      |
-| Card title (each)        | card_x + 3.2cm | card_y + 0.6cm | 10.5cm  | 1.8cm  | sans bold 16pt         |
-| Card body (each)         | card_x + 0.5cm | card_y + 3cm   | 13cm    | 3.5cm  | sans ≥ 16pt (H4 floor) |
+| Element | X | Y | Width | Height | Font / size |
+|---|---|---|---|---|---|
+| Slide title | 2cm | 1cm | 29.87cm | 2.5cm | serif bold 32pt |
+| Card 1 bg (top-left) | 1.5cm | 4cm | 14.5cm | 7cm | roundRect |
+| Card 2 bg (top-right) | 17.5cm | 4cm | 14.5cm | 7cm | roundRect |
+| Card 3 bg (bottom-left) | 1.5cm | 12cm | 14.5cm | 7cm | roundRect |
+| Card 4 bg (bottom-right) | 17.5cm | 12cm | 14.5cm | 7cm | roundRect |
+| Icon ellipse (each card) | card_x + 0.5cm | card_y + 0.5cm | 2cm | 2cm | — |
+| Card title (each) | card_x + 3.2cm | card_y + 0.6cm | 10.5cm | 1.8cm | sans bold 16pt |
+| Card body (each) | card_x + 0.5cm | card_y + 3cm | 13cm | 3.5cm | sans ≥ 16pt (H4 floor) |
 
 **Use this when** you have exactly 4 parallel items and the eye should land on each equally — 4 product pillars, 4 service tiers, 4 stakeholder types. 3 items feel lonely in a 2×2; 5+ items break the grid — go to a 3×2 (see pptx v2 §(d) grid math) or C.5 row pattern.
 
@@ -428,7 +428,6 @@ officecli add "$FILE" "/slide[$SLIDE]" --type shape --prop text="Auto-correlate 
 ### (6) Business model slide — unit econ or revenue model
 
 **Visual outcome.** Decision tree by vertical:
-
 - **SaaS / Enterprise (Series A+)** — 4 KPI callouts: CAC / LTV / Payback / GM (reuse pptx Recipe (e)).
 - **Consumer / D2C** — AOV · repeat-purchase rate · contribution margin · blended CAC.
 - **Marketplace** — GMV / take-rate / liquidity metric / cohort retention.
@@ -631,21 +630,21 @@ officecli add "$FILE" "/slide[$SLIDE]" --type table \
 
 A terse convention table — **not a finance tutorial**. If you don't already know what these mean, pause the deck and ask the user for the values; don't guess.
 
-| Metric                          | Shape                              | Floor / convention                                                                      |
-| ------------------------------- | ---------------------------------- | --------------------------------------------------------------------------------------- |
-| **TAM**                         | `$X.YB`, one methodology           | Either top-down (analyst report) or bottom-up (count × ACV). Never both; never neither. |
-| **SAM**                         | `$X.YB`, fraction of TAM you serve | Typically 15 – 30% of TAM for verticalized SaaS; higher for horizontal                  |
-| **SOM**                         | `$X.YB` at year N                  | Realistic 5-yr share: 5 – 15% of SAM for early stage                                    |
-| **ARR**                         | MRR × 12. NOT revenue.             | SaaS only; contracts on books, net of churn                                             |
-| **MRR**                         | Monthly recurring                  | ARR / 12; do not confuse with monthly revenue                                           |
-| **NRR (Net Revenue Retention)** | %, trailing 12 mo                  | VC floor: > 100% acceptable, > 115% strong, > 130% exceptional                          |
-| **CAC**                         | $ fully-loaded                     | Sales + marketing spend / new logos acquired                                            |
-| **LTV**                         | $                                  | ARPU × gross margin × (1 / churn rate)                                                  |
-| **LTV:CAC**                     | ratio                              | VC floor: 3x OK, > 4x strong, > 5x exceptional                                          |
-| **CAC payback**                 | months                             | VC floor: < 18 mo OK, < 12 mo strong                                                    |
-| **Gross margin**                | %                                  | SaaS floor 70%, strong 80%+; marketplace 15-40%; hardware 30-50%                        |
-| **Burn / runway**               | $/month + months                   | Gross burn vs net burn — label which; runway to specific milestone                      |
-| **Use of Funds**                | 4-bucket pie                       | Engineering / Go-to-Market / G&A / Reserve — see Ask slide recipe                       |
+| Metric | Shape | Floor / convention |
+|---|---|---|
+| **TAM** | `$X.YB`, one methodology | Either top-down (analyst report) or bottom-up (count × ACV). Never both; never neither. |
+| **SAM** | `$X.YB`, fraction of TAM you serve | Typically 15 – 30% of TAM for verticalized SaaS; higher for horizontal |
+| **SOM** | `$X.YB` at year N | Realistic 5-yr share: 5 – 15% of SAM for early stage |
+| **ARR** | MRR × 12. NOT revenue. | SaaS only; contracts on books, net of churn |
+| **MRR** | Monthly recurring | ARR / 12; do not confuse with monthly revenue |
+| **NRR (Net Revenue Retention)** | %, trailing 12 mo | VC floor: > 100% acceptable, > 115% strong, > 130% exceptional |
+| **CAC** | $ fully-loaded | Sales + marketing spend / new logos acquired |
+| **LTV** | $ | ARPU × gross margin × (1 / churn rate) |
+| **LTV:CAC** | ratio | VC floor: 3x OK, > 4x strong, > 5x exceptional |
+| **CAC payback** | months | VC floor: < 18 mo OK, < 12 mo strong |
+| **Gross margin** | % | SaaS floor 70%, strong 80%+; marketplace 15-40%; hardware 30-50% |
+| **Burn / runway** | $/month + months | Gross burn vs net burn — label which; runway to specific milestone |
+| **Use of Funds** | 4-bucket pie | Engineering / Go-to-Market / G&A / Reserve — see Ask slide recipe |
 
 **Rule.** Every number on a deck carries a unit. `18%` or `18M` alone is ambiguous — write `$18M ARR` / `18% NRR growth`. `TBD`, `coming soon`, `(fill in)`, `lorem`, `xxxx` in numeric slots = immediate VC disqualification. Gate 6 greps these below.
 
@@ -653,17 +652,16 @@ A terse convention table — **not a finance tutorial**. If you don't already kn
 
 What the VC reads in the first 30 seconds. Six one-line conditions — every "FAIL" below is an instant round-killer; fix before delivering.
 
-| #   | Red flag (FAIL if present)                                   | Positive signal (shipwise)                                                      |
-| --- | ------------------------------------------------------------ | ------------------------------------------------------------------------------- |
-| 1   | Cover without round + amount + date                          | `Company · tagline · Series X · $YM · Date` in 4 lines                          |
-| 2   | TAM > $100B without a cited source / methodology             | TAM clearly labeled bottom-up OR top-down with a visible 2024+ source           |
-| 3   | Traction chart y-axis does not start at 0 (hockey-stick lie) | Line chart `axismin=0`; growth shape honest                                     |
-| 4   | Team slide: headshots + names only, no prior companies       | Every member: prior company + role + 1 achievement metric                       |
-| 5   | Ask slide missing Use-of-Funds breakdown                     | `$XM` hero + 4-bucket pie (Eng / GTM / G&A / Reserve) + runway + next milestone |
-| 6   | `TBD` / `lorem` / `xxxx` / `{{...}}` / `(fill in)` anywhere  | `view text` clean — zero placeholder tokens                                     |
+| # | Red flag (FAIL if present) | Positive signal (shipwise) |
+|---|---|---|
+| 1 | Cover without round + amount + date | `Company · tagline · Series X · $YM · Date` in 4 lines |
+| 2 | TAM > $100B without a cited source / methodology | TAM clearly labeled bottom-up OR top-down with a visible 2024+ source |
+| 3 | Traction chart y-axis does not start at 0 (hockey-stick lie) | Line chart `axismin=0`; growth shape honest |
+| 4 | Team slide: headshots + names only, no prior companies | Every member: prior company + role + 1 achievement metric |
+| 5 | Ask slide missing Use-of-Funds breakdown | `$XM` hero + 4-bucket pie (Eng / GTM / G&A / Reserve) + runway + next milestone |
+| 6 | `TBD` / `lorem` / `xxxx` / `{{...}}` / `(fill in)` anywhere | `view text` clean — zero placeholder tokens |
 
 **Common Series-specific failures.**
-
 - **Series A specific** — bottom-up TAM calculated from a fictional enterprise-count × ACV (no reference customers to anchor the count); `CAC / LTV` shown with < 12 months of data (statistically meaningless).
 - **Series B specific** — no unit-econ slide at all; CAC payback > 24 months without a "we're pre-scale, here's the plan" narrative; logo wall < 8 customers.
 - **Series C specific** — no moat / defensibility slide; revenue growth shown without margin trajectory; international expansion stated but no specific launch plan / hires.

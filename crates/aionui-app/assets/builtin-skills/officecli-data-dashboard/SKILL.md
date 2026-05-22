@@ -11,8 +11,8 @@ A dashboard is not "a spreadsheet with charts". It is a composition: **one Dashb
 
 If `officecli` is missing:
 
-- **macOS / Linux**: `curl -fsSL https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh | bash`
-- **Windows (PowerShell)**: `irm https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.ps1 | iex`
+- **macOS / Linux**: `curl -fsSL https://d.officecli.ai/install.sh | bash`
+- **Windows (PowerShell)**: `irm https://d.officecli.ai/install.ps1 | iex`
 
 Verify with `officecli --version` (open a new terminal if PATH hasn't picked up). If install fails, download a binary from https://github.com/iOfficeAI/OfficeCLI/releases.
 
@@ -142,7 +142,6 @@ Options, not templates. The user's data and audience drive the choices.
 ### Layout patterns (pick one, stay consistent)
 
 **Pattern 1 — executive summary** (board packs): KPI strip A1:H4, charts stack from row 6.
-
 ```
 ┌ KPI1 │ KPI2 │ KPI3 │ KPI4 ┐  rows 1-4
 ├──────┴──────┴──────┴──────┤
@@ -152,7 +151,6 @@ Options, not templates. The user's data and audience drive the choices.
 ```
 
 **Pattern 2 — ops console** (live ops): KPIs down A:B, charts fill C:L.
-
 ```
 │ KPI1 │                   │
 │ KPI2 │    Chart 1        │  rows 1-12
@@ -162,7 +160,6 @@ Options, not templates. The user's data and audience drive the choices.
 ```
 
 **Pattern 3 — scorecard** (≥ 6 KPIs, no dominant chart): grid of 2×3 cards (label / value / sparkline).
-
 ```
 │ KPI1 │ KPI2 │ KPI3 │  rows 1-4
 │ KPI4 │ KPI5 │ KPI6 │  rows 5-8
@@ -170,23 +167,23 @@ Options, not templates. The user's data and audience drive the choices.
 
 ### Complexity scaling by data size
 
-| Rows   | KPIs | Charts | Sparklines                     | CF rules | Preset      |
-| ------ | ---- | ------ | ------------------------------ | -------- | ----------- |
-| < 10   | 1–2  | 1      | skip                           | 0–1      | `minimal`   |
-| 10–50  | 2–3  | 2      | only if sequential time-series | 1–2      | `dashboard` |
-| 50–200 | 3–5  | 2–3    | only if sequential time-series | 2–3      | `dashboard` |
-| 200+   | 3–5  | 3      | only if sequential time-series | 3–4      | `dashboard` |
+| Rows | KPIs | Charts | Sparklines | CF rules | Preset |
+|---|---|---|---|---|---|
+| < 10 | 1–2 | 1 | skip | 0–1 | `minimal` |
+| 10–50 | 2–3 | 2 | only if sequential time-series | 1–2 | `dashboard` |
+| 50–200 | 3–5 | 2–3 | only if sequential time-series | 2–3 | `dashboard` |
+| 200+ | 3–5 | 3 | only if sequential time-series | 3–4 | `dashboard` |
 
 ### Chart type selection
 
-| Data pattern                               | Chart type                               | Notes                                                                              |
-| ------------------------------------------ | ---------------------------------------- | ---------------------------------------------------------------------------------- |
-| Trend over time, one series                | `line`                                   | Add `trendline=linear` to show direction on noisy series                           |
-| Trend over time, multiple components       | `line` (multi-series) or `columnStacked` | Stacked when components sum to a meaningful total                                  |
-| Comparison across categories in time order | `column`                                 | Not `bar` — horizontal bars break left-to-right time reading                       |
-| Part-of-whole breakdown                    | `doughnut`                               | Prefer over `pie`: `chartType=pie` has a known LibreOffice blank-render regression |
-| Budget vs actual                           | `combo` with `combosplit=1`              | First series as bars, rest as lines                                                |
-| Correlation                                | `scatter`                                | Uses `series1.xValues`, NOT `series1.categories`                                   |
+| Data pattern | Chart type | Notes |
+|---|---|---|
+| Trend over time, one series | `line` | Add `trendline=linear` to show direction on noisy series |
+| Trend over time, multiple components | `line` (multi-series) or `columnStacked` | Stacked when components sum to a meaningful total |
+| Comparison across categories in time order | `column` | Not `bar` — horizontal bars break left-to-right time reading |
+| Part-of-whole breakdown | `doughnut` | Prefer over `pie`: `chartType=pie` has a known LibreOffice blank-render regression |
+| Budget vs actual | `combo` with `combosplit=1` | First series as bars, rest as lines |
+| Correlation | `scatter` | Uses `series1.xValues`, NOT `series1.categories` |
 
 ### Preset options
 
@@ -196,12 +193,12 @@ Options, not templates. The user's data and audience drive the choices.
 
 Four CF rule types; each uses `--type <shorthand>` at `add` time:
 
-| Intent                       | `--type`     | Typical props                                                                                                  |
-| ---------------------------- | ------------ | -------------------------------------------------------------------------------------------------------------- |
-| Magnitude bar (sales, spend) | `databar`    | `sqref=B2:B13 color=4472C4 min=0 max=<plausible>` — always set explicit `min`/`max`; defaults emit invalid XML |
-| Heat map (rates, growth)     | `colorscale` | `sqref=D2:D13 mincolor=FFCDD2 midcolor=FFFFFF maxcolor=C8E6C9`                                                 |
-| Status indicator             | `iconset`    | `sqref=E2:E13 iconset=3Arrows` — see help for the full enum                                                    |
-| Custom business rule         | `formulacf`  | `sqref=B2:B13 'formula=$B2>=100000' fill=C8E6C9 font.color=2E7D32` — NEVER `font.bold` (schema rejects `<b>`)  |
+| Intent | `--type` | Typical props |
+|---|---|---|
+| Magnitude bar (sales, spend) | `databar` | `sqref=B2:B13 color=4472C4 min=0 max=<plausible>` — always set explicit `min`/`max`; defaults emit invalid XML |
+| Heat map (rates, growth) | `colorscale` | `sqref=D2:D13 mincolor=FFCDD2 midcolor=FFFFFF maxcolor=C8E6C9` |
+| Status indicator | `iconset` | `sqref=E2:E13 iconset=3Arrows` — see help for the full enum |
+| Custom business rule | `formulacf` | `sqref=B2:B13 'formula=$B2>=100000' fill=C8E6C9 font.color=2E7D32` — NEVER `font.bold` (schema rejects `<b>`) |
 
 Semantic colors to stay consistent within a dashboard:
 
@@ -386,25 +383,25 @@ Scatter's `series1.xValues` is not exposed in `get --json` (series `values=""`) 
 
 ### Dashboard-specific
 
-| #    | Issue                                                                                                                                                                                                                                                                    | Mitigation                                                                                                                                                                                                                                                                                                       |
-| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| D-1  | `preset`, `referenceline`, `trendline`, `axisNumFmt` are DeferredAddKeys — work on `add` only, silently ignored on `set`                                                                                                                                                 | Include them at `add` time. Cannot apply after the fact — remove + re-add.                                                                                                                                                                                                                                       |
-| D-2  | `referenceline` format is `value:color:label:dash` (color BEFORE label). `"0:Break-Even:FF0000:dash"` fails `Invalid color value`.                                                                                                                                       | Order is value, color, label, dash.                                                                                                                                                                                                                                                                              |
-| D-3  | Scatter charts use `series1.xValues`, not `series1.categories`. `<cat>` inside `<scatterChart>` is schema-invalid.                                                                                                                                                       | `--prop series1.xValues="Sheet1!A2:A13"`                                                                                                                                                                                                                                                                         |
-| D-4  | `formulacf` rejects `font.bold` (dxf/font schema disallows `<b>`).                                                                                                                                                                                                       | Use `fill` + `font.color` only; bold is not available via CF.                                                                                                                                                                                                                                                    |
-| D-5  | Dashboard column widths default to 8.43 — KPI values at 24pt bold show `###`                                                                                                                                                                                             | Size by cachedValue bracket: 4–6 digits → 22–24; 7–9 digits (million) → 26–30; 10+ digits (亿 / billion) → 32–36; 百亿 / 10-digit + currency symbol + fit-to-page landscape → **40–44**. Formula `ceil((visible_chars+2)*1.3)` is a starting point; always verify via Gate 7 fallback b). Sparkline columns: 12. |
-| D-6  | `raw-set activeTab` must be the LAST mutation. Inserting before all sheets exist shifts indices.                                                                                                                                                                         | Finish all sheets / charts / CF / sparklines / tabColors, then `raw-set`.                                                                                                                                                                                                                                        |
-| D-7  | `calc.fullCalcOnLoad` via `raw-set` creates duplicate `<calcPr>` → validate fails                                                                                                                                                                                        | Use `officecli set "$FILE" / --prop calc.fullCalcOnLoad=true`.                                                                                                                                                                                                                                                   |
-| D-8  | LibreOffice does not evaluate hidden-column formulas at render → charts referencing hidden cells render blank                                                                                                                                                            | Aggregate into a visible Summary sheet, chart reads from Summary. Hide only columns that are not chart sources.                                                                                                                                                                                                  |
-| D-9  | `chartType=pie` blank-renders in LibreOffice (v1.0.x)                                                                                                                                                                                                                    | Use `doughnut` as the safe substitute for part-of-whole breakdowns.                                                                                                                                                                                                                                              |
-| D-10 | `SUMIFS` / `AVERAGEIFS` with date criteria fails silently if the criterion is a string                                                                                                                                                                                   | Wrap with `DATE()` or `DATEVALUE()`: `=SUMIFS(B2:B13,A2:A13,DATE(2025,1,5))`.                                                                                                                                                                                                                                    |
-| D-11 | Summary sheet percentage formulas display as raw decimals (0.098) without `numFmt`                                                                                                                                                                                       | Set `numFmt="0.0%"` at the same `set` call as the formula.                                                                                                                                                                                                                                                       |
-| D-12 | `import --header` sets freeze + AutoFilter but does NOT set column widths; `numFmt` on a `col[]` path is rejected                                                                                                                                                        | Set widths on `col[]`; set `numFmt` on the cell range (`A2:A13`), not the column.                                                                                                                                                                                                                                |
-| D-13 | Sparkline `highpoint` is a bool (highlight on/off), not a color. `--prop highpoint=FF0000` errors `Invalid boolean value`                                                                                                                                                | `--prop highPoint=true --prop highMarkerColor=FF0000`. Same pattern for lowPoint / firstPoint / lastPoint and their \*MarkerColor.                                                                                                                                                                               |
-| D-14 | Sparkline cross-sectional data is meaningless (a region or department has no ordering)                                                                                                                                                                                   | Skip sparklines unless rows are a sequential time-series (dates, months, quarters).                                                                                                                                                                                                                              |
-| D-15 | 1.0.63+ rejects empty chart `add` (`Chart requires data`) at the CLI layer — legacy skills that relied on silent accept will fail here                                                                                                                                   | Always provide `series1.values=` / `dataRange=` / inline `data=` at chart `add` time. Treat Gate 2 seriesCount check as a belt-and-braces verification.                                                                                                                                                          |
-| D-16 | `fullCalcOnLoad=true` guarantees a **runtime** recalc when the end user opens the file; it does NOT refresh the build-time `cachedValue` in XML. Build sequence `set B=100 → set E==B+D → fix B=150` leaves `E.cachedValue` stale (board sees "Net Change = 0").         | After all upstream edits are final, re-issue every downstream formula (`officecli set "$FILE" /Sheet/E2 --prop formula==B2+D2`) OR `close` + re-open the file. Gate 8 verifies.                                                                                                                                  |
-| D-17 | 1.0.63 built-in calc engine does NOT evaluate `SUMPRODUCT` with array-predicate form `SUMPRODUCT((A2:A97=X)*C2:C97*D2:D97)` — cachedValue stays `0`/`null`, Gate 8 rejects. Runtime Excel / WPS compute fine, but board-delivered XLSX with stale cache still ships `0`. | Rewrite as helper column + `SUMIF`: `F2==C2*D2` on source sheet, then `=SUMIF(B:B, "Region X", F:F)`. Or pre-aggregate in Summary sheet and chart from there.                                                                                                                                                    |
+| # | Issue | Mitigation |
+|---|---|---|
+| D-1 | `preset`, `referenceline`, `trendline`, `axisNumFmt` are DeferredAddKeys — work on `add` only, silently ignored on `set` | Include them at `add` time. Cannot apply after the fact — remove + re-add. |
+| D-2 | `referenceline` format is `value:color:label:dash` (color BEFORE label). `"0:Break-Even:FF0000:dash"` fails `Invalid color value`. | Order is value, color, label, dash. |
+| D-3 | Scatter charts use `series1.xValues`, not `series1.categories`. `<cat>` inside `<scatterChart>` is schema-invalid. | `--prop series1.xValues="Sheet1!A2:A13"` |
+| D-4 | `formulacf` rejects `font.bold` (dxf/font schema disallows `<b>`). | Use `fill` + `font.color` only; bold is not available via CF. |
+| D-5 | Dashboard column widths default to 8.43 — KPI values at 24pt bold show `###` | Size by cachedValue bracket: 4–6 digits → 22–24; 7–9 digits (million) → 26–30; 10+ digits (亿 / billion) → 32–36; 百亿 / 10-digit + currency symbol + fit-to-page landscape → **40–44**. Formula `ceil((visible_chars+2)*1.3)` is a starting point; always verify via Gate 7 fallback b). Sparkline columns: 12. |
+| D-6 | `raw-set activeTab` must be the LAST mutation. Inserting before all sheets exist shifts indices. | Finish all sheets / charts / CF / sparklines / tabColors, then `raw-set`. |
+| D-7 | `calc.fullCalcOnLoad` via `raw-set` creates duplicate `<calcPr>` → validate fails | Use `officecli set "$FILE" / --prop calc.fullCalcOnLoad=true`. |
+| D-8 | LibreOffice does not evaluate hidden-column formulas at render → charts referencing hidden cells render blank | Aggregate into a visible Summary sheet, chart reads from Summary. Hide only columns that are not chart sources. |
+| D-9 | `chartType=pie` blank-renders in LibreOffice (v1.0.x) | Use `doughnut` as the safe substitute for part-of-whole breakdowns. |
+| D-10 | `SUMIFS` / `AVERAGEIFS` with date criteria fails silently if the criterion is a string | Wrap with `DATE()` or `DATEVALUE()`: `=SUMIFS(B2:B13,A2:A13,DATE(2025,1,5))`. |
+| D-11 | Summary sheet percentage formulas display as raw decimals (0.098) without `numFmt` | Set `numFmt="0.0%"` at the same `set` call as the formula. |
+| D-12 | `import --header` sets freeze + AutoFilter but does NOT set column widths; `numFmt` on a `col[]` path is rejected | Set widths on `col[]`; set `numFmt` on the cell range (`A2:A13`), not the column. |
+| D-13 | Sparkline `highpoint` is a bool (highlight on/off), not a color. `--prop highpoint=FF0000` errors `Invalid boolean value` | `--prop highPoint=true --prop highMarkerColor=FF0000`. Same pattern for lowPoint / firstPoint / lastPoint and their *MarkerColor. |
+| D-14 | Sparkline cross-sectional data is meaningless (a region or department has no ordering) | Skip sparklines unless rows are a sequential time-series (dates, months, quarters). |
+| D-15 | 1.0.63+ rejects empty chart `add` (`Chart requires data`) at the CLI layer — legacy skills that relied on silent accept will fail here | Always provide `series1.values=` / `dataRange=` / inline `data=` at chart `add` time. Treat Gate 2 seriesCount check as a belt-and-braces verification. |
+| D-16 | `fullCalcOnLoad=true` guarantees a **runtime** recalc when the end user opens the file; it does NOT refresh the build-time `cachedValue` in XML. Build sequence `set B=100 → set E==B+D → fix B=150` leaves `E.cachedValue` stale (board sees "Net Change = 0"). | After all upstream edits are final, re-issue every downstream formula (`officecli set "$FILE" /Sheet/E2 --prop formula==B2+D2`) OR `close` + re-open the file. Gate 8 verifies. |
+| D-17 | 1.0.63 built-in calc engine does NOT evaluate `SUMPRODUCT` with array-predicate form `SUMPRODUCT((A2:A97=X)*C2:C97*D2:D97)` — cachedValue stays `0`/`null`, Gate 8 rejects. Runtime Excel / WPS compute fine, but board-delivered XLSX with stale cache still ships `0`. | Rewrite as helper column + `SUMIF`: `F2==C2*D2` on source sheet, then `=SUMIF(B:B, "Region X", F:F)`. Or pre-aggregate in Summary sheet and chart from there. |
 
 ### Inherited (pointer only)
 

@@ -9,8 +9,8 @@ description: "Use this skill any time a .xlsx file is involved -- as input, outp
 
 If `officecli` is missing:
 
-- **macOS / Linux**: `curl -fsSL https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh | bash`
-- **Windows (PowerShell)**: `irm https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.ps1 | iex`
+- **macOS / Linux**: `curl -fsSL https://d.officecli.ai/install.sh | bash`
+- **Windows (PowerShell)**: `irm https://d.officecli.ai/install.ps1 | iex`
 
 Verify with `officecli --version` (open a new terminal if PATH hasn't picked up). If install fails, download a binary from https://github.com/iOfficeAI/OfficeCLI/releases.
 
@@ -80,13 +80,13 @@ Scope: budgets, forecasts, 3-statement models, valuation, any `$`-heavy analytic
 
 **Color coding — industry standard.** Five core colors used as a language, not decoration. A reviewer should tell what a cell IS by color alone — before reading the formula.
 
-| Color                | Role                                   | Example             |
-| -------------------- | -------------------------------------- | ------------------- |
-| Blue text `0000FF`   | Hardcoded inputs, scenario variables   | `font.color=0000FF` |
-| Black text `000000`  | ALL formulas and calculations          | default             |
-| Green text `008000`  | Cross-sheet links inside this workbook | `font.color=008000` |
-| Red text `FF0000`    | Links to external files / workbooks    | `font.color=FF0000` |
-| Yellow fill `FFFF00` | Key assumptions needing review         | `fill=FFFF00`       |
+| Color | Role | Example |
+|---|---|---|
+| Blue text `0000FF` | Hardcoded inputs, scenario variables | `font.color=0000FF` |
+| Black text `000000` | ALL formulas and calculations | default |
+| Green text `008000` | Cross-sheet links inside this workbook | `font.color=008000` |
+| Red text `FF0000` | Links to external files / workbooks | `font.color=FF0000` |
+| Yellow fill `FFFF00` | Key assumptions needing review | `fill=FFFF00` |
 
 A reviewer should tell what a cell IS just by its color — before reading the formula. This is a communication contract, not a cosmetic preference.
 
@@ -185,10 +185,9 @@ Outcome: 648-row retail CSV (6490 cells) loads in ~30s, zero failures. Tune: sta
 Start wide, then narrow. `outline` first tells you what sheets exist and where the data is; jump into `view` / `get` / `query` only once you know where to look.
 
 **Open the rendered workbook to eyeball your own work.**
-
 - `officecli view $FILE html` — Read the returned HTML to audit the rendered output. Each sheet is addressable, charts render inline. Catches `###`, placeholder leakage, pivot layout, row-height clipping.
 - `officecli watch $FILE` keeps a live preview running for the human user — they open it at their own discretion. Use when the user wants to watch along; agent self-check uses `view html` above.
-  Use `view html` as your **first visual check after a batch of edits** — fix at source. For final visual verification, the user opens the `.xlsx` in their Excel / WPS / Numbers viewer.
+Use `view html` as your **first visual check after a batch of edits** — fix at source. For final visual verification, the user opens the `.xlsx` in their Excel / WPS / Numbers viewer.
 
 **Orient.** Sheets, dimensions, formula counts.
 
@@ -278,10 +277,10 @@ Chart types live under `officecli help xlsx chart` — the enum is long (20+). P
 
 **Three ways to feed chart data. Pick one per chart — mixing them at add-time is a common trap.**
 
-| Form                  | Shape                                                                                                     | When to use                                                                                                                                                                                   |
-| --------------------- | --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| (a) inline `data`     | `--prop data="Sales:100,200,300" --prop categories="Jan,Feb,Mar"`                                         | Tiny demo charts, numbers you will not edit. Source of truth lives in the chart XML, not a cell.                                                                                              |
-| (b) 2D `dataRange`    | `--prop dataRange="Sheet1!A1:B4"` (first col = categories, first row = header / series name)              | Normal case. Must be **2-D** — single column fails with "Chart requires data".                                                                                                                |
+| Form | Shape | When to use |
+|---|---|---|
+| (a) inline `data` | `--prop data="Sales:100,200,300" --prop categories="Jan,Feb,Mar"` | Tiny demo charts, numbers you will not edit. Source of truth lives in the chart XML, not a cell. |
+| (b) 2D `dataRange` | `--prop dataRange="Sheet1!A1:B4"` (first col = categories, first row = header / series name) | Normal case. Must be **2-D** — single column fails with "Chart requires data". |
 | (c) dotted per-series | `--prop series1.name=Sales --prop series1.values="Sheet1!B2:B4" --prop series1.categories="Sheet1!A2:A4"` | Multi-series charts where each series points at non-contiguous ranges, or you want explicit series naming. `series1.values` alone (no `categories`) emits a chart with `1,2,3` as the x-axis. |
 
 **The single-column trap.** `dataRange="Sheet1!B2:B13"` looks like "value column" but the engine rejects it with `Chart requires data`. Either widen the range to include the category column (`A2:B13`), or switch to form (c) with explicit `series1.categories`.
@@ -444,7 +443,6 @@ Avoid these until fixed; they produce invalid XML or silent breakage.
 - **`chartType=pareto`** — emits empty `cx:axisId val=""`; `validate` fails after `close`. Substitute `column` or `boxWhisker`.
 - **`labelRotation` on axis-by-role** — inserts bad `a:endParaRPr`. Use `title`/`min`/`max`/`majorGridlines`/`visible` only.
 - **Data bar without explicit min/max** — default cfvo `val=""` is invalid. Always pass `--prop min=N --prop max=N`.
-- **Line chart `showMarker` defaults to `true`** — omitting the prop is NOT enough. The default emits markers, which in some viewers render as scatter dots (no connecting line). Always pass `--prop showMarker=false` explicitly on line charts. (Older validate bug `c:marker unexpected child` appears fixed in 1.0.57+.)
 - **Chart `anchor` and series are immutable after create** — to resize/move/add-series: `remove` + `add`. `remove chart[N]` shifts subsequent indices down; re-add appends at end.
 - **`validate` while resident open** — reports spurious `tableParts` / `drawing` errors. Always `close` first.
 - **Batch + resident for formulas — avoid.** Observed deadlocks (CPU 99%, `main pipe busy`, kill -9 required) for cross-sheet formula batches even at 3-5 ops; the prior "≤ 12 ops safe" guideline is **not reliable**. Rule: **cross-sheet formulas go through non-resident one-big-batch OR individual `set`** (100% reliable). Pure value-set batches (no formulas) stay reliable at 50-80+ ops even in resident. **Multiple officecli resident processes on the same machine also contend** — if another agent/session is running resident, expect non-deterministic hangs.
@@ -473,16 +471,16 @@ The CLI does not interpret `\$` / `\t` / `\n` — they land as literal character
 
 ### Other common pitfalls
 
-| Pitfall                           | Fix                                                                                                                                   |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `--name "foo"`                    | All attrs go through `--prop`: `--prop name="foo"`                                                                                    |
-| Guessing a prop name              | `officecli help xlsx <element>` — don't improvise                                                                                     |
-| `--prop color=...` on a cell      | Ambiguous — use `font.color` (text) or `fill` (bg). Also applies inside batch JSON: always use full dotted names, never shell aliases |
-| `#FF0000` hex colors              | Drop the `#`: `FF0000`                                                                                                                |
-| `--index` vs `[N]`                | `--index` is 0-based (array); `[N]` paths are 1-based (XPath)                                                                         |
-| Unquoted `[N]` in zsh/bash        | Quote every path: `"/Sheet1/row[1]"`                                                                                                  |
-| Sheet name with spaces            | Quote full path: `"/My Sheet/A1"`                                                                                                     |
-| Year showing as `2,026`           | `--prop type=string` or `numFmt="@"`                                                                                                  |
-| Modifying a file open in Excel    | Close it in Excel first                                                                                                               |
-| `swap` not reordering sheets      | `swap` is for rows/cells. Use `move --after` / `--before` / `--index` for sheets                                                      |
-| Cached values missing after write | New formulas get cached values when a human opens the file; `validate` accepts them either way                                        |
+| Pitfall | Fix |
+|---|---|
+| `--name "foo"` | All attrs go through `--prop`: `--prop name="foo"` |
+| Guessing a prop name | `officecli help xlsx <element>` — don't improvise |
+| `--prop color=...` on a cell | Ambiguous — use `font.color` (text) or `fill` (bg). Also applies inside batch JSON: always use full dotted names, never shell aliases |
+| `#FF0000` hex colors | Drop the `#`: `FF0000` |
+| `--index` vs `[N]` | `--index` is 0-based (array); `[N]` paths are 1-based (XPath) |
+| Unquoted `[N]` in zsh/bash | Quote every path: `"/Sheet1/row[1]"` |
+| Sheet name with spaces | Quote full path: `"/My Sheet/A1"` |
+| Year showing as `2,026` | `--prop type=string` or `numFmt="@"` |
+| Modifying a file open in Excel | Close it in Excel first |
+| `swap` not reordering sheets | `swap` is for rows/cells. Use `move --after` / `--before` / `--index` for sheets |
+| Cached values missing after write | New formulas get cached values when a human opens the file; `validate` accepts them either way |

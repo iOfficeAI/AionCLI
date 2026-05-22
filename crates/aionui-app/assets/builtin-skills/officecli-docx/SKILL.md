@@ -9,8 +9,8 @@ description: "Use this skill any time a .docx file is involved -- as input, outp
 
 If `officecli` is missing:
 
-- **macOS / Linux**: `curl -fsSL https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh | bash`
-- **Windows (PowerShell)**: `irm https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.ps1 | iex`
+- **macOS / Linux**: `curl -fsSL https://d.officecli.ai/install.sh | bash`
+- **Windows (PowerShell)**: `irm https://d.officecli.ai/install.ps1 | iex`
 
 Verify with `officecli --version` (open a new terminal if PATH hasn't picked up). If install fails, download a binary from https://github.com/iOfficeAI/OfficeCLI/releases.
 
@@ -90,7 +90,7 @@ Six steps. Every non-trivial build follows this shape.
 2. **Orient.** For a new file, `officecli create "$FILE"`. For existing, `officecli view "$FILE" outline` first — get the heading tree, section count, whether a TOC / watermark / tracked changes are already there. Never start editing blind.
 3. **Build incrementally.** Structural first, content next, formatting last. Styles and numbering defs → sections / page setup → headings and body → tables / images / fields / TOC → headers / footers → comments. After each structural op, `get` it back to confirm shape before stacking on top.
 4. **Format to spec.** Explicit heading sizes, spacing, widths, alignment, tabs, list indents. Formatting is not optional polish — per Requirements for Outputs it is part of the deliverable.
-5. **Close, then recalculate fields.** `officecli close "$FILE"` writes XML to disk. TOC / PAGE / NUMPAGES / SEQ / PAGEREF fields have **cached values** that may be stale or empty. When a human opens the file in Word, they press F9 to recalc. For the CLI's purposes, confirm fields _exist_ (via `get --depth 3` finding `<w:fldChar>`) rather than trusting the text value — the text is the cached render, the field is the truth.
+5. **Close, then recalculate fields.** `officecli close "$FILE"` writes XML to disk. TOC / PAGE / NUMPAGES / SEQ / PAGEREF fields have **cached values** that may be stale or empty. When a human opens the file in Word, they press F9 to recalc. For the CLI's purposes, confirm fields *exist* (via `get --depth 3` finding `<w:fldChar>`) rather than trusting the text value — the text is the cached render, the field is the truth.
 6. **QA — assume there are problems.** See the QA section. You are not done when your last command exited 0; you are done after one fix-and-verify cycle finds zero new issues.
 
 ## Quick Start
@@ -118,10 +118,9 @@ Verified: `validate` returns `no errors found`; `get /footer[1] --depth 3` shows
 Start wide, then narrow. `outline` tells you what structure is already there; jump into `view text` / `get` / `query` only once you know where to look.
 
 **Open the rendered document to eyeball your own work.**
-
 - `officecli view $FILE html` — Read the returned HTML to audit the rendered output. Headings, tables, page breaks visible. Catches heading hierarchy issues, empty paragraphs-as-spacing, missing TOC entries.
 - `officecli watch $FILE` keeps a live preview running for the human user — they can open it at their own discretion. Use only when the user wants to watch along; agent self-check uses `view html` above.
-  Use `view html` as your **first visual check after a batch of edits**. For final visual verification, the user opens the `.docx` in their Word / WPS / Pages viewer.
+Use `view html` as your **first visual check after a batch of edits**. For final visual verification, the user opens the `.docx` in their Word / WPS / Pages viewer.
 
 **Orient.** Heading tree, section count, table / image counts, watermark, tracked changes presence.
 
@@ -233,13 +232,13 @@ officecli add "$FILE" "/body/p[2]" --type tab --prop pos=3cm --prop val=left --p
 
 Fields are live values computed at render time. Two props carry all the info: `fieldType` picks the field; `name` supplies the target (merge field name or bookmark for `ref`); `format` adds switches (date patterns, number formats).
 
-| Field        | Use                           | Example                                                          |
-| ------------ | ----------------------------- | ---------------------------------------------------------------- |
-| `page`       | current page number           | `--prop field=page` on footer, or `--prop fieldType=page` inline |
-| `numpages`   | total pages                   | `--prop field=numpages` / `--prop fieldType=numpages`            |
-| `date`       | today                         | `--prop fieldType=date --prop format='yyyy-MM-dd'`               |
-| `mergefield` | template merge token          | `--prop fieldType=mergefield --prop name=CustomerName`           |
-| `ref`        | cross-reference to a bookmark | `--prop fieldType=ref --prop name=bookmarkName`                  |
+| Field | Use | Example |
+|---|---|---|
+| `page` | current page number | `--prop field=page` on footer, or `--prop fieldType=page` inline |
+| `numpages` | total pages | `--prop field=numpages` / `--prop fieldType=numpages` |
+| `date` | today | `--prop fieldType=date --prop format='yyyy-MM-dd'` |
+| `mergefield` | template merge token | `--prop fieldType=mergefield --prop name=CustomerName` |
+| `ref` | cross-reference to a bookmark | `--prop fieldType=ref --prop name=bookmarkName` |
 
 The full `fieldType` enum (30+ values: `page`, `pagenum`, `pagenumber`, `numpages`, `date`, `time`, `author`, `title`, `filename`, `section`, `sectionpages`, `mergefield`, `ref`, `pageref`, `noteref`, `seq`, `styleref`, `docproperty`, `if`, `createdate`, `savedate`, `printdate`, `edittime`, `lastsavedby`, `subject`, `numwords`, `numchars`, `revnum`, `template`, `comments`, `keywords`) is in `officecli help docx field`. **There is NO `fieldInstr` fieldType** — use the `instr` prop (alias `instruction`) to inject raw field instruction text when typed shortcuts fall short. Picture switches (`MERGEFIELD Amount \# "#,##0.00"`, `DATE \@ "yyyy年MM月"`) go via `--prop instr='...'` on mergefield and via `--prop format='yyyy-MM-dd'` on date/time (mergefield's `format` prop is ignored with a warning — use `instr` instead).
 
@@ -548,7 +547,6 @@ When you finish a document, open it fresh. Read `view text` / HTML preview top-t
 ### Honest limit
 
 `officecli validate` catches schema errors, not design errors. A document can pass `validate` with:
-
 - wrong heading hierarchy (H1 → H3)
 - wrong font sizes that "look like" Heading 1 but are literal 14pt on Normal
 - placeholder tokens rendered as body text
@@ -573,11 +571,11 @@ Organized by source. When something "looks broken", attribute it before chasing 
 
 These props exit 0 at write time but produce XML that fails `validate` on close. Use the working form on the right.
 
-| Disabled (causes schema error)                    | Working form                                                                                   | Where it hurts                                                                                                                               |
-| ------------------------------------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--prop shd.fill=XXXXXX` on paragraph             | `--prop shd="clear;XXXXXX"` (canonical) — or for table cells, `--prop fill=XXXXXX` on the cell | `<w:shd>` emitted without required `w:val`; affects every paragraph-shaded row / cover band / callout                                        |
-| `--prop ind.firstLine=360` (dotted)               | `--prop firstLineIndent=360` (canonical)                                                       | Dotted form emits `<w:ind>` AFTER `<w:jc>` in `pPr` — ordering violation. Breaks every indented body paragraph in APA-style academic writing |
-| `--prop border.bottom=...` on a table cell (`tc`) | `--prop pbdr.bottom="single;6;1F4E79;0"` on the cell's inner paragraph                         | `<w:tcBorders>` placed wrong inside `<w:tcPr>`. See C-D-4                                                                                    |
+| Disabled (causes schema error) | Working form | Where it hurts |
+|---|---|---|
+| `--prop shd.fill=XXXXXX` on paragraph | `--prop shd="clear;XXXXXX"` (canonical) — or for table cells, `--prop fill=XXXXXX` on the cell | `<w:shd>` emitted without required `w:val`; affects every paragraph-shaded row / cover band / callout |
+| `--prop ind.firstLine=360` (dotted) | `--prop firstLineIndent=360` (canonical) | Dotted form emits `<w:ind>` AFTER `<w:jc>` in `pPr` — ordering violation. Breaks every indented body paragraph in APA-style academic writing |
+| `--prop border.bottom=...` on a table cell (`tc`) | `--prop pbdr.bottom="single;6;1F4E79;0"` on the cell's inner paragraph | `<w:tcBorders>` placed wrong inside `<w:tcPr>`. See C-D-4 |
 
 **Before shipping, confirm these props are not in your build pipeline**:
 
@@ -639,24 +637,24 @@ Before calling a color, field, or chart broken, open the file in the user's targ
 
 ### Common pitfalls
 
-| Pitfall                                                                   | Correct approach                                                                                                                                                                                                                                        |
-| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--index` vs `[N]`                                                        | `--index` is 0-based (array convention); `[N]` paths are 1-based (XPath)                                                                                                                                                                                |
-| Multiple `add --index N` with the same N                                  | Each insert shifts later content down; reusing the same N puts subsequent items BEFORE earlier ones. Insert in reverse order, or use `move --after/--before` anchored on `paraId`                                                                       |
-| Unquoted `[N]` in zsh/bash                                                | Quote every path: `"/body/p[1]"`                                                                                                                                                                                                                        |
-| `[last]` as predicate                                                     | Must be `[last()]` with parens. `/body/tbl[last()]/tr[1]` valid; `[last]` throws "Malformed path segment"                                                                                                                                               |
-| Raw twips in spacing                                                      | Use unit-qualified values: `12pt`, `0.5cm`, `1.5x`                                                                                                                                                                                                      |
-| Empty paragraphs for spacing                                              | Use `spaceBefore` / `spaceAfter` on paragraphs                                                                                                                                                                                                          |
-| Row-level `set` for formatting                                            | Row `set` only supports `height`, `header`, `c1..cN` text. Format goes on cell paragraph / run                                                                                                                                                          |
-| `listStyle` on a run                                                      | `listStyle` is a paragraph property                                                                                                                                                                                                                     |
-| Indent via leading spaces                                                 | Use `--prop indent=720` (twips) for left indent, `--prop firstLineIndent=360` for first line, `--prop hangingIndent=720` for hanging. Leading spaces fire `view issues`. Dotted `ind.left` works; dotted `ind.firstLine` does NOT — use canonical names |
-| Cover page number suppression via `set differentFirstPage=true`           | UNSUPPORTED. Add a first-type footer instead: `--type footer --prop type=first --prop text=""`                                                                                                                                                          |
-| TOC `--prop pagenumbers=true`                                             | UNSUPPORTED. Page numbers render automatically                                                                                                                                                                                                          |
-| `--type pagebreak` OR `pageBreakBefore` alone not breaking across viewers | Apply BOTH: `add /body --type pagebreak` before the heading AND `set /body/p[N+1] --prop pageBreakBefore=true`. Some viewers heuristically drop either one; the pair is the only reliable recipe (see Forcing page breaks)                              |
-| Row-level `c1="line1\nline2"` for multi-line cell                         | `\n` lands as a literal. Use recipe (e): seed one bullet, then `add paragraph` to the cell for each subsequent line                                                                                                                                     |
-| Raw-set when dotted-attr would work                                       | Prefer L2 (`pbdr.top=`, `ind.left=`, `font.size=`) over L3 raw-set. `shd.fill=` and `ind.firstLine=` are NOT safe — use canonical `shd=clear;XXXXXX` and `firstLineIndent=N`                                                                            |
-| Next paragraph picks up the previous Heading style                        | If a Heading2 `Next body line` sneaks through, set explicit `--prop style=Normal` on the following paragraph                                                                                                                                            |
-| Modifying a file open in Word                                             | Close it in Word first                                                                                                                                                                                                                                  |
+| Pitfall | Correct approach |
+|---|---|
+| `--index` vs `[N]` | `--index` is 0-based (array convention); `[N]` paths are 1-based (XPath) |
+| Multiple `add --index N` with the same N | Each insert shifts later content down; reusing the same N puts subsequent items BEFORE earlier ones. Insert in reverse order, or use `move --after/--before` anchored on `paraId` |
+| Unquoted `[N]` in zsh/bash | Quote every path: `"/body/p[1]"` |
+| `[last]` as predicate | Must be `[last()]` with parens. `/body/tbl[last()]/tr[1]` valid; `[last]` throws "Malformed path segment" |
+| Raw twips in spacing | Use unit-qualified values: `12pt`, `0.5cm`, `1.5x` |
+| Empty paragraphs for spacing | Use `spaceBefore` / `spaceAfter` on paragraphs |
+| Row-level `set` for formatting | Row `set` only supports `height`, `header`, `c1..cN` text. Format goes on cell paragraph / run |
+| `listStyle` on a run | `listStyle` is a paragraph property |
+| Indent via leading spaces | Use `--prop indent=720` (twips) for left indent, `--prop firstLineIndent=360` for first line, `--prop hangingIndent=720` for hanging. Leading spaces fire `view issues`. Dotted `ind.left` works; dotted `ind.firstLine` does NOT — use canonical names |
+| Cover page number suppression via `set differentFirstPage=true` | UNSUPPORTED. Add a first-type footer instead: `--type footer --prop type=first --prop text=""` |
+| TOC `--prop pagenumbers=true` | UNSUPPORTED. Page numbers render automatically |
+| `--type pagebreak` OR `pageBreakBefore` alone not breaking across viewers | Apply BOTH: `add /body --type pagebreak` before the heading AND `set /body/p[N+1] --prop pageBreakBefore=true`. Some viewers heuristically drop either one; the pair is the only reliable recipe (see Forcing page breaks) |
+| Row-level `c1="line1\nline2"` for multi-line cell | `\n` lands as a literal. Use recipe (e): seed one bullet, then `add paragraph` to the cell for each subsequent line |
+| Raw-set when dotted-attr would work | Prefer L2 (`pbdr.top=`, `ind.left=`, `font.size=`) over L3 raw-set. `shd.fill=` and `ind.firstLine=` are NOT safe — use canonical `shd=clear;XXXXXX` and `firstLineIndent=N` |
+| Next paragraph picks up the previous Heading style | If a Heading2 `Next body line` sneaks through, set explicit `--prop style=Normal` on the following paragraph |
+| Modifying a file open in Word | Close it in Word first |
 
 ### Help pointer
 

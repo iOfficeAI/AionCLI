@@ -74,11 +74,11 @@ Use `reference/styles/` for inspiration (palette + signature gesture), **not** f
 
 Morph decks are often viewed on stage or in projector-heavy settings where font weight carries farther than font choice. Two fonts max — one for headings, one for body.
 
-| Content Type | Primary Pair                            | Fallback                      |
-| ------------ | --------------------------------------- | ----------------------------- |
-| English      | Montserrat (title) + Inter (body)       | Segoe UI / Helvetica Neue     |
-| Chinese      | Source Han Sans 思源黑体 (title + body) | PingFang SC / Microsoft YaHei |
-| Mixed CN/EN  | Montserrat + Source Han Sans            | Segoe UI + System Font        |
+| Content Type | Primary Pair                              | Fallback                          |
+| ------------ | ----------------------------------------- | --------------------------------- |
+| English      | Montserrat (title) + Inter (body)         | Segoe UI / Helvetica Neue         |
+| Chinese      | Source Han Sans 思源黑体 (title + body)   | PingFang SC / Microsoft YaHei     |
+| Mixed CN/EN  | Montserrat + Source Han Sans              | Segoe UI + System Font            |
 
 Avoid Georgia / Times for body on morph slides — serif terminals disappear when the shape interpolates mid-motion. Reserve serif for pptx base decks with no transition movement.
 
@@ -86,12 +86,12 @@ Avoid Georgia / Times for body on morph slides — serif terminals disappear whe
 
 A morph deck is read from farther back (stage setups, large screens) and each frame holds motion in addition to text. Size up:
 
-| Role               | pptx base | morph-stage (use this)  |
-| ------------------ | --------- | ----------------------- |
-| Hero / cover title | 44-60pt   | **54-72pt**, bold/black |
-| Section heading    | 24-32pt   | **28-40pt**, bold       |
-| Body / supporting  | 16-22pt   | **18-24pt**             |
-| Caption / footnote | 12-14pt   | **13-16pt** (floor 13)  |
+| Role                | pptx base  | morph-stage (use this)  |
+| ------------------- | ---------- | ----------------------- |
+| Hero / cover title  | 44-60pt    | **54-72pt**, bold/black |
+| Section heading     | 24-32pt    | **28-40pt**, bold       |
+| Body / supporting   | 16-22pt    | **18-24pt**             |
+| Caption / footnote  | 12-14pt    | **13-16pt** (floor 13)  |
 
 Do not drop below 13pt on any slide — projector glare erodes the lowest two point sizes first.
 
@@ -99,13 +99,13 @@ Do not drop below 13pt on any slide — projector glare erodes the lowest two po
 
 Wrapping breaks visual hierarchy in a static deck; in a morph deck it **also breaks the motion** (the interpolation picks up the wrapped baseline and the text appears to tilt mid-transition). Make text boxes wider than you think.
 
-| Content Type                   | Minimum Width  | Best Practice                                                                                         |
-| ------------------------------ | -------------- | ----------------------------------------------------------------------------------------------------- |
-| Centered titles (64-72pt)      | 28cm           | 28-30cm for 10-15 char titles, 25cm for hero statements                                               |
-| Centered subtitles (28-40pt)   | 25cm           | Always 25-28cm to avoid mid-word breaks                                                               |
-| Left-aligned titles            | 20cm           | 20-25cm depending on content length                                                                   |
-| Body text / cards              | 8cm (single)   | Single-column 8-12cm, double-column 16-18cm                                                           |
-| Ghost-target content (`#sN-*`) | same as source | Width must match the on-slide version — a narrower ghost pulls the morph into a resize-plus-move tilt |
+| Content Type                     | Minimum Width    | Best Practice                                               |
+| -------------------------------- | ---------------- | ----------------------------------------------------------- |
+| Centered titles (64-72pt)        | 28cm             | 28-30cm for 10-15 char titles, 25cm for hero statements     |
+| Centered subtitles (28-40pt)     | 25cm             | Always 25-28cm to avoid mid-word breaks                     |
+| Left-aligned titles              | 20cm             | 20-25cm depending on content length                         |
+| Body text / cards                | 8cm (single)     | Single-column 8-12cm, double-column 16-18cm                 |
+| Ghost-target content (`#sN-*`)   | same as source   | Width must match the on-slide version — a narrower ghost pulls the morph into a resize-plus-move tilt |
 
 Common mistakes in morph decks:
 
@@ -170,18 +170,18 @@ Without step 2, slides accumulate shapes → visual overlap compounds silently a
 
 Vary page types to avoid monotony. Each serves a different narrative purpose:
 
-| Type           | When to use             | Visual structure                                                   |
-| -------------- | ----------------------- | ------------------------------------------------------------------ |
-| **hero**       | Opening, closing        | Large centered title + scattered scene actors                      |
-| **statement**  | Key message, transition | One impactful sentence + dramatic actor shifts (8cm+ moves)        |
-| **pillars**    | Multi-point structure   | 2-4 equal columns, actors become card backgrounds (opacity 0.12)   |
-| **evidence**   | Data, statistics        | 1-2 large asymmetric blocks + supporting details (opacity 0.3-0.6) |
-| **timeline**   | Process, sequence       | Horizontal or vertical flow with step backgrounds                  |
-| **comparison** | A vs B                  | Left-right split (50/50 or 60/40) with contrasting colors          |
-| **grid**       | Multiple items          | Scattered or grid layout, lighter feel                             |
-| **quote**      | Breathing moment        | Centered text, minimal decoration                                  |
-| **cta**        | Call to action          | Return to bold, centered design                                    |
-| **showcase**   | Featured display        | Large central area for product/screenshot                          |
+| Type | When to use | Visual structure |
+|---|---|---|
+| **hero** | Opening, closing | Large centered title + scattered scene actors |
+| **statement** | Key message, transition | One impactful sentence + dramatic actor shifts (8cm+ moves) |
+| **pillars** | Multi-point structure | 2-4 equal columns, actors become card backgrounds (opacity 0.12) |
+| **evidence** | Data, statistics | 1-2 large asymmetric blocks + supporting details (opacity 0.3-0.6) |
+| **timeline** | Process, sequence | Horizontal or vertical flow with step backgrounds |
+| **comparison** | A vs B | Left-right split (50/50 or 60/40) with contrasting colors |
+| **grid** | Multiple items | Scattered or grid layout, lighter feel |
+| **quote** | Breathing moment | Centered text, minimal decoration |
+| **cta** | Call to action | Return to bold, centered design |
+| **showcase** | Featured display | Large central area for product/screenshot |
 
 **Design notes:**
 

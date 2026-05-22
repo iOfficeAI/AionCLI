@@ -13,8 +13,8 @@ When the docx base rules cover it, the text here says `→ see docx v2 §X`. Rea
 
 If `officecli` is missing:
 
-- **macOS / Linux**: `curl -fsSL https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh | bash`
-- **Windows (PowerShell)**: `irm https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.ps1 | iex`
+- **macOS / Linux**: `curl -fsSL https://d.officecli.ai/install.sh | bash`
+- **Windows (PowerShell)**: `irm https://d.officecli.ai/install.ps1 | iex`
 
 Verify with `officecli --version` (open a new terminal if PATH hasn't picked up). If install fails, download a binary from https://github.com/iOfficeAI/OfficeCLI/releases.
 
@@ -88,12 +88,12 @@ Academic covers differ from professional covers. Minimum elements: title (center
 
 Academic section numbers are **part of the heading text**, not computed via list numbering. `officecli`'s `numId`/`listStyle` mechanism is fragile across Heading1 re-use, so hand-write the prefix. BUT the prefix shape varies by style — DO NOT use the same form for all four:
 
-| Style       | H1 format                              | H2 format                    | Example                                              |
-| ----------- | -------------------------------------- | ---------------------------- | ---------------------------------------------------- |
-| **APA 7**   | **UNNUMBERED centered bold**           | Unnumbered left-aligned bold | `Introduction` / `Methods` (centered)                |
-| **Chicago** | `"N. Title"` left-aligned              | `"N.M Title"`                | `1. Introduction`, `2.1 Policy Formation`            |
-| **IEEE**    | `"N. TITLE"` ALL CAPS + Roman numerals | `A. Subtitle` title case     | `I. INTRODUCTION`, `II. RELATED WORK`, `A. Datasets` |
-| **MLA 9**   | Unnumbered left-aligned bold           | Same                         | `Literature Review` (no prefix)                      |
+| Style | H1 format | H2 format | Example |
+|---|---|---|---|
+| **APA 7** | **UNNUMBERED centered bold** | Unnumbered left-aligned bold | `Introduction` / `Methods` (centered) |
+| **Chicago** | `"N. Title"` left-aligned | `"N.M Title"` | `1. Introduction`, `2.1 Policy Formation` |
+| **IEEE** | `"N. TITLE"` ALL CAPS + Roman numerals | `A. Subtitle` title case | `I. INTRODUCTION`, `II. RELATED WORK`, `A. Datasets` |
+| **MLA 9** | Unnumbered left-aligned bold | Same | `Literature Review` (no prefix) |
 
 APA 7 L1 headings are **centered, bold, unnumbered**; L2 are flush-left bold; L3 flush-left bold italic; L4/L5 run-in. Do NOT prefix APA headings with `1. / 2.` — that is Chicago/IEEE convention. IEEE wants ALL CAPS with Roman numerals (`I. INTRODUCTION`); inside each section, use `A./B./C.` sub-headings (title case). Arabic-numbered body sections are Chicago-style only.
 
@@ -127,12 +127,12 @@ Ten-line skeleton. Real papers grow by adding more body paragraphs, more bibliog
 
 Four mainstream families. Pick one at project start; every downstream decision follows. **Per-style decision table:**
 
-| Style                  | In-text shape                     | Reference list order                  | Body line spacing | Footnotes?                              |
-| ---------------------- | --------------------------------- | ------------------------------------- | ----------------- | --------------------------------------- |
-| APA 7                  | `(Smith, 2024)` or `Smith (2024)` | Alphabetical by author                | 2x (double)       | Rare (content notes only)               |
-| Chicago 17 (Notes-Bib) | Superscript footnote number       | Alphabetical by author                | 1.5x-2x           | **Primary** (full citation in footnote) |
-| IEEE                   | `[1]`, `[2]`, ..., `[N]`          | Order of first citation               | 1.15x-1.5x, 2-col | Rare                                    |
-| MLA 9                  | `(Smith 412)` page-number         | Alphabetical by author, "Works Cited" | 2x                | Rare                                    |
+| Style | In-text shape | Reference list order | Body line spacing | Footnotes? |
+|---|---|---|---|---|
+| APA 7 | `(Smith, 2024)` or `Smith (2024)` | Alphabetical by author | 2x (double) | Rare (content notes only) |
+| Chicago 17 (Notes-Bib) | Superscript footnote number | Alphabetical by author | 1.5x-2x | **Primary** (full citation in footnote) |
+| IEEE | `[1]`, `[2]`, ..., `[N]` | Order of first citation | 1.15x-1.5x, 2-col | Rare |
+| MLA 9 | `(Smith 412)` page-number | Alphabetical by author, "Works Cited" | 2x | Rare |
 
 Shared defaults across all four: reference-list paragraphs use `indent=720 hangingIndent=720` (hanging indent 0.5"); add a live TOC if 3+ Heading1s (→ see docx v2 §Table of Contents); static TOC fallback if recipient cannot recalculate (→ see docx v2 §Report-level recipes (f)).
 
@@ -208,10 +208,10 @@ Diff vs APA: in-text is `(Author Page)` **no comma** (e.g. `(Smith 412)`); direc
 
 `--type equation` parses a LaTeX-ish formula into OMML. Two modes, selected by `--prop mode=`:
 
-| Mode                | XML                                              | Visual                    | Use                                    |
-| ------------------- | ------------------------------------------------ | ------------------------- | -------------------------------------- |
-| `display` (default) | `<m:oMathPara>` at `/body`                       | Standalone centered block | Numbered equations, theorem statements |
-| `inline`            | `<m:oMath>` appended to a run inside a paragraph | Runs with the text        | `if $x > 0$` style in prose            |
+| Mode | XML | Visual | Use |
+|---|---|---|---|
+| `display` (default) | `<m:oMathPara>` at `/body` | Standalone centered block | Numbered equations, theorem statements |
+| `inline` | `<m:oMath>` appended to a run inside a paragraph | Runs with the text | `if $x > 0$` style in prose |
 
 ```bash
 # Display equation (own paragraph, centered) — explicitly set mode=display for clarity
@@ -226,12 +226,10 @@ officecli add "$FILE" "/body/p[last()]" --type run --prop text=" we define the l
 ```
 
 **Verify equations render as OMML math**, not plain-text LaTeX tokens. After `close`, run:
-
 ```bash
 officecli view "$FILE" text | head -20       # λ₁ + α, ∫₀∞, x² must appear as unicode math (verified renders)
 officecli raw "$FILE" /document | grep -c '<m:oMathPara'   # ≥ 1 per display equation
 ```
-
 If the body prose contains raw `lambda_1`, `x_{t+1}`, `\alpha` or similar plain-text tokens (i.e., you typed them into a `paragraph --prop text=` instead of wrapping with `--type equation --prop mode=inline`), downstream viewers will render them as literal ASCII. **Rule: every mathematical variable / Greek letter / subscript in prose goes through `--type equation mode=inline`, never through `paragraph --prop text=`.**
 
 **LaTeX subset pitfalls** (non-negotiable):
@@ -254,7 +252,7 @@ A SEQ field is a counter with a name (`identifier`). Every `SEQ Figure` incremen
 
 **⚠️ SEQ cached-value trap (verified on v1.0.63).** The CLI emits every SEQ field with cached result `1` — so a document with 3 Figure captions readbacks as `Figure 1 / Figure 1 / Figure 1` via `view text` or `query field[fieldType=seq]`, and any downstream viewer that doesn't recompute cached fields will display the same `Figure 1 / Figure 1 / Figure 1`. Word and WPS recompute on open when `w:updateFields=true` is set in settings. **Two must-do steps per paper with multiple figures/tables:**
 
-1. Flip `updateFields=true` in settings once per document (right after `create`). **Position matters** — OOXML `CT_Settings` schema rejects `<w:updateFields>` as the first child; insert it _before_ `<w:compat>`:
+1. Flip `updateFields=true` in settings once per document (right after `create`). **Position matters** — OOXML `CT_Settings` schema rejects `<w:updateFields>` as the first child; insert it *before* `<w:compat>`:
    ```bash
    officecli raw-set "$FILE" /settings --xpath '//w:compat' --action insertbefore \
      --xml '<w:updateFields xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:val="true"/>'
