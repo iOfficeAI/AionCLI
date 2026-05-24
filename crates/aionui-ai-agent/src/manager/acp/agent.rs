@@ -367,7 +367,17 @@ impl AcpAgentManager {
         // `ObservedModeSynced`. `get_mode()` reflects the change as soon
         // as the SDK call returns.
         if let Some(sid) = session_id {
-            self.reconcile_session(&sid).await;
+            // PUT /mode is best-effort by design: the desired layer is
+            // already updated, and any SDK failure (including
+            // SessionNotFound) is handled on the next ensure_session
+            // pass when the user retries or sends a message.
+            if let Err(e) = self.reconcile_session(&sid).await {
+                debug!(
+                    conversation_id = %self.params.conversation_id,
+                    error = %e,
+                    "set_mode: reconcile failed; desired layer kept for next ensure_session"
+                );
+            }
         }
         Ok(())
     }
@@ -389,7 +399,13 @@ impl AcpAgentManager {
         }
 
         if let Some(sid) = session_id {
-            self.reconcile_session(&sid).await;
+            if let Err(e) = self.reconcile_session(&sid).await {
+                debug!(
+                    conversation_id = %self.params.conversation_id,
+                    error = %e,
+                    "set_model: reconcile failed; desired layer kept for next ensure_session"
+                );
+            }
         } else {
             return Err(AppError::BadRequest("No active session".into()));
         }

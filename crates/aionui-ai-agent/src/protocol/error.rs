@@ -151,7 +151,13 @@ impl AcpError {
 
     /// Convert an SDK [`Error`](SdkError) into an [`AcpError`].
     ///
-    /// Mapping is by [`ErrorCode`], never by message text.
+    /// Mapping is by [`ErrorCode`], never by message text. The single
+    /// exception is `data.error == "Session not found: ..."`: OpenCode
+    /// (and likely others) return a stale-session failure as
+    /// `code = InvalidParams (-32602)` with the real reason buried in
+    /// the `data` field, so we re-classify those into `SessionNotFound`
+    /// to keep crash detection / recovery paths uniform across agents.
+    /// See ELECTRON-1HQ.
     /// `context` carries the session ID or method name for diagnostics.
     pub fn from_sdk(err: SdkError, context: &str) -> Self {
         match err.code {
@@ -162,12 +168,24 @@ impl AcpError {
             ErrorCode::MethodNotFound => AcpError::MethodNotFound {
                 method: context.to_owned(),
             },
-            ErrorCode::InvalidParams => AcpError::InvalidParams { message: err.message },
-            ErrorCode::ParseError | ErrorCode::InvalidRequest | ErrorCode::InternalError => AcpError::AgentInternal {
-                message: err.message,
-                code: i32::from(err.code),
-                data: err.data,
-            },
+            ErrorCode::InvalidParams => {
+                if let Some(sid) = extract_session_not_found(err.data.as_ref()) {
+                    AcpError::SessionNotFound { session_id: sid }
+                } else {
+                    AcpError::InvalidParams { message: err.message }
+                }
+            }
+            ErrorCode::ParseError | ErrorCode::InvalidRequest | ErrorCode::InternalError => {
+                if let Some(sid) = extract_session_not_found(err.data.as_ref()) {
+                    AcpError::SessionNotFound { session_id: sid }
+                } else {
+                    AcpError::AgentInternal {
+                        message: err.message,
+                        code: i32::from(err.code),
+                        data: err.data,
+                    }
+                }
+            }
             _ => {
                 let code = i32::from(err.code);
                 // -32001, -32002: additional session-not-found codes used by some agents
@@ -175,6 +193,8 @@ impl AcpError {
                     AcpError::SessionNotFound {
                         session_id: context.to_owned(),
                     }
+                } else if let Some(sid) = extract_session_not_found(err.data.as_ref()) {
+                    AcpError::SessionNotFound { session_id: sid }
                 } else {
                     AcpError::AgentInternal {
                         message: err.message,
@@ -185,6 +205,24 @@ impl AcpError {
             }
         }
     }
+}
+
+/// If `data` carries a `{"error": "Session not found: <sid>"}` payload
+/// (either as a JSON object or as a JSON-string-of-JSON, which is what
+/// OpenCode actually emits — see ELECTRON-1HQ), return the session id.
+/// Returns `None` for any other shape so callers can fall through to
+/// the default `code`-based mapping.
+fn extract_session_not_found(data: Option<&serde_json::Value>) -> Option<String> {
+    let value = data?;
+    let obj = match value {
+        serde_json::Value::Object(_) => value.clone(),
+        serde_json::Value::String(s) => serde_json::from_str(s).ok()?,
+        _ => return None,
+    };
+    let msg = obj.get("error")?.as_str()?;
+    let prefix = "Session not found: ";
+    let sid = msg.strip_prefix(prefix)?.trim();
+    if sid.is_empty() { None } else { Some(sid.to_owned()) }
 }
 
 /// Conversion from [`AcpError`] to [`AppError`] — the only way `AcpError`
@@ -311,6 +349,65 @@ mod tests {
     fn from_sdk_invalid_params() {
         let sdk_err = SdkError::invalid_params();
         let acp = AcpError::from_sdk(sdk_err, "ignored");
+        assert!(matches!(acp, AcpError::InvalidParams { .. }));
+    }
+
+    /// OpenCode reports a stale session as
+    /// `code: -32602 InvalidParams` with the real reason wrapped in a
+    /// JSON-string `data` payload (see ELECTRON-1HQ wire dump). Re-classify
+    /// to `SessionNotFound` so downstream crash detection /
+    /// recovery treats it uniformly with agents that return -32600 / -32001.
+    #[test]
+    fn from_sdk_invalid_params_with_session_not_found_data() {
+        let sdk_err = SdkError::invalid_params().data(serde_json::Value::String(
+            r#"{"error":"Session not found: ses_21859c95dffefejNiDf1VYXMgU"}"#.to_owned(),
+        ));
+        let acp = AcpError::from_sdk(sdk_err, "session/set_mode");
+        match acp {
+            AcpError::SessionNotFound { session_id } => {
+                assert_eq!(session_id, "ses_21859c95dffefejNiDf1VYXMgU");
+            }
+            other => panic!("expected SessionNotFound, got {other:?}"),
+        }
+    }
+
+    /// Object-shaped data should also be recognised — some agents skip the
+    /// extra string-encoding round-trip and emit a JSON object directly.
+    #[test]
+    fn from_sdk_invalid_params_with_object_data_session_not_found() {
+        let sdk_err = SdkError::invalid_params().data(serde_json::json!({
+            "error": "Session not found: sess-direct"
+        }));
+        let acp = AcpError::from_sdk(sdk_err, "ctx");
+        match acp {
+            AcpError::SessionNotFound { session_id } => assert_eq!(session_id, "sess-direct"),
+            other => panic!("expected SessionNotFound, got {other:?}"),
+        }
+    }
+
+    /// Internal-error code carrying the same payload should also re-classify;
+    /// don't tie the rescue to any single `ErrorCode`.
+    #[test]
+    fn from_sdk_internal_with_session_not_found_data() {
+        let sdk_err = SdkError::internal_error().data(serde_json::json!({
+            "error": "Session not found: sess-ie"
+        }));
+        let acp = AcpError::from_sdk(sdk_err, "ctx");
+        match acp {
+            AcpError::SessionNotFound { session_id } => assert_eq!(session_id, "sess-ie"),
+            other => panic!("expected SessionNotFound, got {other:?}"),
+        }
+    }
+
+    /// Unrelated `data` payloads must not trigger the rescue path —
+    /// otherwise we'd silently rewrite `InvalidParams` for genuinely
+    /// malformed requests.
+    #[test]
+    fn from_sdk_invalid_params_with_unrelated_data_stays_invalid_params() {
+        let sdk_err = SdkError::invalid_params().data(serde_json::json!({
+            "error": "Workspace path must be absolute"
+        }));
+        let acp = AcpError::from_sdk(sdk_err, "ctx");
         assert!(matches!(acp, AcpError::InvalidParams { .. }));
     }
 

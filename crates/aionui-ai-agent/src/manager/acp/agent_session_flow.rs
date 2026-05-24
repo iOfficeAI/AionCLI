@@ -10,6 +10,18 @@ use aionui_common::AppError;
 use serde_json::Value;
 
 use super::agent::sdk_to_snake_value;
+use tracing::warn;
+
+/// True when an `AppError` originates from an ACP `SessionNotFound`
+/// reply. Used to decide whether `open_session_resume` should drop a
+/// stale sid and fall through to `open_session_new` instead of
+/// surfacing the error. The `AcpError::SessionNotFound -> AppError`
+/// converter renders as "Session not found: <sid>", so we match on
+/// that text rather than `AppError::NotFound` alone — other 404 paths
+/// (e.g. "Workspace not found") must not trigger a session rebuild.
+fn is_session_not_found(err: &AppError) -> bool {
+    matches!(err, AppError::NotFound(msg) if msg.starts_with("Session not found"))
+}
 
 impl AcpAgentManager {
     /// Establish a fresh ACP session (session/new) and apply desired
@@ -49,8 +61,30 @@ impl AcpAgentManager {
                 session_id: sid.clone(),
             }));
 
-        self.reconcile_session(&sid).await;
+        // Best-effort reconcile on a freshly-opened session. SessionNotFound
+        // here would be pathological (we just created the session) but is
+        // still surfaced for consistency.
+        self.reconcile_session(&sid).await?;
         Ok(sid)
+    }
+
+    /// Drop the in-aggregate session id and re-run `open_session_new`.
+    /// Used as the rescue path when resume helpers see `SessionNotFound`.
+    /// Emits a `warn!` so ops can still see the original failure that
+    /// triggered the rebuild.
+    async fn rebuild_after_session_not_found(&self, stale_sid: &str, err: &AppError) -> Result<String, AppError> {
+        warn!(
+            conversation_id = %self.params.conversation_id,
+            stale_session_id = %stale_sid,
+            error = %err,
+            "open_session_resume: stale session id rejected by CLI; rebuilding via session/new"
+        );
+        {
+            let mut session = self.session.write().await;
+            session.clear_session_id();
+            self.commit_session_changes(&mut session).await;
+        }
+        self.open_session_new().await
     }
 
     /// Resume an existing ACP session and apply desired mode/model/config.
@@ -59,9 +93,17 @@ impl AcpAgentManager {
     /// - Claude-meta-resume backends: `session/new` with
     ///   `_meta.claudeCode.options.resume`. The CLI may assign a new session id,
     ///   which we persist via `SessionAssigned`.
-    /// - `session/load`-capable backends (e.g. Codex): `session/load`, keep id.
+    /// - `session/load`-capable backends (e.g. Codex, OpenCode): `session/load`,
+    ///   keep id.
     /// - Backends that support neither: seed the aggregate and hope the CLI
     ///   still recognises the id (legacy behaviour — matches pre-refactor).
+    ///
+    /// In all three branches a `SessionNotFound` reply (the persisted sid
+    /// became stale, e.g. after a CLI upgrade or restart) triggers
+    /// `rebuild_after_session_not_found`, which clears the sid and
+    /// re-runs `open_session_new`. ELECTRON-1HQ regressed because we
+    /// silently swallowed this case during warmup, leaving every
+    /// subsequent `session/prompt` to surface the same error to the user.
     pub(super) async fn open_session_resume(&self, session_id: &str) -> Result<String, AppError> {
         if agent_metadata_uses_meta_resume(&self.params.metadata) {
             let mut meta = serde_json::Map::new();
@@ -72,7 +114,13 @@ impl AcpAgentManager {
             meta.insert("claudeCode".into(), Value::Object(claude_code));
 
             let req = self.params.new_session_request().meta(meta);
-            let new_response = self.protocol.new_session(req).await.map_err(AppError::from)?;
+            let new_response = match self.protocol.new_session(req).await.map_err(AppError::from) {
+                Ok(r) => r,
+                Err(e) if is_session_not_found(&e) => {
+                    return self.rebuild_after_session_not_found(session_id, &e).await;
+                }
+                Err(e) => return Err(e),
+            };
             let new_sid = new_response.session_id.to_string();
 
             {
@@ -98,24 +146,34 @@ impl AcpAgentManager {
                     }));
             }
 
-            self.reconcile_session(&new_sid).await;
-            return Ok(new_sid);
+            return match self.reconcile_session(&new_sid).await {
+                Ok(()) => Ok(new_sid),
+                Err(e) if is_session_not_found(&e) => self.rebuild_after_session_not_found(&new_sid, &e).await,
+                Err(e) => Err(e),
+            };
         }
 
-        if self.supports_session_load() {
-            let (preloaded_mode, preloaded_model) = {
-                let session = self.session.read().await;
-                (
-                    session.modes().map(|m| m.current_mode_id.to_string()),
-                    session.model_info().map(|m| m.current_model_id.to_string()),
-                )
-            };
+        let (supports_load, preloaded_mode, preloaded_model) = {
+            let session = self.session.read().await;
+            (
+                session.agent_capabilities().map(|c| c.load_session).unwrap_or(false),
+                session.modes().map(|m| m.current_mode_id.to_string()),
+                session.model_info().map(|m| m.current_model_id.to_string()),
+            )
+        };
 
+        if supports_load {
             let mut load_req = LoadSessionRequest::new(SessionId::new(session_id), &self.params.workspace.path);
             if !self.params.mcp_servers.is_empty() {
                 load_req = load_req.mcp_servers(self.params.mcp_servers.clone());
             }
-            let load_response = self.protocol.load_session(load_req).await.map_err(AppError::from)?;
+            let load_response = match self.protocol.load_session(load_req).await.map_err(AppError::from) {
+                Ok(r) => r,
+                Err(e) if is_session_not_found(&e) => {
+                    return self.rebuild_after_session_not_found(session_id, &e).await;
+                }
+                Err(e) => return Err(e),
+            };
 
             {
                 let mut session = self.session.write().await;
@@ -139,8 +197,11 @@ impl AcpAgentManager {
             }
             self.emit_snapshot_events().await;
 
-            self.reconcile_session(session_id).await;
-            return Ok(session_id.to_owned());
+            return match self.reconcile_session(session_id).await {
+                Ok(()) => Ok(session_id.to_owned()),
+                Err(e) if is_session_not_found(&e) => self.rebuild_after_session_not_found(session_id, &e).await,
+                Err(e) => Err(e),
+            };
         }
 
         // Legacy path: backend advertised neither claude-meta-resume nor
@@ -152,8 +213,11 @@ impl AcpAgentManager {
             self.commit_session_changes(&mut session).await;
         }
         self.emit_snapshot_events().await;
-        self.reconcile_session(session_id).await;
-        Ok(session_id.to_owned())
+        match self.reconcile_session(session_id).await {
+            Ok(()) => Ok(session_id.to_owned()),
+            Err(e) if is_session_not_found(&e) => self.rebuild_after_session_not_found(session_id, &e).await,
+            Err(e) => Err(e),
+        }
     }
 
     /// Send a prompt to an already-established session.
@@ -243,17 +307,6 @@ impl AcpAgentManager {
                 }));
         }
     }
-
-    fn supports_session_load(&self) -> bool {
-        self.params
-            .metadata
-            .handshake
-            .agent_capabilities
-            .as_ref()
-            .and_then(|caps: &Value| caps.get("load_session"))
-            .and_then(|v: &Value| v.as_bool())
-            .unwrap_or(false)
-    }
 }
 
 #[cfg(test)]
@@ -270,9 +323,61 @@ mod tests {
     //! / `open_session_resume` helpers leave behind.
     use crate::manager::acp::{AcpSession, AcpSessionEvent};
     use crate::shared_kernel::SessionId as DomainSessionId;
+    use agent_client_protocol::schema::AgentCapabilities;
 
     fn make_session() -> AcpSession {
         AcpSession::new(None, None, Default::default())
+    }
+
+    /// `open_session_resume` reads `session.agent_capabilities().load_session`
+    /// to decide between `session/load` and the legacy seed-and-pray path.
+    /// Reading from the SDK-typed advertised capabilities (instead of poking
+    /// at the persisted handshake JSON) is the contract that ELECTRON-1HQ
+    /// regressed against — OpenCode advertises `loadSession: true` on the
+    /// wire, the SDK exposes it as `load_session: true`, but the old code
+    /// looked up the snake-cased key in a JSON blob that hadn't always been
+    /// written yet. Pin the contract: once the CLI has handshaken, the
+    /// advertised slot must be populated and read back as the source of
+    /// truth.
+    #[test]
+    fn advertised_capabilities_drives_supports_session_load() {
+        let mut session = make_session();
+        assert!(
+            session.agent_capabilities().is_none(),
+            "precondition: capabilities unset until init handshake completes"
+        );
+
+        // After `apply_advertised_capabilities` the resume path can answer
+        // the question without consulting the persisted catalog row.
+        let mut caps = AgentCapabilities::new();
+        caps.load_session = true;
+        session.apply_advertised_capabilities(caps);
+
+        let supports_load = session.agent_capabilities().map(|c| c.load_session).unwrap_or(false);
+        assert!(
+            supports_load,
+            "OpenCode-style `loadSession: true` handshake must enable session/load"
+        );
+    }
+
+    #[test]
+    fn missing_capability_means_no_session_load() {
+        let session = make_session();
+        let supports_load = session.agent_capabilities().map(|c| c.load_session).unwrap_or(false);
+        assert!(
+            !supports_load,
+            "without an init handshake the resume path must not call session/load"
+        );
+    }
+
+    #[test]
+    fn capability_load_session_false_means_no_session_load() {
+        let mut session = make_session();
+        let caps = AgentCapabilities::new();
+        // Default is load_session = false; assert reading it back agrees.
+        session.apply_advertised_capabilities(caps);
+        let supports_load = session.agent_capabilities().map(|c| c.load_session).unwrap_or(false);
+        assert!(!supports_load);
     }
 
     /// Simulate the aggregate-state effect of a successful warmup that
@@ -333,5 +438,48 @@ mod tests {
             session.drain_events().is_empty(),
             "second warmup must not emit duplicate domain events"
         );
+    }
+
+    /// `rebuild_after_session_not_found` relies on `clear_session_id`
+    /// resetting both the sid and the `opened` flag, so the subsequent
+    /// `ensure_session_opened` re-enters the `(None, _)` branch and
+    /// calls `open_session_new`. Pin both invariants — without the
+    /// `opened = false` reset, the rescue path would land in the
+    /// `(Some, true)` no-op branch and the next prompt would still hit
+    /// the dead session.
+    #[test]
+    fn clear_session_id_resets_sid_and_opened() {
+        let mut session = make_session();
+        session.set_session_id(DomainSessionId::new("ses-stale"));
+        session.mark_opened();
+        assert!(session.is_opened());
+        assert_eq!(session.session_id(), Some("ses-stale"));
+
+        session.clear_session_id();
+
+        assert_eq!(session.session_id(), None, "stale sid must be dropped");
+        assert!(
+            !session.is_opened(),
+            "rebuild requires re-running open_session_new — opened must reset"
+        );
+    }
+
+    /// The `is_session_not_found` discriminator powers
+    /// `open_session_resume`'s rescue path. Match strictly on the
+    /// `AcpError::SessionNotFound -> AppError::NotFound` rendering;
+    /// other 404s (e.g. workspace lookup) must surface to callers
+    /// instead of triggering a phantom session rebuild.
+    #[test]
+    fn is_session_not_found_matches_session_not_found_only() {
+        use aionui_common::AppError;
+
+        let session_err = AppError::NotFound("Session not found: ses-1".into());
+        assert!(super::is_session_not_found(&session_err));
+
+        let workspace_err = AppError::NotFound("Workspace not found".into());
+        assert!(!super::is_session_not_found(&workspace_err));
+
+        let bad_request = AppError::BadRequest("anything".into());
+        assert!(!super::is_session_not_found(&bad_request));
     }
 }

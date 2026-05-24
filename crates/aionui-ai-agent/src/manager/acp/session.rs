@@ -122,6 +122,17 @@ impl AcpSession {
             .push(AcpSessionEvent::SessionAssigned { session_id: sid });
     }
 
+    /// Drop a stale session id so the aggregate can be re-seeded with a
+    /// freshly-issued one. Used when the CLI rejects the persisted sid
+    /// with `SessionNotFound` (ELECTRON-1HQ): the resume helpers fall
+    /// back to `open_session_new`, which calls `set_session_id` again.
+    /// Also clears the `opened` flag so the next `ensure_session_opened`
+    /// goes down the "no sid" branch instead of the "sid+opened" no-op.
+    pub fn clear_session_id(&mut self) {
+        self.session_id = None;
+        self.opened = false;
+    }
+
     pub fn is_opened(&self) -> bool {
         self.opened
     }
