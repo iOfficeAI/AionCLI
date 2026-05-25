@@ -16,8 +16,8 @@ use std::sync::Arc;
 use aionui_app::{AppConfig, AppServices, ModuleStates, build_module_states, create_router_with_states};
 use aionui_assistant::{AssistantRouterState, AssistantService, BuiltinAssistantRegistry};
 use aionui_db::{
-    IAssistantOverrideRepository, IAssistantRepository, SqliteAssistantOverrideRepository, SqliteAssistantRepository,
-    init_database_memory,
+    IAssistantOverrideRepository, IAssistantRepository, IProviderRepository, SqliteAssistantOverrideRepository,
+    SqliteAssistantRepository, SqliteProviderRepository, init_database_memory,
 };
 use aionui_extension::{
     AssistantRuleDispatcher, ExtensionRegistry, ExtensionRouterState, ExtensionSource, ExtensionStateStore,
@@ -182,11 +182,36 @@ async fn fixture() -> Fixture {
     // `~/.aionui/` for user data — neither is appropriate for tests.
     let pool = services.database.pool().clone();
     let repo: Arc<dyn IAssistantRepository> = Arc::new(SqliteAssistantRepository::new(pool.clone()));
-    let override_repo: Arc<dyn IAssistantOverrideRepository> = Arc::new(SqliteAssistantOverrideRepository::new(pool));
+    let override_repo: Arc<dyn IAssistantOverrideRepository> =
+        Arc::new(SqliteAssistantOverrideRepository::new(pool.clone()));
+    let provider_repo: Arc<dyn IProviderRepository> = Arc::new(SqliteProviderRepository::new(pool));
+    // Seed an OpenAI-compatible provider so create / import calls without
+    // an explicit `preset_agent_type` resolve to `"aionrs"` instead of
+    // erroring out — mirroring a configured production setup.
+    provider_repo
+        .create(aionui_db::CreateProviderParams {
+            id: None,
+            platform: "openai",
+            name: "Test OpenAI",
+            base_url: "https://example.invalid",
+            api_key_encrypted: "stub",
+            models: "[]",
+            enabled: true,
+            capabilities: "[]",
+            context_limit: None,
+            model_protocols: None,
+            model_enabled: None,
+            model_health: None,
+            bedrock_config: None,
+            is_full_url: false,
+        })
+        .await
+        .expect("seed provider");
     let builtin = Arc::new(BuiltinAssistantRegistry::load_from_dir(builtin_assets_dir.clone()));
     let service = Arc::new(AssistantService::new(
         repo,
         override_repo,
+        provider_repo,
         builtin,
         registry,
         user_data_dir.clone(),

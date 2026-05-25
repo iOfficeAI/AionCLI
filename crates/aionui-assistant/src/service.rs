@@ -12,7 +12,7 @@ use aionui_api_types::{
 use aionui_common::{AppError, now_ms};
 use aionui_db::{
     AssistantOverrideRow, AssistantRow, CreateAssistantParams, IAssistantOverrideRepository, IAssistantRepository,
-    UpdateAssistantParams, UpsertOverrideParams,
+    IProviderRepository, UpdateAssistantParams, UpsertOverrideParams,
 };
 use aionui_extension::{AssistantClassifier, AssistantRuleDispatcher, ExtensionRegistry, ResolvedAssistant};
 use serde_json;
@@ -24,6 +24,11 @@ use crate::builtin::{AvatarAsset, BuiltinAssistant, BuiltinAssistantRegistry};
 pub struct AssistantService {
     repo: Arc<dyn IAssistantRepository>,
     override_repo: Arc<dyn IAssistantOverrideRepository>,
+    /// Used to infer a sane `preset_agent_type` default when the caller did
+    /// not supply one. The historical default of `"gemini"` 400'd within
+    /// 1 ms on machines without the Gemini CLI (ELECTRON-1J1 / 1KV); we now
+    /// pick an agent that actually matches the configured provider list.
+    provider_repo: Arc<dyn IProviderRepository>,
     builtin: Arc<BuiltinAssistantRegistry>,
     extension_registry: ExtensionRegistry,
     /// Root directory holding user-authored rule/skill md files and avatars.
@@ -50,6 +55,7 @@ impl AssistantService {
     pub fn new(
         repo: Arc<dyn IAssistantRepository>,
         override_repo: Arc<dyn IAssistantOverrideRepository>,
+        provider_repo: Arc<dyn IProviderRepository>,
         builtin: Arc<BuiltinAssistantRegistry>,
         extension_registry: ExtensionRegistry,
         user_data_dir: PathBuf,
@@ -57,6 +63,7 @@ impl AssistantService {
         Self {
             repo,
             override_repo,
+            provider_repo,
             builtin,
             extension_registry,
             user_data_dir,
@@ -153,6 +160,44 @@ impl AssistantService {
     }
 
     // -----------------------------------------------------------------------
+    // Default-agent inference
+    // -----------------------------------------------------------------------
+
+    /// Pick a sane `preset_agent_type` default for newly created /
+    /// imported assistants when the caller did not supply one.
+    ///
+    /// Inference rule (ELECTRON-1J1 / 1KV):
+    /// 1. If any enabled provider exists (Anthropic, OpenAI, custom,
+    ///    Bedrock, Vertex, …), return `"aionrs"`. AionRS speaks both
+    ///    OpenAI-compatible and Anthropic-protocol APIs over the
+    ///    user-configured base URL and does not require any third-party
+    ///    CLI to be installed. CLI-based agents (`claude`, `gemini`)
+    ///    must be opted into explicitly via `preset_agent_type` because
+    ///    the presence of an Anthropic API key does not imply that the
+    ///    Claude Code CLI is on `PATH`.
+    /// 2. Otherwise (no providers configured), return a `BadRequest`
+    ///    error. The previous code silently fell back to `"gemini"`,
+    ///    which on machines without the Gemini CLI 400'd within 1 ms
+    ///    with `Agent 'Gemini CLI' CLI not found in PATH`.
+    pub async fn resolve_default_agent_type(&self) -> Result<String, AppError> {
+        let providers = self
+            .provider_repo
+            .list()
+            .await
+            .map_err(|e| AppError::Internal(format!("failed to list providers: {e}")))?;
+
+        if providers.iter().any(|p| p.enabled) {
+            Ok("aionrs".to_string())
+        } else {
+            Err(AppError::BadRequest(
+                "Cannot create assistant: no providers configured. Add a provider before creating an assistant, \
+                 or pass an explicit `preset_agent_type` in the request body."
+                    .into(),
+            ))
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // Create / Update / Delete
     // -----------------------------------------------------------------------
 
@@ -178,12 +223,20 @@ impl AssistantService {
         }
 
         let serialized = SerializedFields::from_create(&req)?;
+        // Resolve the default agent type from the configured provider list
+        // when the caller did not supply one. Avoids the historical
+        // `"gemini"` fallback that 400'd within 1 ms on machines without
+        // the Gemini CLI (ELECTRON-1J1, ELECTRON-1KV).
+        let resolved_agent_type = match req.preset_agent_type.as_deref() {
+            Some(s) if !s.is_empty() => s.to_string(),
+            _ => self.resolve_default_agent_type().await?,
+        };
         let params = CreateAssistantParams {
             id: &id,
             name: &name,
             description: req.description.as_deref(),
             avatar: req.avatar.as_deref(),
-            preset_agent_type: req.preset_agent_type.as_deref().unwrap_or(DEFAULT_AGENT_TYPE),
+            preset_agent_type: &resolved_agent_type,
             enabled_skills: serialized.enabled_skills.as_deref(),
             custom_skill_names: serialized.custom_skill_names.as_deref(),
             disabled_builtin_skills: serialized.disabled_builtin_skills.as_deref(),
@@ -353,6 +406,11 @@ impl AssistantService {
     pub async fn import(&self, req: ImportAssistantsRequest) -> Result<ImportAssistantsResult, AppError> {
         let mut result = ImportAssistantsResult::default();
 
+        // Resolved-once cache for the inferred default agent type. We only
+        // hit the provider repo when at least one row in the batch omits
+        // `preset_agent_type` AND has cleared all the other skip conditions.
+        let mut cached_default_agent_type: Option<String> = None;
+
         for entry in req.assistants {
             let id = entry
                 .id
@@ -406,12 +464,35 @@ impl AssistantService {
                 }
             };
 
+            // Mirror the create() path: prefer the caller-supplied value;
+            // otherwise infer from the configured provider list.
+            let resolved_agent_type = match entry.preset_agent_type.as_deref() {
+                Some(s) if !s.is_empty() => s.to_string(),
+                _ => match cached_default_agent_type.as_deref() {
+                    Some(v) => v.to_string(),
+                    None => match self.resolve_default_agent_type().await {
+                        Ok(v) => {
+                            cached_default_agent_type = Some(v.clone());
+                            v
+                        }
+                        Err(e) => {
+                            result.failed += 1;
+                            result.errors.push(ImportError {
+                                id,
+                                error: e.to_string(),
+                            });
+                            continue;
+                        }
+                    },
+                },
+            };
+
             let params = CreateAssistantParams {
                 id: &id,
                 name: &name,
                 description: entry.description.as_deref(),
                 avatar: entry.avatar.as_deref(),
-                preset_agent_type: entry.preset_agent_type.as_deref().unwrap_or(DEFAULT_AGENT_TYPE),
+                preset_agent_type: &resolved_agent_type,
                 enabled_skills: serialized.enabled_skills.as_deref(),
                 custom_skill_names: serialized.custom_skill_names.as_deref(),
                 disabled_builtin_skills: serialized.disabled_builtin_skills.as_deref(),
@@ -660,7 +741,16 @@ impl AssistantRuleDispatcher for AssistantService {
 // Response conversion
 // ---------------------------------------------------------------------------
 
-const DEFAULT_AGENT_TYPE: &str = "gemini";
+/// Last-resort fallback for the assistant `preset_agent_type` when no
+/// provider list is reachable (extension-contributed rows, sync display
+/// conversions). `"aionrs"` is the only AionUI agent that does not require
+/// a third-party CLI to be installed, so it never fails the
+/// `Agent '<name>' CLI not found in PATH` guard at agent build time.
+///
+/// User- and import-created assistants take a different path: see
+/// [`AssistantService::resolve_default_agent_type`], which inspects the
+/// configured providers and returns a more specific default when possible.
+const DEFAULT_AGENT_TYPE: &str = "aionrs";
 
 fn builtin_to_response(b: &BuiltinAssistant, ov: Option<&AssistantOverrideRow>) -> AssistantResponse {
     AssistantResponse {
@@ -913,34 +1003,68 @@ pub fn generate_user_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aionui_db::{SqliteAssistantOverrideRepository, SqliteAssistantRepository, init_database_memory};
+    use aionui_db::{
+        CreateProviderParams, SqliteAssistantOverrideRepository, SqliteAssistantRepository, SqliteProviderRepository,
+        init_database_memory,
+    };
     use aionui_extension::ExtensionStateStore;
     use aionui_realtime::BroadcastEventBus;
     use tempfile::TempDir;
 
     struct Fixture {
         service: AssistantService,
+        provider_repo: Arc<dyn IProviderRepository>,
         _tmp: TempDir,
         _db: aionui_db::Database,
     }
 
+    /// Default fixture: seeded with a single OpenAI-compatible provider so
+    /// `resolve_default_agent_type` returns `"aionrs"`. Tests that need to
+    /// exercise the no-provider or anthropic-only branches construct their
+    /// own fixture via [`fixture_with_options`].
     async fn fixture() -> Fixture {
-        fixture_with_builtins(vec![]).await
+        fixture_with_options(FixtureOpts::default()).await
     }
 
     async fn fixture_with_builtins(builtins: Vec<BuiltinAssistant>) -> Fixture {
+        fixture_with_options(FixtureOpts {
+            builtins,
+            ..Default::default()
+        })
+        .await
+    }
+
+    #[derive(Default)]
+    struct FixtureOpts {
+        builtins: Vec<BuiltinAssistant>,
+        /// When `true`, no provider is seeded — used by the test that
+        /// asserts the no-provider error path.
+        no_default_provider: bool,
+        /// When set, the seeded provider's `platform` is overridden.
+        /// Defaults to `"openai"` so existing tests get an `"aionrs"`
+        /// default agent type.
+        seed_platform: Option<&'static str>,
+    }
+
+    async fn fixture_with_options(opts: FixtureOpts) -> Fixture {
         let tmp = TempDir::new().unwrap();
         let db = init_database_memory().await.unwrap();
         let repo: Arc<dyn IAssistantRepository> = Arc::new(SqliteAssistantRepository::new(db.pool().clone()));
         let orepo: Arc<dyn IAssistantOverrideRepository> =
             Arc::new(SqliteAssistantOverrideRepository::new(db.pool().clone()));
+        let provider_repo: Arc<dyn IProviderRepository> = Arc::new(SqliteProviderRepository::new(db.pool().clone()));
+
+        if !opts.no_default_provider {
+            seed_provider(&*provider_repo, opts.seed_platform.unwrap_or("openai")).await;
+        }
 
         // Write a manifest into a temp dir and load from it.
         let assets_dir = tmp.path().join("assets");
         std::fs::create_dir_all(&assets_dir).unwrap();
         let manifest_json = serde_json::json!({
             "version": "1.0.0",
-            "assistants": builtins
+            "assistants": opts
+                .builtins
                 .iter()
                 .map(|b| {
                     serde_json::json!({
@@ -964,13 +1088,42 @@ mod tests {
         let ext_state_store = ExtensionStateStore::new(tmp.path().join("ext-states.json"));
         let extension_registry = ExtensionRegistry::new(ext_state_store, event_bus, "1.0.0".to_string());
 
-        let service = AssistantService::new(repo, orepo, builtin_reg, extension_registry, tmp.path().to_path_buf());
+        let service = AssistantService::new(
+            repo,
+            orepo,
+            provider_repo.clone(),
+            builtin_reg,
+            extension_registry,
+            tmp.path().to_path_buf(),
+        );
 
         Fixture {
             service,
+            provider_repo,
             _tmp: tmp,
             _db: db,
         }
+    }
+
+    async fn seed_provider(repo: &dyn IProviderRepository, platform: &str) {
+        repo.create(CreateProviderParams {
+            id: None,
+            platform,
+            name: "Test Provider",
+            base_url: "https://example.invalid",
+            api_key_encrypted: "stub",
+            models: "[]",
+            enabled: true,
+            capabilities: "[]",
+            context_limit: None,
+            model_protocols: None,
+            model_enabled: None,
+            model_health: None,
+            bedrock_config: None,
+            is_full_url: false,
+        })
+        .await
+        .expect("seed provider");
     }
 
     fn mk_builtin(id: &str, name: &str) -> BuiltinAssistant {
@@ -1381,11 +1534,19 @@ mod tests {
         let repo: Arc<dyn IAssistantRepository> = Arc::new(SqliteAssistantRepository::new(db.pool().clone()));
         let orepo: Arc<dyn IAssistantOverrideRepository> =
             Arc::new(SqliteAssistantOverrideRepository::new(db.pool().clone()));
+        let provider_repo: Arc<dyn IProviderRepository> = Arc::new(SqliteProviderRepository::new(db.pool().clone()));
         let event_bus = Arc::new(BroadcastEventBus::new(8));
         let ext_state_store = ExtensionStateStore::new(tmp.path().join("ext-states.json"));
         let extension_registry = ExtensionRegistry::new(ext_state_store, event_bus, "1.0.0".to_string());
 
-        let service = AssistantService::new(repo, orepo, builtin_reg, extension_registry, tmp.path().to_path_buf());
+        let service = AssistantService::new(
+            repo,
+            orepo,
+            provider_repo,
+            builtin_reg,
+            extension_registry,
+            tmp.path().to_path_buf(),
+        );
         let content = service.read_rule("builtin-office", Some("en-US")).await.unwrap();
         assert_eq!(content, "office rules");
     }
@@ -1403,6 +1564,168 @@ mod tests {
             fx.service.classify_source("builtin-office").await,
             AssistantSource::Builtin
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Default agent-type inference (ELECTRON-1J1 / 1KV regression coverage)
+    // -----------------------------------------------------------------------
+
+    /// Anthropic provider routes to AionRS, not the Claude Code CLI:
+    /// having an Anthropic API key does not imply the user has
+    /// `claude` on `PATH`. CLI-based agents must be opted into
+    /// explicitly.
+    #[tokio::test]
+    async fn resolve_default_agent_type_routes_anthropic_provider_to_aionrs() {
+        let fx = fixture_with_options(FixtureOpts {
+            seed_platform: Some("anthropic"),
+            ..Default::default()
+        })
+        .await;
+        let resolved = fx.service.resolve_default_agent_type().await.unwrap();
+        assert_eq!(resolved, "aionrs");
+    }
+
+    /// OpenAI / custom provider falls back to AionRS, the only AionUI
+    /// agent that doesn't require a third-party CLI.
+    #[tokio::test]
+    async fn resolve_default_agent_type_falls_back_to_aionrs_for_openai_provider() {
+        let fx = fixture_with_options(FixtureOpts {
+            seed_platform: Some("openai"),
+            ..Default::default()
+        })
+        .await;
+        let resolved = fx.service.resolve_default_agent_type().await.unwrap();
+        assert_eq!(resolved, "aionrs");
+    }
+
+    /// Custom (non-anthropic, non-openai) platform also routes to AionRS,
+    /// which handles OpenAI-compatible custom URLs.
+    #[tokio::test]
+    async fn resolve_default_agent_type_handles_custom_platform_as_aionrs() {
+        let fx = fixture_with_options(FixtureOpts {
+            seed_platform: Some("custom"),
+            ..Default::default()
+        })
+        .await;
+        let resolved = fx.service.resolve_default_agent_type().await.unwrap();
+        assert_eq!(resolved, "aionrs");
+    }
+
+    /// No providers → loud BadRequest with actionable text. Crucially,
+    /// this no longer silently falls through to `"gemini"`.
+    #[tokio::test]
+    async fn resolve_default_agent_type_errors_when_no_providers() {
+        let fx = fixture_with_options(FixtureOpts {
+            no_default_provider: true,
+            ..Default::default()
+        })
+        .await;
+        let err = fx.service.resolve_default_agent_type().await.unwrap_err();
+        match err {
+            AppError::BadRequest(msg) => {
+                assert!(
+                    msg.to_lowercase().contains("no providers"),
+                    "unexpected error message: {msg}"
+                );
+                assert!(
+                    !msg.to_lowercase().contains("gemini"),
+                    "error message must not mention gemini: {msg}"
+                );
+            }
+            other => panic!("expected BadRequest, got {other:?}"),
+        }
+    }
+
+    /// Disabled providers do not satisfy the inference; the resolver
+    /// must treat them as if they were absent.
+    #[tokio::test]
+    async fn resolve_default_agent_type_ignores_disabled_providers() {
+        let fx = fixture_with_options(FixtureOpts {
+            no_default_provider: true,
+            ..Default::default()
+        })
+        .await;
+
+        // Seed a *disabled* provider directly via the repo; resolution
+        // must still error out because no enabled provider exists.
+        fx.provider_repo
+            .create(CreateProviderParams {
+                id: None,
+                platform: "anthropic",
+                name: "Disabled",
+                base_url: "https://example.invalid",
+                api_key_encrypted: "stub",
+                models: "[]",
+                enabled: false,
+                capabilities: "[]",
+                context_limit: None,
+                model_protocols: None,
+                model_enabled: None,
+                model_health: None,
+                bedrock_config: None,
+                is_full_url: false,
+            })
+            .await
+            .unwrap();
+
+        let err = fx.service.resolve_default_agent_type().await.unwrap_err();
+        assert!(matches!(err, AppError::BadRequest(_)));
+    }
+
+    /// End-to-end regression for ELECTRON-1J1 / 1KV: creating an
+    /// assistant with no `preset_agent_type` and no Gemini CLI installed
+    /// must NOT default to `"gemini"`. Any enabled provider — Anthropic
+    /// or otherwise — should resolve to `"aionrs"`, the only built-in
+    /// agent that doesn't depend on a third-party CLI being on `PATH`.
+    #[tokio::test]
+    async fn create_without_preset_does_not_default_to_gemini_when_provider_exists() {
+        for platform in ["anthropic", "openai"] {
+            let fx = fixture_with_options(FixtureOpts {
+                seed_platform: Some(platform),
+                ..Default::default()
+            })
+            .await;
+            let created = fx
+                .service
+                .create(CreateAssistantRequest {
+                    id: Some(format!("u-{platform}")),
+                    name: "Mine".into(),
+                    ..req_default()
+                })
+                .await
+                .unwrap();
+            assert_ne!(
+                created.preset_agent_type, "gemini",
+                "Gemini default would 400 within 1ms on machines without the CLI"
+            );
+            assert_eq!(
+                created.preset_agent_type, "aionrs",
+                "{platform} provider should resolve to aionrs"
+            );
+        }
+    }
+
+    /// Explicit `preset_agent_type` in the request body wins over the
+    /// inferred default — callers that know what they want stay in
+    /// control.
+    #[tokio::test]
+    async fn create_respects_explicit_preset_agent_type() {
+        let fx = fixture_with_options(FixtureOpts {
+            seed_platform: Some("anthropic"),
+            ..Default::default()
+        })
+        .await;
+        let created = fx
+            .service
+            .create(CreateAssistantRequest {
+                id: Some("u1".into()),
+                name: "Mine".into(),
+                preset_agent_type: Some("codex".into()),
+                ..req_default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(created.preset_agent_type, "codex");
     }
 
     fn req_default() -> CreateAssistantRequest {

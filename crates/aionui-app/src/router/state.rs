@@ -13,7 +13,7 @@ use aionui_conversation::{ConversationRouterState, ConversationService};
 use aionui_cron::{CronEventEmitter, CronRouterState};
 use aionui_db::{
     IAcpSessionRepository, IAgentMetadataRepository, IAssistantOverrideRepository, IAssistantRepository,
-    SqliteAcpSessionRepository, SqliteAgentMetadataRepository, SqliteAssistantOverrideRepository,
+    IProviderRepository, SqliteAcpSessionRepository, SqliteAgentMetadataRepository, SqliteAssistantOverrideRepository,
     SqliteAssistantRepository, SqliteClientPreferenceRepository, SqliteConversationRepository,
     SqliteProviderRepository, SqliteRemoteAgentRepository, SqliteSettingsRepository,
 };
@@ -164,7 +164,12 @@ pub async fn build_module_states(services: &AppServices) -> (ModuleStates, Chann
 pub fn build_assistant_state(services: &AppServices, extension_registry: ExtensionRegistry) -> AssistantRouterState {
     let pool = services.database.pool().clone();
     let repo: Arc<dyn IAssistantRepository> = Arc::new(SqliteAssistantRepository::new(pool.clone()));
-    let override_repo: Arc<dyn IAssistantOverrideRepository> = Arc::new(SqliteAssistantOverrideRepository::new(pool));
+    let override_repo: Arc<dyn IAssistantOverrideRepository> =
+        Arc::new(SqliteAssistantOverrideRepository::new(pool.clone()));
+    // Used by `AssistantService::resolve_default_agent_type` to infer a
+    // working `preset_agent_type` from the configured provider list when
+    // the caller does not supply one (ELECTRON-1J1 / 1KV).
+    let provider_repo: Arc<dyn IProviderRepository> = Arc::new(SqliteProviderRepository::new(pool));
     let builtin = Arc::new(BuiltinAssistantRegistry::load());
     // Pin user_data_dir to the runtime-resolved data directory so dev /
     // packaged / multi-instance launches all keep their assistant rule files
@@ -174,6 +179,7 @@ pub fn build_assistant_state(services: &AppServices, extension_registry: Extensi
     let service = Arc::new(AssistantService::new(
         repo,
         override_repo,
+        provider_repo,
         builtin,
         extension_registry,
         services.data_dir.clone(),
