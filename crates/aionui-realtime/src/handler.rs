@@ -212,10 +212,23 @@ fn send_error_response(state: &WsHandlerState, conn_id: ConnectionId) {
 
 /// Handle `subscribe-show-open`: reply with `show-open-request`.
 ///
+/// The inbound `data` is the @office-ai/platform bridge envelope
+/// `{ id, data: <user-params> }`. The renderer awaits a callback whose event
+/// name embeds `id` (`subscribe.callback-show-open<id>`), so we must echo it
+/// back; without it, the frontend's `useDirectorySelection` hook builds the
+/// wrong callback name and the original `invoke()` Promise never resolves.
+///
 /// `isFileMode` is `true` when `properties` contains `openFile`
 /// but NOT `openDirectory`.
 fn handle_subscribe_show_open(state: &WsHandlerState, conn_id: ConnectionId, data: Value) {
-    let properties = data
+    let id = data
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_owned();
+    let inner = data.get("data").unwrap_or(&Value::Null);
+
+    let properties = inner
         .get("properties")
         .and_then(|v| v.as_array())
         .cloned()
@@ -229,6 +242,7 @@ fn handle_subscribe_show_open(state: &WsHandlerState, conn_id: ConnectionId, dat
     let response = WebSocketMessage::new(
         "show-open-request",
         json!({
+            "id": id,
             "properties": properties,
             "isFileMode": is_file_mode,
         }),
@@ -257,7 +271,7 @@ mod tests {
         let conn_id = manager.add_client("tok".into(), tx);
         let state = test_state(manager);
 
-        let data = json!({"properties": ["openFile"]});
+        let data = json!({"id": "abc123", "data": {"properties": ["openFile"]}});
         handle_subscribe_show_open(&state, conn_id, data);
 
         let msg = rx.try_recv().unwrap();
@@ -265,6 +279,7 @@ mod tests {
             WsOutbound::Text(text) => {
                 let parsed: Value = serde_json::from_str(&text).unwrap();
                 assert_eq!(parsed["name"], "show-open-request");
+                assert_eq!(parsed["data"]["id"], "abc123");
                 assert_eq!(parsed["data"]["isFileMode"], true);
                 assert_eq!(parsed["data"]["properties"], json!(["openFile"]));
             }
@@ -279,13 +294,14 @@ mod tests {
         let conn_id = manager.add_client("tok".into(), tx);
         let state = test_state(manager);
 
-        let data = json!({"properties": ["openDirectory"]});
+        let data = json!({"id": "dir1", "data": {"properties": ["openDirectory"]}});
         handle_subscribe_show_open(&state, conn_id, data);
 
         let msg = rx.try_recv().unwrap();
         match msg {
             WsOutbound::Text(text) => {
                 let parsed: Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(parsed["data"]["id"], "dir1");
                 assert_eq!(parsed["data"]["isFileMode"], false);
             }
             _ => panic!("expected Text"),
@@ -299,13 +315,14 @@ mod tests {
         let conn_id = manager.add_client("tok".into(), tx);
         let state = test_state(manager);
 
-        let data = json!({"properties": ["openFile", "openDirectory"]});
+        let data = json!({"id": "mixed", "data": {"properties": ["openFile", "openDirectory"]}});
         handle_subscribe_show_open(&state, conn_id, data);
 
         let msg = rx.try_recv().unwrap();
         match msg {
             WsOutbound::Text(text) => {
                 let parsed: Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(parsed["data"]["id"], "mixed");
                 assert_eq!(parsed["data"]["isFileMode"], false);
             }
             _ => panic!("expected Text"),
@@ -319,13 +336,14 @@ mod tests {
         let conn_id = manager.add_client("tok".into(), tx);
         let state = test_state(manager);
 
-        let data = json!({"properties": []});
+        let data = json!({"id": "empty", "data": {"properties": []}});
         handle_subscribe_show_open(&state, conn_id, data);
 
         let msg = rx.try_recv().unwrap();
         match msg {
             WsOutbound::Text(text) => {
                 let parsed: Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(parsed["data"]["id"], "empty");
                 assert_eq!(parsed["data"]["isFileMode"], false);
             }
             _ => panic!("expected Text"),
@@ -339,12 +357,34 @@ mod tests {
         let conn_id = manager.add_client("tok".into(), tx);
         let state = test_state(manager);
 
+        handle_subscribe_show_open(&state, conn_id, json!({"id": "noprops", "data": {}}));
+
+        let msg = rx.try_recv().unwrap();
+        match msg {
+            WsOutbound::Text(text) => {
+                let parsed: Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(parsed["data"]["id"], "noprops");
+                assert_eq!(parsed["data"]["isFileMode"], false);
+                assert_eq!(parsed["data"]["properties"], json!([]));
+            }
+            _ => panic!("expected Text"),
+        }
+    }
+
+    #[test]
+    fn subscribe_show_open_missing_id_falls_back_to_empty_string() {
+        let manager = Arc::new(WebSocketManager::new());
+        let (tx, mut rx) = mpsc::channel(PER_CONNECTION_BUFFER);
+        let conn_id = manager.add_client("tok".into(), tx);
+        let state = test_state(manager);
+
         handle_subscribe_show_open(&state, conn_id, json!({}));
 
         let msg = rx.try_recv().unwrap();
         match msg {
             WsOutbound::Text(text) => {
                 let parsed: Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(parsed["data"]["id"], "");
                 assert_eq!(parsed["data"]["isFileMode"], false);
                 assert_eq!(parsed["data"]["properties"], json!([]));
             }

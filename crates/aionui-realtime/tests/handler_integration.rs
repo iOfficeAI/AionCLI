@@ -219,11 +219,17 @@ async fn subscribe_show_open_replies_with_show_open_request() {
     let (mut tx, mut rx) = connect_with_token(addr, "valid-token").await;
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    let payload = json!({"name": "subscribe-show-open", "data": {"properties": ["openFile"]}});
+    // Mirrors the @office-ai/platform bridge envelope shape produced by
+    // `invoke('show-open', { properties: ['openFile'] })`.
+    let payload = json!({
+        "name": "subscribe-show-open",
+        "data": {"id": "abc123", "data": {"properties": ["openFile"]}}
+    });
     tx.send(send_json(&payload.to_string())).await.unwrap();
 
     let msg = read_text(&mut rx).await;
     assert_eq!(msg["name"], "show-open-request");
+    assert_eq!(msg["data"]["id"], "abc123");
     assert_eq!(msg["data"]["isFileMode"], true);
     assert_eq!(msg["data"]["properties"], json!(["openFile"]));
 }
@@ -238,12 +244,13 @@ async fn subscribe_show_open_directory_mode() {
 
     let payload = json!({
         "name": "subscribe-show-open",
-        "data": {"properties": ["openFile", "openDirectory"]}
+        "data": {"id": "dir1", "data": {"properties": ["openFile", "openDirectory"]}}
     });
     tx.send(send_json(&payload.to_string())).await.unwrap();
 
     let msg = read_text(&mut rx).await;
     assert_eq!(msg["name"], "show-open-request");
+    assert_eq!(msg["data"]["id"], "dir1");
     assert_eq!(msg["data"]["isFileMode"], false);
 }
 
