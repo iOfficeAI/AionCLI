@@ -1240,20 +1240,16 @@ impl ConversationService {
 
 impl ConversationService {
     /// Build [`BuildTaskOptions`] from a conversation database row.
+    ///
+    /// Provider/model resolution lives in [`crate::task_options::provider_model_from_conversation_row`]
+    /// so the cron executor can derive identical values for the same row.
+    /// Diverging the lookup here historically produced
+    /// `Provider '<vendor>' not found` failures under cron when the
+    /// interactive path worked fine (Sentry ELECTRON-1HM).
     fn build_task_options(&self, row: &aionui_db::models::ConversationRow) -> Result<BuildTaskOptions, AppError> {
         let agent_type = string_to_enum(&row.r#type)?;
 
-        let model = row
-            .model
-            .as_deref()
-            .map(serde_json::from_str)
-            .transpose()
-            .map_err(|e| AppError::Internal(format!("Invalid model JSON: {e}")))?
-            .unwrap_or_else(|| aionui_common::ProviderWithModel {
-                provider_id: String::new(),
-                model: String::new(),
-                use_model: None,
-            });
+        let model = crate::task_options::provider_model_from_conversation_row(row);
 
         let mut extra: serde_json::Value =
             serde_json::from_str(&row.extra).map_err(|e| AppError::Internal(format!("Invalid extra JSON: {e}")))?;

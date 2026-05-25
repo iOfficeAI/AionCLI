@@ -470,15 +470,30 @@ impl JobExecutor {
         saved_skill: Option<&SavedSkillContext>,
     ) -> ExecutionResult {
         let agent_type = parse_agent_type(&self.agent_registry, &job.agent_type).await;
-        // `BuildTaskOptions.model` is non-optional; non-aionrs agent types
-        // ignore it in their factory branches, so a blank placeholder is the
-        // canonical empty value (mirrors `ConversationService::build_task_options`
-        // for rows with NULL `model`).
-        let model = resolve_model(job).unwrap_or_else(|| ProviderWithModel {
-            provider_id: String::new(),
-            model: String::new(),
-            use_model: None,
-        });
+        // The interactive `send_message` path resolves the model by parsing
+        // `conversation.model` via
+        // `aionui_conversation::task_options::provider_model_from_conversation_row`.
+        // Cron must do the exact same thing for the same conversation,
+        // otherwise an aionrs job whose cached `agent_config.backend`
+        // is a stale vendor label (`"aionrs"`) reaches the factory and
+        // raises `Provider 'aionrs' not found` (Sentry ELECTRON-1HM).
+        // Falling back to `resolve_model(job)` only when the conversation
+        // row cannot be loaded preserves the legacy behaviour for the
+        // brief window before a new-conversation cron run persists its
+        // first row.
+        let model = match self.get_conversation_row(conversation_id).await {
+            Ok(Some(row)) => aionui_conversation::task_options::provider_model_from_conversation_row(&row),
+            Ok(None) => resolve_model(job).unwrap_or_else(empty_provider_model),
+            Err(e) => {
+                error!(
+                    job_id = %job.id,
+                    conversation_id,
+                    error = %e,
+                    "Failed to load conversation row for cron model resolution"
+                );
+                return ExecutionResult::Error { message: e.to_string() };
+            }
+        };
         let workspace = match self.resolve_execution_workspace(job, conversation_id).await {
             Ok(workspace) => workspace,
             Err(e) => {
@@ -907,6 +922,18 @@ async fn parse_agent_type(registry: &AgentRegistry, agent_type_str: &str) -> Age
 /// vendor label). `CronService::add_job`/`update_job` already rejects aionrs
 /// jobs lacking this field, so the `None` return here is defensive for any
 /// legacy in-memory row that somehow slipped through.
+/// Sentinel `ProviderWithModel` used when a conversation row exists but has
+/// no parseable model. Non-aionrs factories ignore the field; the aionrs
+/// factory produces a clear "Provider '' not found" error instead of
+/// silently using a stale vendor label.
+fn empty_provider_model() -> ProviderWithModel {
+    ProviderWithModel {
+        provider_id: String::new(),
+        model: String::new(),
+        use_model: None,
+    }
+}
+
 fn resolve_model(job: &CronJob) -> Option<ProviderWithModel> {
     if job.agent_type != "aionrs" {
         return None;

@@ -9,6 +9,7 @@ pub mod skill_resolver;
 pub mod skill_snapshot;
 pub mod state;
 pub mod stream_relay;
+pub mod task_options;
 
 pub use response_middleware::{
     CronCommand, CronCommandResult, CronCreateParams, CronUpdateParams, ICronService, MessageMiddleware,

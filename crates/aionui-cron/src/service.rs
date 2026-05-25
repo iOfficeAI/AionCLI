@@ -6,7 +6,7 @@ use aionui_api_types::{
     CreateCronJobRequest, CronJobResponse, CronScheduleDto, HasSkillResponse, ListCronJobsQuery, RunNowResponse,
     SaveCronSkillRequest, UpdateCronJobRequest,
 };
-use aionui_common::{AgentType, ProviderWithModel, generate_prefixed_id, now_ms};
+use aionui_common::{AgentType, generate_prefixed_id, now_ms};
 use aionui_db::{ICronRepository, UpdateCronJobParams};
 use tracing::{error, info, warn};
 
@@ -1010,11 +1010,16 @@ fn build_agent_config_from_conversation(
     row: &aionui_db::models::ConversationRow,
 ) -> (String, Option<aionui_api_types::CronAgentConfigDto>) {
     let extra = serde_json::from_str::<serde_json::Value>(&row.extra).unwrap_or_else(|_| serde_json::json!({}));
-    let model = parse_provider_with_model_loose(row.model.as_deref());
+    // Both interactive `send_message` and the cron executor parse
+    // `conversation.model` via the same helper. Keeping the cron-side
+    // `agent_config.backend` derivation in sync with that parser
+    // prevents the cached vendor-label fallback (`"aionrs"`) from
+    // sneaking back in (Sentry ELECTRON-1HM).
+    let model_resolved = aionui_conversation::task_options::provider_model_from_conversation_row(row);
+    let model = (!model_resolved.provider_id.is_empty()).then_some(&model_resolved);
 
     let backend = if row.r#type == "aionrs" {
         model
-            .as_ref()
             .map(|value| value.provider_id.clone())
             .filter(|value| !value.is_empty())
             .or_else(|| get_string(&extra, &["backend"]))
@@ -1023,7 +1028,6 @@ fn build_agent_config_from_conversation(
         get_string(&extra, &["backend"])
             .or_else(|| {
                 model
-                    .as_ref()
                     .map(|value| value.provider_id.clone())
                     .filter(|value| !value.is_empty())
             })
@@ -1061,7 +1065,7 @@ fn build_agent_config_from_conversation(
         preset_agent_type,
         mode: Some(full_auto_mode),
         model_id: get_string(&extra, &["current_model_id", "currentModelId"]).or_else(|| {
-            model.as_ref().and_then(|value| {
+            model.and_then(|value| {
                 value
                     .use_model
                     .clone()
@@ -1081,43 +1085,6 @@ fn get_string(extra: &serde_json::Value, keys: &[&str]) -> Option<String> {
             .and_then(|value| value.as_str())
             .map(ToOwned::to_owned)
             .filter(|value| !value.is_empty())
-    })
-}
-
-fn parse_provider_with_model_loose(model_json: Option<&str>) -> Option<ProviderWithModel> {
-    let raw = model_json?;
-
-    if let Ok(model) = serde_json::from_str::<ProviderWithModel>(raw) {
-        return Some(model);
-    }
-
-    let value = serde_json::from_str::<serde_json::Value>(raw).ok()?;
-    let provider_id = value
-        .get("provider_id")
-        .or_else(|| value.get("providerId"))
-        .or_else(|| value.get("id"))
-        .and_then(|item| item.as_str())
-        .unwrap_or_default()
-        .to_owned();
-    let model = value
-        .get("model")
-        .and_then(|item| item.as_str())
-        .unwrap_or_default()
-        .to_owned();
-    let use_model = value
-        .get("use_model")
-        .or_else(|| value.get("useModel"))
-        .and_then(|item| item.as_str())
-        .map(ToOwned::to_owned);
-
-    if provider_id.is_empty() {
-        return None;
-    }
-
-    Some(ProviderWithModel {
-        provider_id,
-        model,
-        use_model,
     })
 }
 
