@@ -221,11 +221,7 @@ fn send_error_response(state: &WsHandlerState, conn_id: ConnectionId) {
 /// `isFileMode` is `true` when `properties` contains `openFile`
 /// but NOT `openDirectory`.
 fn handle_subscribe_show_open(state: &WsHandlerState, conn_id: ConnectionId, data: Value) {
-    let id = data
-        .get("id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_owned();
+    let id = data.get("id").and_then(|v| v.as_str()).unwrap_or("").to_owned();
     let inner = data.get("data").unwrap_or(&Value::Null);
 
     let properties = inner
