@@ -1,13 +1,15 @@
 use crate::manager::acp::AcpAgentManager;
 use crate::manager::acp::mode_normalize::agent_metadata_uses_meta_resume;
 use crate::protocol::events::{
-    AgentStreamEvent, AvailableCommandsEventData, FinishEventData, SessionAssignedEventData, StartEventData,
+    AgentStreamEvent, AvailableCommandsEventData, ErrorEventData, FinishEventData, SessionAssignedEventData,
+    StartEventData,
 };
 use crate::shared_kernel::SessionId as DomainSessionId;
 use crate::types::SendMessageData;
-use agent_client_protocol::schema::{ContentBlock, LoadSessionRequest, PromptRequest, SessionId};
+use agent_client_protocol::schema::{ContentBlock, LoadSessionRequest, PromptRequest, SessionId, StopReason};
 use aionui_common::AppError;
 use serde_json::Value;
+use tokio::sync::broadcast::error::TryRecvError;
 
 use super::agent::sdk_to_snake_value;
 use tracing::warn;
@@ -230,18 +232,41 @@ impl AcpAgentManager {
 
         let content = data.content.clone();
 
+        // Subscribe BEFORE emitting Start so we can observe every event
+        // produced during this turn. Used after `prompt()` returns to detect
+        // the "empty finish" scenario (model produced no text and no tool
+        // calls); see `is_empty_turn` below.
+        let mut probe_rx = self.runtime.subscribe();
+
         // Emit Start event
         self.runtime.emit(AgentStreamEvent::Start(StartEventData {
             session_id: Some(sid.to_owned()),
         }));
 
-        self.protocol
+        let prompt_response = self
+            .protocol
             .prompt(PromptRequest::new(
                 SessionId::new(sid),
                 vec![ContentBlock::from(content)],
             ))
             .await
             .map_err(AppError::from)?;
+
+        // Diagnose the "blank reply" case: the agent finished a turn without
+        // producing any user-visible output. We surface a structured error to
+        // the renderer so the user gets actionable feedback instead of a
+        // silent success. Cancelled turns are deliberately excluded — the
+        // user already initiated the cancel and doesn't need a second
+        // notification.
+        if !matches!(prompt_response.stop_reason, StopReason::Cancelled) && is_empty_turn(&mut probe_rx) {
+            self.runtime.emit(AgentStreamEvent::Error(ErrorEventData {
+                // TODO(i18n): wire to a frontend translation key once a
+                // pattern is established. For now this is the user-facing
+                // English string.
+                message: empty_finish_diagnostic_message(prompt_response.stop_reason),
+                code: Some("acp.empty_finish".into()),
+            }));
+        }
 
         // Emit Finish event
         self.runtime.emit(AgentStreamEvent::Finish(FinishEventData {
@@ -306,6 +331,71 @@ impl AcpAgentManager {
                     commands: cmds.to_vec(),
                 }));
         }
+    }
+}
+
+/// Drain the supplied turn-scoped receiver and return `true` when the turn
+/// produced neither agent text nor any tool-call activity.
+///
+/// Used by `prompt_existing_session` to detect the "blank reply" scenario
+/// (ELECTRON-1JG): the ACP backend returned `StopReason::EndTurn` (or
+/// similar terminal reason) without ever emitting a `Text` /
+/// `Thinking` / `ToolCall` / `AcpToolCall` chunk. We treat presence of
+/// any of those as a non-empty turn.
+///
+/// `Lagged` is treated as non-empty: the broadcast buffer overflowed,
+/// meaning many events flew by — definitely not an empty turn.
+fn is_empty_turn(rx: &mut tokio::sync::broadcast::Receiver<AgentStreamEvent>) -> bool {
+    loop {
+        match rx.try_recv() {
+            Ok(event) => {
+                if event_is_user_visible_output(&event) {
+                    return false;
+                }
+            }
+            Err(TryRecvError::Empty) => return true,
+            Err(TryRecvError::Closed) => return true,
+            // Buffer overflow: many events occurred — turn was clearly not empty.
+            Err(TryRecvError::Lagged(_)) => return false,
+        }
+    }
+}
+
+/// Whether a stream event represents user-visible output produced by the
+/// model during a turn. Anything that would render in chat counts.
+fn event_is_user_visible_output(event: &AgentStreamEvent) -> bool {
+    matches!(
+        event,
+        AgentStreamEvent::Text(_)
+            | AgentStreamEvent::Thinking(_)
+            | AgentStreamEvent::ToolCall(_)
+            | AgentStreamEvent::AcpToolCall(_)
+            | AgentStreamEvent::ToolGroup(_)
+            | AgentStreamEvent::Plan(_)
+            | AgentStreamEvent::Permission(_)
+            | AgentStreamEvent::AcpPermission(_)
+    )
+}
+
+/// Build the user-facing message shown when the agent finished a turn
+/// without emitting any output. Wording is deliberately concrete so the
+/// user has something to act on (retry, reword, check provider).
+fn empty_finish_diagnostic_message(stop_reason: StopReason) -> String {
+    match stop_reason {
+        StopReason::MaxTokens => "The model reached its output token limit before producing any reply. \
+             Try asking a shorter question or raising the model's max output."
+            .to_owned(),
+        StopReason::MaxTurnRequests => "The model hit the per-turn request cap before producing any reply. \
+             Try a simpler request or restart the conversation."
+            .to_owned(),
+        StopReason::Refusal => "The model refused to continue without producing a reply.".to_owned(),
+        // EndTurn (and any non-exhaustive future variants) all map to the
+        // generic empty-reply message — the model said it was done but
+        // produced nothing.
+        _ => "The model finished without producing any reply. \
+              This usually means the request returned an empty response — \
+              try resending the message or switching model/provider."
+            .to_owned(),
     }
 }
 
@@ -481,5 +571,104 @@ mod tests {
 
         let bad_request = AppError::BadRequest("anything".into());
         assert!(!super::is_session_not_found(&bad_request));
+    }
+
+    // -- empty-finish diagnostic (ELECTRON-1JG) -------------------------------
+
+    use crate::protocol::events::{
+        AgentStreamEvent, FinishEventData, StartEventData, TextEventData, ThinkingEventData, ToolCallEventData,
+        ToolCallStatus,
+    };
+    use agent_client_protocol::schema::StopReason;
+    use tokio::sync::broadcast;
+
+    /// Lifecycle-only events (`Start`/`Finish`) must NOT count as
+    /// user-visible output. This is the core empty-finish detection
+    /// contract: the helper has to look past Start before declaring
+    /// the turn empty.
+    #[tokio::test]
+    async fn is_empty_turn_returns_true_when_only_lifecycle_events() {
+        let (tx, _) = broadcast::channel::<AgentStreamEvent>(8);
+        let mut rx = tx.subscribe();
+        tx.send(AgentStreamEvent::Start(StartEventData {
+            session_id: Some("s1".into()),
+        }))
+        .unwrap();
+        tx.send(AgentStreamEvent::Finish(FinishEventData {
+            session_id: Some("s1".into()),
+        }))
+        .unwrap();
+
+        assert!(super::is_empty_turn(&mut rx));
+    }
+
+    /// A single Text chunk is enough to mark the turn non-empty,
+    /// even when sandwiched between lifecycle events.
+    #[tokio::test]
+    async fn is_empty_turn_returns_false_when_text_emitted() {
+        let (tx, _) = broadcast::channel::<AgentStreamEvent>(8);
+        let mut rx = tx.subscribe();
+        tx.send(AgentStreamEvent::Start(StartEventData::default())).unwrap();
+        tx.send(AgentStreamEvent::Text(TextEventData { content: "hi".into() }))
+            .unwrap();
+        tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+
+        assert!(!super::is_empty_turn(&mut rx));
+    }
+
+    /// Tool calls also count as visible output — even if the model
+    /// produced no Text, executing a tool means the turn was not blank.
+    #[tokio::test]
+    async fn is_empty_turn_returns_false_when_tool_call_emitted() {
+        let (tx, _) = broadcast::channel::<AgentStreamEvent>(8);
+        let mut rx = tx.subscribe();
+        tx.send(AgentStreamEvent::Start(StartEventData::default())).unwrap();
+        tx.send(AgentStreamEvent::ToolCall(ToolCallEventData {
+            call_id: "c1".into(),
+            name: "read_file".into(),
+            args: serde_json::json!({}),
+            status: ToolCallStatus::Running,
+            input: None,
+            output: None,
+            description: None,
+        }))
+        .unwrap();
+
+        assert!(!super::is_empty_turn(&mut rx));
+    }
+
+    /// Thinking-only output (no final reply) still counts: the user
+    /// saw something happen, even though the model didn't commit
+    /// to a response. We don't want to double-up the diagnostic.
+    #[tokio::test]
+    async fn is_empty_turn_returns_false_when_only_thinking_emitted() {
+        let (tx, _) = broadcast::channel::<AgentStreamEvent>(8);
+        let mut rx = tx.subscribe();
+        tx.send(AgentStreamEvent::Thinking(ThinkingEventData {
+            content: "hmm".into(),
+            subject: None,
+            duration: None,
+            status: None,
+        }))
+        .unwrap();
+
+        assert!(!super::is_empty_turn(&mut rx));
+    }
+
+    /// Each `StopReason` variant maps to a distinct, user-actionable
+    /// message. Pin the wording so future copy changes are deliberate.
+    #[test]
+    fn empty_finish_diagnostic_message_per_stop_reason() {
+        let endturn = super::empty_finish_diagnostic_message(StopReason::EndTurn);
+        assert!(endturn.to_lowercase().contains("finished"));
+
+        let max_tokens = super::empty_finish_diagnostic_message(StopReason::MaxTokens);
+        assert!(max_tokens.to_lowercase().contains("token"));
+
+        let max_turn = super::empty_finish_diagnostic_message(StopReason::MaxTurnRequests);
+        assert!(max_turn.to_lowercase().contains("per-turn") || max_turn.to_lowercase().contains("cap"));
+
+        let refusal = super::empty_finish_diagnostic_message(StopReason::Refusal);
+        assert!(refusal.to_lowercase().contains("refused"));
     }
 }

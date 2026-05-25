@@ -11,9 +11,9 @@ use aionui_api_types::GuideMcpConfig;
 use aionui_auth::{CookieConfig, JwtService, QrTokenStore, resolve_jwt_secret};
 use aionui_common::OnConversationDelete;
 use aionui_db::{
-    Database, IAcpSessionRepository, IAgentMetadataRepository, IConversationRepository, IUserRepository,
-    SqliteAcpSessionRepository, SqliteAgentMetadataRepository, SqliteConversationRepository, SqliteProviderRepository,
-    SqliteRemoteAgentRepository, SqliteUserRepository,
+    Database, IAcpSessionRepository, IAgentMetadataRepository, IConversationRepository, IMcpServerRepository,
+    IUserRepository, SqliteAcpSessionRepository, SqliteAgentMetadataRepository, SqliteConversationRepository,
+    SqliteMcpServerRepository, SqliteProviderRepository, SqliteRemoteAgentRepository, SqliteUserRepository,
 };
 use aionui_realtime::{BroadcastEventBus, WebSocketManager};
 use aionui_team::GuideMcpServer;
@@ -106,6 +106,10 @@ impl AppServices {
 
         let remote_agent_repo = Arc::new(SqliteRemoteAgentRepository::new(database.pool().clone()));
         let provider_repo = Arc::new(SqliteProviderRepository::new(database.pool().clone()));
+        // User-configured MCP servers — injected into ACP `session/new`
+        // so the agent gets the operator's tools (ELECTRON-1JG fix).
+        let mcp_server_repo: Arc<dyn IMcpServerRepository> =
+            Arc::new(SqliteMcpServerRepository::new(database.pool().clone()));
 
         let agent_metadata_repo: Arc<dyn IAgentMetadataRepository> =
             Arc::new(SqliteAgentMetadataRepository::new(database.pool().clone()));
@@ -166,6 +170,7 @@ impl AppServices {
             data_dir: data_dir.clone(),
             backend_binary_path: backend_binary_path.clone(),
             guide_mcp_config: guide_mcp_config.clone(),
+            mcp_server_repo: Some(mcp_server_repo),
         });
 
         // Agent factory is now wired. Future extension/custom agents

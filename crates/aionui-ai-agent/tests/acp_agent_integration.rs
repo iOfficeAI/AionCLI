@@ -108,6 +108,7 @@ async fn make_mock_agent(script: &str, backend: &str) -> (Arc<AcpAgentManager>, 
                 cwd: None,
             },
             config,
+            Vec::new(),
             None,
             std::env::temp_dir(),
         )

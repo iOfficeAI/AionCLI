@@ -66,6 +66,7 @@ async fn fixture_params(
                 cwd: None,
             },
             config,
+            Vec::new(),
             None,
             std::env::temp_dir(),
         )

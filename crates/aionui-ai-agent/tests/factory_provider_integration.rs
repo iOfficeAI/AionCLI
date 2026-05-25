@@ -75,6 +75,7 @@ fn make_factory(
         data_dir: PathBuf::from("/tmp/aionrs-test"),
         backend_binary_path: Arc::new(PathBuf::from("/tmp/aionrs-test/aioncore")),
         guide_mcp_config: None,
+        mcp_server_repo: None,
     })
 }
 

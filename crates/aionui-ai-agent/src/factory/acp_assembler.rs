@@ -54,16 +54,22 @@ impl AcpSessionParams {
 /// This front-loads all decision logic that was previously scattered across
 /// `build_new_session_request`, `compose_preset_context_with_team_guide`,
 /// and the factory's ACP match arm.
+///
+/// `user_mcp_servers` are operator-configured MCP servers loaded from the DB
+/// by the factory layer; they are appended after the team/guide injection so
+/// the agent gets *all* the user's tools on `session/new` (ELECTRON-1JG fix).
+#[allow(clippy::too_many_arguments)]
 pub async fn assemble_acp_params(
     conversation_id: String,
     workspace: WorkspaceInfo,
     metadata: AgentMetadata,
     command_spec: CommandSpec,
     config: AcpBuildExtra,
+    user_mcp_servers: Vec<McpServer>,
     session_snapshot: Option<PersistedSessionState>,
     data_dir: PathBuf,
 ) -> AcpSessionParams {
-    let mcp_servers = resolve_mcp_servers(&config, &conversation_id);
+    let mcp_servers = resolve_mcp_servers(&config, &conversation_id, user_mcp_servers);
     let preset_context = compose_preset_context(
         config.preset_context.as_deref(),
         config.backend.as_deref(),
@@ -85,21 +91,28 @@ pub async fn assemble_acp_params(
 
 /// Determine which MCP servers to inject into `session/new`.
 ///
-/// Priority: team session > solo guide > none. The two injections are
-/// mutually exclusive.
-fn resolve_mcp_servers(config: &AcpBuildExtra, conversation_id: &str) -> Vec<McpServer> {
+/// Layout: `[team-or-guide?, ...user_mcp_servers]`. The team/guide
+/// injection is mutually exclusive (team takes priority); the user's
+/// own enabled MCP servers are always appended on top so a team
+/// session still gets the operator's tools.
+fn resolve_mcp_servers(
+    config: &AcpBuildExtra,
+    conversation_id: &str,
+    user_mcp_servers: Vec<McpServer>,
+) -> Vec<McpServer> {
+    let mut servers: Vec<McpServer> = Vec::new();
     if let Some(cfg) = config.team_mcp_stdio_config.as_ref() {
-        return vec![team_mcp_server(cfg)];
-    }
-    if let Some(guide_cfg) = config.guide_mcp_config.as_ref()
+        servers.push(team_mcp_server(cfg));
+    } else if let Some(guide_cfg) = config.guide_mcp_config.as_ref()
         && config
             .backend
             .as_deref()
             .is_some_and(|b| TEAM_CAPABLE_BACKENDS.contains(&b))
     {
-        return vec![guide_mcp_server(guide_cfg, config, conversation_id)];
+        servers.push(guide_mcp_server(guide_cfg, config, conversation_id));
     }
-    Vec::new()
+    servers.extend(user_mcp_servers);
+    servers
 }
 
 /// Compose first-message preset context, optionally appending the Team Guide
@@ -190,6 +203,10 @@ mod tests {
         assert_eq!(result, None);
     }
 
+    fn user_stdio(name: &str) -> McpServer {
+        McpServer::Stdio(McpServerStdio::new(name, "/bin/sh"))
+    }
+
     #[test]
     fn resolve_mcp_servers_prefers_team_over_guide() {
         let config = AcpBuildExtra {
@@ -218,7 +235,7 @@ mod tests {
             }),
             user_id: None,
         };
-        let servers = resolve_mcp_servers(&config, "conv-1");
+        let servers = resolve_mcp_servers(&config, "conv-1", Vec::new());
         assert_eq!(servers.len(), 1);
         match &servers[0] {
             McpServer::Stdio(s) => assert!(s.name.contains("team-1")),
@@ -248,7 +265,7 @@ mod tests {
             }),
             user_id: None,
         };
-        let servers = resolve_mcp_servers(&config, "conv-1");
+        let servers = resolve_mcp_servers(&config, "conv-1", Vec::new());
         assert_eq!(servers.len(), 1);
         match &servers[0] {
             McpServer::Stdio(s) => assert_eq!(s.name, "aionui-team-guide"),
@@ -278,7 +295,143 @@ mod tests {
             }),
             user_id: None,
         };
-        let servers = resolve_mcp_servers(&config, "conv-1");
+        let servers = resolve_mcp_servers(&config, "conv-1", Vec::new());
+        assert!(servers.is_empty());
+    }
+
+    /// Core ELECTRON-1JG regression contract: when the operator has
+    /// configured user MCP servers (e.g. via Settings → MCP), they must
+    /// reach the `session/new` payload — even when there's no team or
+    /// guide injection. Pre-fix: this returned an empty Vec because the
+    /// factory only knew about team_mcp_stdio_config / guide_mcp_config.
+    #[test]
+    fn resolve_mcp_servers_appends_user_servers_in_solo_session() {
+        let config = AcpBuildExtra {
+            agent_id: None,
+            backend: Some("unknown-backend".into()),
+            cli_path: None,
+            agent_name: None,
+            custom_agent_id: None,
+            preset_context: None,
+            skills: vec![],
+            preset_assistant_id: None,
+            session_mode: None,
+            current_model_id: None,
+            cron_job_id: None,
+            team_mcp_stdio_config: None,
+            guide_mcp_config: None,
+            user_id: None,
+        };
+        let user = vec![user_stdio("ctx7"), user_stdio("playwright")];
+        let servers = resolve_mcp_servers(&config, "conv-1", user);
+        assert_eq!(servers.len(), 2);
+        let names: Vec<_> = servers
+            .iter()
+            .map(|s| match s {
+                McpServer::Stdio(s) => s.name.as_str(),
+                _ => panic!(),
+            })
+            .collect();
+        assert_eq!(names, vec!["ctx7", "playwright"]);
+    }
+
+    /// User-configured MCP servers must coexist with the team injection,
+    /// not replace it. Order: team first, then user servers.
+    #[test]
+    fn resolve_mcp_servers_team_plus_user_servers() {
+        let config = AcpBuildExtra {
+            agent_id: None,
+            backend: Some("claude".into()),
+            cli_path: None,
+            agent_name: None,
+            custom_agent_id: None,
+            preset_context: None,
+            skills: vec![],
+            preset_assistant_id: None,
+            session_mode: None,
+            current_model_id: None,
+            cron_job_id: None,
+            team_mcp_stdio_config: Some(TeamMcpStdioConfig {
+                team_id: "team-1".into(),
+                port: 9999,
+                token: "tok".into(),
+                slot_id: "slot-lead".into(),
+                binary_path: "/bin/backend".into(),
+            }),
+            guide_mcp_config: None,
+            user_id: None,
+        };
+        let user = vec![user_stdio("ctx7")];
+        let servers = resolve_mcp_servers(&config, "conv-1", user);
+        assert_eq!(servers.len(), 2);
+        match &servers[0] {
+            McpServer::Stdio(s) => assert!(s.name.contains("team-1"), "team must come first"),
+            _ => panic!("expected stdio"),
+        }
+        match &servers[1] {
+            McpServer::Stdio(s) => assert_eq!(s.name, "ctx7"),
+            _ => panic!("expected stdio"),
+        }
+    }
+
+    /// Guide injection coexists with user MCP servers too.
+    #[test]
+    fn resolve_mcp_servers_guide_plus_user_servers() {
+        let config = AcpBuildExtra {
+            agent_id: None,
+            backend: Some("claude".into()),
+            cli_path: None,
+            agent_name: None,
+            custom_agent_id: None,
+            preset_context: None,
+            skills: vec![],
+            preset_assistant_id: None,
+            session_mode: None,
+            current_model_id: None,
+            cron_job_id: None,
+            team_mcp_stdio_config: None,
+            guide_mcp_config: Some(GuideMcpConfig {
+                port: 8888,
+                token: "guide-tok".into(),
+                binary_path: "/bin/backend".into(),
+            }),
+            user_id: None,
+        };
+        let user = vec![user_stdio("ctx7")];
+        let servers = resolve_mcp_servers(&config, "conv-1", user);
+        assert_eq!(servers.len(), 2);
+        match &servers[0] {
+            McpServer::Stdio(s) => assert_eq!(s.name, "aionui-team-guide"),
+            _ => panic!("expected stdio"),
+        }
+        match &servers[1] {
+            McpServer::Stdio(s) => assert_eq!(s.name, "ctx7"),
+            _ => panic!("expected stdio"),
+        }
+    }
+
+    /// The pre-fix bug: with no team/guide configured and an empty
+    /// user-server list, the payload is empty. This is the *no-fix*
+    /// scenario and remains valid (no MCP configured anywhere).
+    #[test]
+    fn resolve_mcp_servers_empty_when_nothing_configured() {
+        let config = AcpBuildExtra {
+            agent_id: None,
+            backend: Some("claude".into()),
+            cli_path: None,
+            agent_name: None,
+            custom_agent_id: None,
+            preset_context: None,
+            skills: vec![],
+            preset_assistant_id: None,
+            session_mode: None,
+            current_model_id: None,
+            cron_job_id: None,
+            team_mcp_stdio_config: None,
+            guide_mcp_config: None,
+            user_id: None,
+        };
+        let servers = resolve_mcp_servers(&config, "conv-1", Vec::new());
         assert!(servers.is_empty());
     }
 }

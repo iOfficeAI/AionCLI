@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use aionui_api_types::GuideMcpConfig;
 use aionui_common::{AgentType, AppError};
-use aionui_db::{IProviderRepository, IRemoteAgentRepository};
+use aionui_db::{IMcpServerRepository, IProviderRepository, IRemoteAgentRepository};
 use futures_util::FutureExt;
 
 use crate::agent_task::AgentInstance;
@@ -40,6 +40,10 @@ pub struct AgentFactoryDeps {
     /// ACP agent sessions so the agent gets the `aion_create_team` tool.
     /// `None` when the Guide server failed to start (graceful degradation).
     pub guide_mcp_config: Option<GuideMcpConfig>,
+    /// User-configured MCP servers repository. Used by ACP factory to
+    /// inject enabled servers into `session/new` (ELECTRON-1JG fix).
+    /// `None` for tests/composition paths that do not need MCP injection.
+    pub mcp_server_repo: Option<Arc<dyn IMcpServerRepository>>,
 }
 
 /// Build a production agent factory that dispatches to concrete agent types.
