@@ -1191,9 +1191,10 @@ impl ConversationService {
             .filter(|r| r.user_id == user_id)
             .ok_or_else(|| AppError::NotFound(format!("Conversation {conversation_id} not found")))?;
 
-        let agent = task_manager
-            .get_task(conversation_id)
-            .ok_or_else(|| AppError::Conflict("No active agent for this conversation".into()))?;
+        let Some(agent) = task_manager.get_task(conversation_id) else {
+            info!("No active agent to cancel; treating as idempotent success");
+            return Ok(());
+        };
 
         if let Err(e) = agent.cancel().await {
             warn!(error = %ErrorChain(&e), "Failed to cancel agent");

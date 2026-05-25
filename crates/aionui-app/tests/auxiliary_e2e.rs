@@ -333,7 +333,7 @@ async fn check_approval_no_task() {
     assert_eq!(json["data"]["approved"], false);
 }
 
-// ── Stop + Warmup (no active task → error) ────────────────────
+// ── Stop + Warmup (no active task → idempotent success) ───────
 
 #[tokio::test]
 async fn stop_stream_no_task() {
@@ -349,6 +349,6 @@ async fn stop_stream_no_task() {
         &csrf,
     );
     let resp = app.oneshot(req).await.unwrap();
-    // Stop with no active agent → 409 Conflict
-    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    // Stop with no active agent is idempotent.
+    assert_eq!(resp.status(), StatusCode::OK);
 }

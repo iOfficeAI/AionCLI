@@ -1675,14 +1675,14 @@ async fn stop_stream_conversation_not_found() {
 }
 
 #[tokio::test]
-async fn stop_stream_no_active_agent_returns_conflict() {
+async fn stop_stream_no_active_agent_is_idempotent() {
     let (svc, _broadcaster, _repo, _task_mgr) = make_service();
     let task_mgr: Arc<dyn IWorkerTaskManager> = Arc::new(MockTaskManager::new());
 
     let conv = svc.create("user_1", make_create_req()).await.unwrap();
 
-    let err = svc.cancel("user_1", &conv.id, &task_mgr).await.unwrap_err();
-    assert!(matches!(err, AppError::Conflict(_)));
+    let result = svc.cancel("user_1", &conv.id, &task_mgr).await;
+    assert!(result.is_ok());
 }
 
 #[tokio::test]
