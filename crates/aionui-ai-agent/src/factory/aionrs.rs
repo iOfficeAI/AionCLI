@@ -11,7 +11,7 @@ use crate::agent_task::AgentInstance;
 use crate::capability::team_guide_prompt;
 use crate::factory::AgentFactoryDeps;
 use crate::factory::context::FactoryContext;
-use crate::manager::aionrs::AionrsAgentManager;
+use crate::manager::aionrs::{AionrsAgentManager, sanitize_session_messages};
 use crate::types::{AionrsCompatOverrides, AionrsResolvedConfig, BuildTaskOptions};
 
 const TEAM_CAPABLE_BACKENDS: &[&str] = &["claude", "codex", "gemini", "aionrs", "codebuddy"];
@@ -108,11 +108,18 @@ pub(super) async fn build(
     let resume_session = {
         let session_mgr = SessionManager::new(session_directory.clone(), 100);
         match session_mgr.load(&ctx.conversation_id) {
-            Ok(session) => {
+            Ok(mut session) => {
+                // Drop orphaned assistant tool-calls left behind when the user
+                // pressed Stop mid-stream. Strict providers (Ollama-style,
+                // some OpenAI-compatible proxies) reject replayed assistants
+                // with `tool_calls != null` and `content == null` when no
+                // matching tool_result follows. See ELECTRON-1HV / ELECTRON-1J6.
+                let dropped = sanitize_session_messages(&mut session.messages);
                 info!(
                     conversation_id = %ctx.conversation_id,
                     session_id = %session.id,
                     message_count = session.messages.len(),
+                    sanitized_dropped = dropped,
                     "Loaded existing aionrs session for resume"
                 );
                 Some(session)
@@ -122,11 +129,13 @@ pub(super) async fn build(
                 let legacy_dir = std::path::Path::new(&ctx.workspace).join(".aionrs/sessions");
                 let legacy_mgr = SessionManager::new(legacy_dir.clone(), 100);
                 match legacy_mgr.load(&ctx.conversation_id) {
-                    Ok(session) => {
+                    Ok(mut session) => {
+                        let dropped = sanitize_session_messages(&mut session.messages);
                         info!(
                             conversation_id = %ctx.conversation_id,
                             session_id = %session.id,
                             message_count = session.messages.len(),
+                            sanitized_dropped = dropped,
                             "Loaded legacy aionrs session from workspace"
                         );
                         Some(session)
