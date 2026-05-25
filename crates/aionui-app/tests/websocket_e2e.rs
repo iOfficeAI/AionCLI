@@ -412,12 +412,13 @@ async fn t5_2_subscribe_show_open_file_mode() {
 
     let payload = json!({
         "name": "subscribe-show-open",
-        "data": {"properties": ["openFile"]}
+        "data": {"id": "req-file", "data": {"properties": ["openFile"]}}
     });
     tx.send(send_json(&payload.to_string())).await.unwrap();
 
     let msg = read_text(&mut rx).await;
     assert_eq!(msg["name"], "show-open-request");
+    assert_eq!(msg["data"]["id"], "req-file");
     assert_eq!(msg["data"]["isFileMode"], true);
     assert_eq!(msg["data"]["properties"], json!(["openFile"]));
 }
@@ -432,12 +433,13 @@ async fn t5_3_subscribe_show_open_directory_mode() {
 
     let payload = json!({
         "name": "subscribe-show-open",
-        "data": {"properties": ["openDirectory"]}
+        "data": {"id": "req-dir", "data": {"properties": ["openDirectory"]}}
     });
     tx.send(send_json(&payload.to_string())).await.unwrap();
 
     let msg = read_text(&mut rx).await;
     assert_eq!(msg["name"], "show-open-request");
+    assert_eq!(msg["data"]["id"], "req-dir");
     assert_eq!(msg["data"]["isFileMode"], false);
 }
 
@@ -451,12 +453,13 @@ async fn t5_4_subscribe_show_open_mixed_mode() {
 
     let payload = json!({
         "name": "subscribe-show-open",
-        "data": {"properties": ["openFile", "openDirectory"]}
+        "data": {"id": "req-mixed", "data": {"properties": ["openFile", "openDirectory"]}}
     });
     tx.send(send_json(&payload.to_string())).await.unwrap();
 
     let msg = read_text(&mut rx).await;
     assert_eq!(msg["name"], "show-open-request");
+    assert_eq!(msg["data"]["id"], "req-mixed");
     assert_eq!(msg["data"]["isFileMode"], false);
 }
 
