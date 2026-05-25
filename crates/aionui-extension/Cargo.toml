@@ -22,6 +22,12 @@ thiserror.workspace = true
 tracing.workspace = true
 mime_guess.workspace = true
 
+# NTFS junctions are used on Windows to materialize skill links without
+# requiring `SeCreateSymbolicLink` (Developer Mode / Admin). Pulled in
+# only on Windows targets to avoid building it on Linux/macOS.
+[target.'cfg(windows)'.dependencies]
+junction = "1"
+
 [dev-dependencies]
 async-trait.workspace = true
 http-body-util.workspace = true

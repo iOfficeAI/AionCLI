@@ -633,7 +633,7 @@ pub async fn link_workspace_skills(
                     continue;
                 }
             }
-            match create_symlink(&skill.source_path, &target).await {
+            match link_skill_or_fallback_copy(&skill.source_path, &target).await {
                 Ok(()) => {
                     debug!(
                         skill = %skill.name,
@@ -1027,6 +1027,100 @@ async fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), ExtensionError
     Ok(())
 }
 
+/// Try to symlink `src` into `dst`; on failure, fall back to a recursive
+/// copy of the source directory.
+///
+/// Motivation: on Windows machines without "Developer Mode" or admin
+/// privileges, `CreateSymbolicLinkW` fails with `os error 1314`
+/// (`ERROR_PRIVILEGE_NOT_HELD`). Auto-injected builtin skills under each
+/// backend's `.<backend>/skills/` directory then become invisible to the
+/// CLI agent — silently degrading the product. Falling back to a copy
+/// keeps the skills discoverable; the trade-off is that copies do not
+/// track upstream changes until the next link pass clears them. The
+/// fallback applies on every platform (Linux/macOS shouldn't normally
+/// hit this, but we keep behavior uniform so a future EPERM/EROFS sandbox
+/// also stays healthy).
+///
+/// Logs a `warn!` with the OS error kind and `raw_os_error` so we can
+/// keep tracking 1314 vs other failure modes in telemetry. No
+/// user-identifying data is logged — only the source/target paths
+/// (already considered safe to log elsewhere in this module) and the
+/// error code.
+async fn link_skill_or_fallback_copy(src: &Path, dst: &Path) -> Result<(), ExtensionError> {
+    match create_symlink_for_link(src, dst).await {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            // Surface the raw OS error so dashboards can keep counting 1314
+            // (ERROR_PRIVILEGE_NOT_HELD) separately from other failure modes.
+            let raw_os_error = match &e {
+                ExtensionError::Io(io_err) => io_err.raw_os_error(),
+                _ => None,
+            };
+            warn!(
+                src = %src.display(),
+                dst = %dst.display(),
+                error = %e,
+                raw_os_error = ?raw_os_error,
+                "create_symlink failed; falling back to copy_dir_recursive"
+            );
+            copy_dir_recursive(src, dst).await
+        }
+    }
+}
+
+/// Wrapper around [`create_symlink`] that allows tests to inject a
+/// synthetic failure. In non-test builds this is a thin call-through to
+/// the platform-specific [`create_symlink`] below.
+async fn create_symlink_for_link(src: &Path, dst: &Path) -> Result<(), ExtensionError> {
+    #[cfg(test)]
+    {
+        if test_overrides::should_force_symlink_failure() {
+            // Use PermissionDenied to mimic the shape Windows returns
+            // for ERROR_PRIVILEGE_NOT_HELD. The exact raw_os_error is
+            // platform-specific so we only assert on kind in tests.
+            return Err(ExtensionError::Io(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "forced symlink failure (test)",
+            )));
+        }
+    }
+    create_symlink(src, dst).await
+}
+
+/// Test-only knob to force the symlink primitive to fail, exercising
+/// the [`copy_dir_recursive`] fallback branch on platforms where
+/// symlinking would otherwise succeed (Linux/macOS CI).
+#[cfg(test)]
+mod test_overrides {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static FORCE_SYMLINK_FAILURE: AtomicBool = AtomicBool::new(false);
+
+    pub fn should_force_symlink_failure() -> bool {
+        FORCE_SYMLINK_FAILURE.load(Ordering::SeqCst)
+    }
+
+    /// RAII guard that flips `FORCE_SYMLINK_FAILURE` on creation and
+    /// resets it on drop. Tests using this guard must be marked
+    /// `#[serial_test::serial]` if any other test in the binary also
+    /// flips the flag — at present only one test uses it, so a guard
+    /// is enough.
+    pub struct ForceFailureGuard;
+
+    impl ForceFailureGuard {
+        pub fn new() -> Self {
+            FORCE_SYMLINK_FAILURE.store(true, Ordering::SeqCst);
+            Self
+        }
+    }
+
+    impl Drop for ForceFailureGuard {
+        fn drop(&mut self) {
+            FORCE_SYMLINK_FAILURE.store(false, Ordering::SeqCst);
+        }
+    }
+}
+
 /// Create a symlink (platform-aware).
 #[cfg(unix)]
 async fn create_symlink(src: &Path, dst: &Path) -> Result<(), ExtensionError> {
@@ -1035,9 +1129,29 @@ async fn create_symlink(src: &Path, dst: &Path) -> Result<(), ExtensionError> {
 
 #[cfg(windows)]
 async fn create_symlink(src: &Path, dst: &Path) -> Result<(), ExtensionError> {
-    // Use junction on Windows for directory symlinks
+    // On Windows, directory symlinks require `SeCreateSymbolicLink`
+    // (Developer Mode or Admin), which most users don't have — this is
+    // the source of the Sentry I1 family of `os error 1314` failures.
+    //
+    // NTFS junctions are an unprivileged alternative for *directory*
+    // targets: the kernel exposes them via `FSCTL_SET_REPARSE_POINT`
+    // which does not require the symlink privilege. Use them whenever
+    // possible. File targets cannot be junctioned, so they fall back to
+    // `tokio::fs::symlink_file`; in the rare cases that fails the
+    // outer `link_skill_or_fallback_copy` wrapper still rescues us via
+    // `copy_dir_recursive`.
     if src.is_dir() {
-        tokio::fs::symlink_dir(src, dst).await.map_err(ExtensionError::Io)
+        let src = src.to_path_buf();
+        let dst = dst.to_path_buf();
+        tokio::task::spawn_blocking(move || junction::create(&src, &dst))
+            .await
+            .map_err(|e| {
+                ExtensionError::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("junction::create join error: {e}"),
+                ))
+            })?
+            .map_err(ExtensionError::Io)
     } else {
         tokio::fs::symlink_file(src, dst).await.map_err(ExtensionError::Io)
     }
@@ -1892,5 +2006,116 @@ mod tests {
             .unwrap();
         assert!(!paths.data_dir.join("agent-skills").exists());
         assert!(!paths.data_dir.join("conversations").exists());
+    }
+
+    // -----------------------------------------------------------------------
+    // Windows symlink → copy_dir_recursive fallback
+    // -----------------------------------------------------------------------
+
+    /// When the platform symlink primitive fails (mirrors Windows
+    /// `os error 1314 ERROR_PRIVILEGE_NOT_HELD`), `link_workspace_skills`
+    /// must materialize the skill via `copy_dir_recursive` instead so the
+    /// CLI agent can still discover it. Forced via `ForceFailureGuard`
+    /// on Linux/macOS CI where symlinking would otherwise succeed.
+    #[tokio::test]
+    async fn link_workspace_skills_falls_back_to_copy_when_symlink_fails() {
+        let tmp = TempDir::new().unwrap();
+        let workspace = tmp.path().join("workspace");
+        let source_root = tmp.path().join("sources");
+
+        // Seed a fake skill source directory with a SKILL.md and a
+        // nested file so we can verify the copy is recursive.
+        let skill_source = source_root.join("my-skill");
+        std::fs::create_dir_all(skill_source.join("nested")).unwrap();
+        std::fs::write(
+            skill_source.join(SKILL_MANIFEST_FILE),
+            "---\nname: my-skill\ndescription: test\n---\nbody",
+        )
+        .unwrap();
+        std::fs::write(skill_source.join("nested").join("data.txt"), "payload").unwrap();
+
+        let resolved = vec![ResolvedAgentSkill {
+            name: "my-skill".to_owned(),
+            source_path: skill_source.clone(),
+        }];
+
+        // Force the symlink primitive to fail for the duration of this
+        // test, exercising the copy fallback branch.
+        let _guard = test_overrides::ForceFailureGuard::new();
+
+        let created = link_workspace_skills(&workspace, &[".claude/skills"], &resolved)
+            .await
+            .expect("link_workspace_skills should succeed via copy fallback");
+        assert_eq!(created, 1, "exactly one skill should be materialized");
+
+        let target = workspace.join(".claude/skills").join("my-skill");
+        assert!(target.exists(), "target directory must exist");
+        // It must NOT be a symlink — fallback path uses copy_dir_recursive.
+        let meta = tokio::fs::symlink_metadata(&target).await.unwrap();
+        assert!(
+            !meta.file_type().is_symlink(),
+            "fallback must produce a real directory, not a symlink"
+        );
+        assert!(target.is_dir(), "target must be a directory");
+
+        // Verify the contents were copied recursively.
+        let manifest = std::fs::read_to_string(target.join(SKILL_MANIFEST_FILE)).unwrap();
+        assert!(manifest.contains("name: my-skill"));
+        let nested = std::fs::read_to_string(target.join("nested").join("data.txt")).unwrap();
+        assert_eq!(nested, "payload");
+    }
+
+    /// Windows-only: directory linking must go through an NTFS junction
+    /// (created by the `junction` crate) rather than `symlink_dir`, so
+    /// the link works for users without Developer Mode. We assert the
+    /// resulting path is a reparse point (junction is reported as a
+    /// symlink by `symlink_metadata().file_type().is_symlink()`) and
+    /// that the source contents are reachable through the link.
+    ///
+    /// The test is skipped on non-Windows platforms.
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn link_workspace_skills_uses_junction_on_windows() {
+        let tmp = TempDir::new().unwrap();
+        let workspace = tmp.path().join("workspace");
+        let source_root = tmp.path().join("sources");
+
+        let skill_source = source_root.join("my-skill");
+        std::fs::create_dir_all(skill_source.join("nested")).unwrap();
+        std::fs::write(
+            skill_source.join(SKILL_MANIFEST_FILE),
+            "---\nname: my-skill\ndescription: test\n---\nbody",
+        )
+        .unwrap();
+        std::fs::write(skill_source.join("nested").join("data.txt"), "payload").unwrap();
+
+        let resolved = vec![ResolvedAgentSkill {
+            name: "my-skill".to_owned(),
+            source_path: skill_source.clone(),
+        }];
+
+        let created = link_workspace_skills(&workspace, &[".claude/skills"], &resolved)
+            .await
+            .expect("link_workspace_skills should succeed via junction");
+        assert_eq!(created, 1, "exactly one skill should be materialized");
+
+        let target = workspace.join(".claude/skills").join("my-skill");
+        assert!(target.exists(), "target path must exist");
+
+        // Junctions are reparse points; `symlink_metadata` reports them
+        // as symlinks on Windows. The directory copy fallback would
+        // produce a real directory (is_symlink() == false).
+        let meta = std::fs::symlink_metadata(&target).unwrap();
+        assert!(
+            meta.file_type().is_symlink(),
+            "Windows directory link must be a junction (reparse point), \
+             not a copied directory"
+        );
+
+        // Reading through the link must surface the source contents.
+        let manifest = std::fs::read_to_string(target.join(SKILL_MANIFEST_FILE)).unwrap();
+        assert!(manifest.contains("name: my-skill"));
+        let nested = std::fs::read_to_string(target.join("nested").join("data.txt")).unwrap();
+        assert_eq!(nested, "payload");
     }
 }

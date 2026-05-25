@@ -601,6 +601,7 @@ dependencies = [
  "dirs",
  "http-body-util",
  "include_dir",
+ "junction",
  "mime_guess",
  "notify",
  "semver",
@@ -3234,6 +3235,16 @@ dependencies = [
  "signature 2.2.0",
  "simple_asn1",
  "zeroize",
+]
+
+[[package]]
+name = "junction"
+version = "1.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8cfc352a66ba903c23239ef51e809508b6fc2b0f90e3476ac7a9ff47e863ae95"
+dependencies = [
+ "scopeguard",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
