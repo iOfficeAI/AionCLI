@@ -1,7 +1,9 @@
-use std::path::Path;
+use std::fs::OpenOptions;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
 
+use fs2::FileExt;
 use sqlx::pool::PoolOptions;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
 use sqlx::{Sqlite, SqlitePool};
@@ -76,7 +78,9 @@ pub async fn init_database_memory() -> Result<Database, DbError> {
         .await
         .map_err(DbError::Query)?;
 
-    run_migrations(&pool).await?;
+    // In-memory DBs are not shared across processes, so no advisory lock is
+    // needed (and there is no on-disk path we could create one against).
+    run_migrations(&pool, None).await?;
     ensure_system_user(&pool).await?;
 
     info!("In-memory database initialized");
@@ -123,14 +127,30 @@ async fn try_init_file(path: &Path) -> Result<Database, DbError> {
         .await
         .map_err(DbError::Query)?;
 
-    run_migrations(&pool).await?;
+    run_migrations(&pool, Some(&migrate_lock_path(path))).await?;
     ensure_system_user(&pool).await?;
 
     info!("Database initialized at {}", path.display());
     Ok(Database { pool })
 }
 
-async fn run_migrations(pool: &SqlitePool) -> Result<(), DbError> {
+/// Path of the cross-process advisory lock file used to serialize concurrent
+/// migrators on the same database.
+///
+/// We put it next to the DB file so it lives on the same filesystem (avoids
+/// odd flock semantics across mount points) and gets cleaned up alongside the
+/// DB if a user resets their data directory.
+fn migrate_lock_path(db_path: &Path) -> PathBuf {
+    let mut p = db_path.to_path_buf();
+    let new_name = match p.file_name().and_then(|s| s.to_str()) {
+        Some(name) => format!("{name}.migrate.lock"),
+        None => "aionui.migrate.lock".to_string(),
+    };
+    p.set_file_name(new_name);
+    p
+}
+
+async fn run_migrations(pool: &SqlitePool, lock_path: Option<&Path>) -> Result<(), DbError> {
     ensure_schema_columns(pool).await?;
     // Migration 002 rebuilds tables via RENAME+DROP. Two pragmas are needed:
     // - foreign_keys=OFF: prevents DROP TABLE from triggering ON DELETE CASCADE
@@ -142,12 +162,99 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), DbError> {
         .execute(&mut *conn)
         .await
         .map_err(DbError::Query)?;
-    let result = sqlx::migrate!().run(&mut *conn).await.map_err(DbError::Migration);
+
+    // Cross-process serialisation. sqlx-sqlite's Migrate impl has no-op
+    // lock()/unlock() and the migrator does list_applied → apply without an
+    // outer transaction, so two processes opening the same DB simultaneously
+    // (e.g. Electron auto-update spawning v2.1.1 while v2.0.x is still
+    // shutting down, or `aioncore doctor` racing the server) can both decide
+    // to apply the same version and the slower one's INSERT into
+    // `_sqlx_migrations` blows up with `UNIQUE constraint failed:
+    // _sqlx_migrations.version`. Acquire an advisory file lock for the
+    // duration of migrate-run so the two processes serialise. The lock is
+    // released when the guard drops.
+    let _guard = lock_path.and_then(|p| match MigrateLockGuard::acquire(p) {
+        Ok(guard) => Some(guard),
+        Err(e) => {
+            // Don't fail startup if flock isn't available (e.g. on some
+            // network filesystems) — fall back to retry-on-conflict below.
+            warn!("Could not acquire migrate lock {}: {e}", p.display());
+            None
+        }
+    });
+
+    let result = run_migrations_with_retry(&mut conn).await;
+
     sqlx::query("PRAGMA foreign_keys = ON; PRAGMA legacy_alter_table = OFF")
         .execute(&mut *conn)
         .await
         .map_err(DbError::Query)?;
     result
+}
+
+/// Run sqlx migrations with one retry on `_sqlx_migrations` UNIQUE conflict.
+///
+/// The advisory file lock above already serialises well-behaved processes,
+/// but a UNIQUE conflict can still leak through when:
+/// - flock() failed (network FS, sandbox restrictions) and we proceeded.
+/// - Two processes that both bypassed the lock raced.
+///
+/// In every UNIQUE-conflict scenario the failing migration's transaction was
+/// rolled back, so re-running `sqlx::migrate!().run` is safe: the second
+/// pass sees the row that the winner committed, checksum matches (same
+/// shipped binary), and the migration is treated as already applied.
+async fn run_migrations_with_retry(conn: &mut sqlx::SqliteConnection) -> Result<(), DbError> {
+    match sqlx::migrate!().run(&mut *conn).await {
+        Ok(()) => Ok(()),
+        Err(e) if is_migrations_table_unique_conflict(&e) => {
+            warn!("Concurrent migrator detected (UNIQUE conflict on _sqlx_migrations); retrying");
+            sqlx::migrate!().run(&mut *conn).await.map_err(DbError::Migration)
+        }
+        Err(e) => Err(DbError::Migration(e)),
+    }
+}
+
+/// Detect the specific "another process inserted this version first" error.
+///
+/// sqlx wraps the SQLite error inside `MigrateError::Execute(sqlx::Error)`.
+/// We match on the textual message rather than the SQLite extended error code
+/// because sqlx loses the structured code by the time it bubbles up here.
+fn is_migrations_table_unique_conflict(err: &sqlx::migrate::MigrateError) -> bool {
+    let msg = err.to_string();
+    msg.contains("UNIQUE constraint failed: _sqlx_migrations.version")
+}
+
+/// RAII guard that holds an exclusive file lock for the lifetime of the
+/// migration run. Drop unlocks and best-effort closes the file handle.
+struct MigrateLockGuard {
+    file: std::fs::File,
+}
+
+impl MigrateLockGuard {
+    fn acquire(path: &Path) -> std::io::Result<Self> {
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)?;
+        }
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(path)?;
+        // Blocking lock — fs2 has no async variant. We're inside an async
+        // context but startup blocks anyway and the critical section is
+        // bounded (single-process migration run), so this is acceptable.
+        FileExt::lock_exclusive(&file)?;
+        Ok(Self { file })
+    }
+}
+
+impl Drop for MigrateLockGuard {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.file);
+    }
 }
 
 /// Ensure columns expected by Rust models exist in the database.
@@ -306,5 +413,35 @@ mod tests {
         .unwrap();
 
         assert_eq!(fk_table, "conversations");
+    }
+
+    #[test]
+    fn migrations_table_unique_conflict_detected_from_message() {
+        // Build the same Execute(sqlx::Error) shape that surfaces when two
+        // processes race on `INSERT INTO _sqlx_migrations`. The detector has
+        // to match on the textual message because the SQLite extended code
+        // is not preserved on the path through MigrateError.
+        let inner = sqlx::Error::Protocol("UNIQUE constraint failed: _sqlx_migrations.version".to_string());
+        let err = sqlx::migrate::MigrateError::Execute(inner);
+        assert!(is_migrations_table_unique_conflict(&err));
+    }
+
+    #[test]
+    fn migrations_table_unique_conflict_ignores_other_errors() {
+        let other = sqlx::migrate::MigrateError::VersionMismatch(3);
+        assert!(!is_migrations_table_unique_conflict(&other));
+
+        let unrelated = sqlx::migrate::MigrateError::Execute(sqlx::Error::Protocol(
+            "UNIQUE constraint failed: users.username".to_string(),
+        ));
+        assert!(!is_migrations_table_unique_conflict(&unrelated));
+    }
+
+    #[test]
+    fn migrate_lock_path_sits_next_to_db() {
+        let db = Path::new("/var/lib/aionui/aionui-backend.db");
+        let lock = migrate_lock_path(db);
+        assert_eq!(lock.parent(), db.parent());
+        assert_eq!(lock.file_name().unwrap(), "aionui-backend.db.migrate.lock");
     }
 }

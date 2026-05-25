@@ -578,6 +578,7 @@ version = "0.1.10"
 dependencies = [
  "aionui-common",
  "async-trait",
+ "fs2",
  "serde",
  "serde_json",
  "sqlx",

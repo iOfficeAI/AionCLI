@@ -389,3 +389,77 @@ async fn copy_legacy_then_init_database_works() {
     db.close().await;
     legacy_db2.close().await;
 }
+
+// -- Concurrent migrator regression (ELECTRON-1KK) --
+//
+// Repro for the Sentry secondary symptom: two processes opening the same
+// SQLite DB on first start (e.g. Electron auto-update spawning the new
+// version while the old one is still finalising shutdown, or
+// `aioncore doctor` racing the server) both decide to apply the same
+// migration version. sqlx-sqlite's lock()/unlock() are no-ops, so without
+// the advisory file lock and retry-on-UNIQUE the slower process used to
+// blow up with `UNIQUE constraint failed: _sqlx_migrations.version`.
+//
+// We use OS threads (not tokio::spawn) so each migrator runs on its own
+// runtime — this matches the real "two processes" topology more closely
+// than cooperative tasks would, and avoids the `&SqlitePool: Send` lifetime
+// gymnastics that block tokio::spawn on this future.
+#[test]
+fn concurrent_init_database_does_not_panic_on_unique_conflict() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("aionui-backend.db");
+
+    let mut handles = Vec::new();
+    for _ in 0..8 {
+        let p = path.clone();
+        handles.push(std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            rt.block_on(async move { init_database(&p).await })
+        }));
+    }
+
+    // Every thread must succeed — none should bubble up the UNIQUE-constraint
+    // error from `_sqlx_migrations`.
+    let mut errors = Vec::new();
+    for h in handles {
+        match h.join().expect("thread panicked") {
+            Ok(_db) => {}
+            Err(e) => errors.push(e.to_string()),
+        }
+    }
+    assert!(
+        errors.is_empty(),
+        "all parallel migrators should succeed, got errors: {errors:?}"
+    );
+
+    // All migrators converged on the same baseline schema with no duplicate
+    // `_sqlx_migrations` rows.
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        let db = init_database(&path).await.unwrap();
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert!(count.0 >= 1, "at least one migration should be recorded");
+
+        let dup: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM (SELECT version FROM _sqlx_migrations GROUP BY version HAVING COUNT(*) > 1)",
+        )
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+        assert_eq!(dup.0, 0, "no duplicate versions should ever exist in _sqlx_migrations");
+        db.close().await;
+    });
+
+    // Lock file is created next to the DB and is harmless to leave behind.
+    let lock = path.with_file_name("aionui-backend.db.migrate.lock");
+    assert!(lock.exists(), "advisory lock file should be present after migrate");
+}
