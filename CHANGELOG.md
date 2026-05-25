@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.11](https://github.com/iOfficeAI/AionCore/compare/v0.1.10...v0.1.11) (2026-05-25)
+
+
+### Bug Fixes
+
+* **acp:** load user MCP servers and emit empty-finish diagnostic (ELECTRON-1JG) ([#327](https://github.com/iOfficeAI/AionCore/issues/327)) ([2a6c2e9](https://github.com/iOfficeAI/AionCore/commit/2a6c2e943683a72eebaaa1d608be10fe5f795634))
+* **acp:** track close reason to avoid reporting user cancel as crash (ELECTRON-1K0) ([#328](https://github.com/iOfficeAI/AionCore/issues/328)) ([9506f9d](https://github.com/iOfficeAI/AionCore/commit/9506f9d1666e26b8659e3339dbfa8f13568f54ce))
+* **ai-agent:** rebuild ACP session when CLI rejects stale sid (ELECTRON-1HQ) ([#320](https://github.com/iOfficeAI/AionCore/issues/320)) ([b4d8a75](https://github.com/iOfficeAI/AionCore/commit/b4d8a7505e78c48ed26af364b6e13ad4302b4727))
+* **assistant:** default agent_type to aionrs and resolve by provider (ELECTRON-1J1, ELECTRON-1KV) ([#325](https://github.com/iOfficeAI/AionCore/issues/325)) ([5c7fa04](https://github.com/iOfficeAI/AionCore/commit/5c7fa04bef47cf5bf2ea6badc66f723f0aafe1ec))
+* **db:** serialize migrations with fs2 file lock to avoid concurrent race (ELECTRON-1KK) ([#329](https://github.com/iOfficeAI/AionCore/issues/329)) ([8550851](https://github.com/iOfficeAI/AionCore/commit/85508518b1df99b48d9ea09f474ed4d64437e8af))
+* **extension:** fall back to directory copy when Windows symlink fails (Sentry I1) ([#331](https://github.com/iOfficeAI/AionCore/issues/331)) ([d65a0a1](https://github.com/iOfficeAI/AionCore/commit/d65a0a13449f0941a68adbeae950f094e2545bfe))
+* **realtime:** forward id and read nested data in subscribe-show-open ([#323](https://github.com/iOfficeAI/AionCore/issues/323)) ([7dc222f](https://github.com/iOfficeAI/AionCore/commit/7dc222fd444e3869e7b44101fa709e4704ad0a7e))
+
 ## [0.1.10](https://github.com/iOfficeAI/AionCore/compare/v0.1.9...v0.1.10) (2026-05-24)
 
 
