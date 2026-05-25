@@ -8,7 +8,7 @@ use crate::manager::acp::{
     AcpSession, AcpSessionEvent, ModelIdentityReminderHook, PermissionRouter, SessionNewPreludeHook,
 };
 use crate::protocol::acp::AcpProtocol;
-use crate::protocol::error::AcpError;
+use crate::protocol::error::{AcpError, CloseReason};
 use crate::protocol::events::{AgentStreamEvent, FinishEventData};
 use crate::registry::CatalogSender;
 use crate::shared_kernel::{ModeId, ModelId, SessionId as DomainSessionId};
@@ -33,7 +33,10 @@ use tracing::{debug, error, info, warn};
 /// response bodies, but the WebSocket `error` event we broadcast goes straight
 /// to the renderer and gets shown verbatim — the prefix only adds noise. Strip
 /// it so the user sees the upstream message.
-fn user_facing_message(err: &AppError) -> String {
+///
+/// `pub(super)` so the close-path helpers in `agent_close.rs` can reuse the
+/// same prefix-stripping logic when fabricating the `Failed { display }` arm.
+pub(super) fn user_facing_message(err: &AppError) -> String {
     let full = err.to_string();
     // Each variant's Display starts with `"<Tag>: "`. Find the first ": " and
     // return what follows. Variants without a colon (e.g. `RateLimited` →
@@ -55,7 +58,10 @@ const ACP_KILL_GRACE_MS: u64 = 500;
 /// numeric value is rendered as `Some("signal:N")`. On Windows there are no
 /// POSIX signals, so `signal` stays `None` and the upstream exit code is the
 /// only diagnostic.
-fn exit_status_parts(exit: Option<std::process::ExitStatus>) -> (Option<i32>, Option<String>) {
+///
+/// `pub(super)` so the close-path helpers in `agent_close.rs` can read the
+/// child's status when a `send_message` fails after init.
+pub(super) fn exit_status_parts(exit: Option<std::process::ExitStatus>) -> (Option<i32>, Option<String>) {
     let Some(status) = exit else {
         return (None, None);
     };
@@ -138,7 +144,9 @@ pub struct AcpAgentManager {
     pub(super) pipeline: PromptPipeline,
 
     /// Underlying CLI process (for lifecycle management: kill, is_running).
-    process: Arc<CliAgentProcess>,
+    /// `pub(super)` so the close-path helpers in `agent_close.rs` can read
+    /// `exit_status` and peek stderr without going through a wrapper method.
+    pub(super) process: Arc<CliAgentProcess>,
 
     /// Mutex for serializing session operations (new/load/send).
     session_lock: Mutex<()>,
@@ -584,14 +592,29 @@ impl crate::agent_task::IAgentTask for AcpAgentManager {
                 self.runtime.emit_finish(None);
             }
             Err(err) => {
-                let augmented = self.augment_with_stderr(err).await;
-                if let Some(d) = augmented.as_deref() {
-                    warn!(error = %ErrorChain(err), augmented = %d, "ACP send_message failed");
-                } else {
-                    warn!(error = %ErrorChain(err), "ACP send_message failed");
+                // Build a CloseReason that captures whatever context we still
+                // have. Two cases matter:
+                //   1. The CLI process has already exited — we can read the
+                //      exit code/signal directly and run the stderr tail
+                //      through the redaction allowlist, even if the SDK
+                //      surfaced the failure as a generic JSON-RPC error.
+                //   2. The process is still alive — fall back to the existing
+                //      stderr-augmentation heuristic for the SDK's "default
+                //      Internal error" shape; otherwise the user-facing form
+                //      of the AppError is the best we can do.
+                let close_reason = self.build_close_reason_from_error(err).await;
+
+                // Operator log: full error chain + the (raw, pre-redaction)
+                // stderr peek so on-call can correlate. The redacted summary
+                // is what reaches the UI.
+                let summary = close_reason.user_facing_message();
+                warn!(error = %ErrorChain(err), close_reason_summary = %summary, "ACP send_message failed");
+
+                {
+                    let mut session = self.session.write().await;
+                    session.record_close_reason(Some(close_reason));
                 }
-                let payload = augmented.unwrap_or_else(|| user_facing_message(err));
-                self.runtime.emit_error(payload);
+                self.runtime.emit_error(summary);
             }
         }
         result
@@ -606,6 +629,16 @@ impl crate::agent_task::IAgentTask for AcpAgentManager {
                 .cancel(CancelNotification::new(SessionId::new(sid.as_str())));
         }
         self.permission_router.cancel_all();
+
+        // Distinguish a deliberate user-cancel from a crash: the toast can
+        // say "Conversation cancelled" instead of a generic "session closed".
+        // We still emit Finish (not Error) here — cancel is a clean
+        // termination — but record the close reason so anyone consulting
+        // the aggregate state for diagnostics sees the canonical signal.
+        {
+            let mut session = self.session.write().await;
+            session.record_close_reason(Some(CloseReason::UserCancel));
+        }
 
         // Force status to Finished and emit unconditionally, bypassing the
         // absorbing-state guard. This ensures StreamRelay always receives
@@ -662,13 +695,12 @@ impl crate::agent_task::IAgentTask for AcpAgentManager {
 
         // m1 fix: emit error with the kill reason so the status goes to
         // Finished and subscribers see a terminal event. Idempotent.
-        let message = match reason {
-            Some(AgentKillReason::IdleTimeout) => "Agent killed: idle timeout".to_owned(),
-            Some(AgentKillReason::TeamMcpRebuild) => "Agent killed: team MCP rebuild".to_owned(),
-            Some(AgentKillReason::TeamDeleted) => "Agent killed: team deleted".to_owned(),
-            Some(AgentKillReason::ConversationDeleted) => "Agent killed: conversation deleted".to_owned(),
-            None => "Agent killed".to_owned(),
-        };
+        // Source of truth for the toast text is `CloseReason::Killed`.
+        let close_reason = CloseReason::Killed { reason };
+        let message = close_reason.user_facing_message();
+        if let Ok(mut session) = self.session.try_write() {
+            session.record_close_reason(Some(close_reason));
+        }
         self.runtime.emit_error(message);
 
         Ok(())
@@ -707,46 +739,8 @@ impl AcpAgentManager {
     }
 }
 
-impl AcpAgentManager {
-    /// If `err` is the "SDK gave us default Internal error with no data" shape,
-    /// peek the child's recent stderr and try to surface a more informative
-    /// message. Returns `None` when augmentation does not apply or finds nothing.
-    ///
-    /// Why string-matching: `AppError::BadGateway(String)` has discarded the
-    /// structured `AcpError` by the time we see it. The default-message
-    /// signature is narrow and stable enough that matching on the inner string
-    /// is cheaper than threading typed errors through the manager API. Keep
-    /// this in sync with `AcpError::Display` in
-    /// `crates/aionui-ai-agent/src/protocol/error.rs` if its fallback wording
-    /// changes.
-    async fn augment_with_stderr(&self, err: &AppError) -> Option<String> {
-        const SDK_DEFAULT_BAD_GATEWAY_PREFIX: &str = "Bad gateway: Agent internal error (code ";
-        /// How many trailing stderr lines we hand to the extractor.
-        /// 32 lines is well below the 8 KiB ring-buffer cap and comfortably
-        /// covers a tracing event with its preceding context.
-        const STDERR_PEEK_LINES: usize = 32;
-
-        let display = err.to_string();
-        // Match the Display produced by Task 1 for `AgentInternal` whenever the
-        // SDK gave us its default "Internal error" message — with or without
-        // `data`. When `data=Some`, Display ends in ") ({json})" which still
-        // satisfies `ends_with(')')`, so we augment in that case too. That is
-        // intentional: stderr context is generally more user-friendly than the
-        // raw `data` JSON, and the operator log retains both via `ErrorChain`.
-        // Examples that match:  "Bad gateway: Agent internal error (code -32603)"
-        //                       "Bad gateway: Agent internal error (code -32099)"
-        // Do NOT match anything that has a real upstream message after the prefix.
-        let is_default_internal = display.starts_with(SDK_DEFAULT_BAD_GATEWAY_PREFIX) && display.ends_with(')');
-        if !is_default_internal {
-            return None;
-        }
-
-        // Read the last STDERR_PEEK_LINES lines of the child's stderr (cheap;
-        // ring buffer is bounded to 8 KiB ≈ a few hundred lines max).
-        let tail = self.process.peek_stderr_tail(STDERR_PEEK_LINES).await;
-        super::stderr_error_extractor::extract_error_message(&tail)
-    }
-}
+// `augment_with_stderr` and `build_close_reason_from_error` live in
+// `agent_close.rs` to keep this file under the 1000-line budget.
 
 #[cfg(test)]
 mod tests {
@@ -816,10 +810,13 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    async fn spawn_with_stderr(stderr_payload: &str) -> Arc<CliAgentProcess> {
+    /// Spawn a sh subprocess that writes `stderr_payload` to stderr then
+    /// exits with `exit_code`. Used to simulate ACP CLI crashes/exits in
+    /// close-path tests. Lines containing `'` are escaped for the heredoc.
+    async fn spawn_with_stderr_and_exit(stderr_payload: &str, exit_code: u8) -> Arc<CliAgentProcess> {
         use aionui_common::CommandSpec;
-        // Heredoc lets us embed apostrophes etc. without quoting headaches.
-        let script = format!("cat <<'EOF' >&2\n{stderr_payload}\nEOF");
+        let payload = stderr_payload.replace('\'', "'\\''");
+        let script = format!("cat <<'EOF' >&2\n{payload}\nEOF\nexit {exit_code}");
         let config = CommandSpec {
             command: "sh".into(),
             args: vec!["-c".into(), script],
@@ -832,6 +829,10 @@ mod tests {
             .unwrap();
         tokio::time::sleep(Duration::from_millis(100)).await;
         Arc::new(proc)
+    }
+
+    async fn spawn_with_stderr(stderr_payload: &str) -> Arc<CliAgentProcess> {
+        spawn_with_stderr_and_exit(stderr_payload, 0).await
     }
 
     async fn augment_via_process(proc: &Arc<CliAgentProcess>, err: &AppError) -> Option<String> {
@@ -874,4 +875,8 @@ mod tests {
 
         assert!(augment_via_process(&proc, &err).await.is_none());
     }
+
+    // Close-reason compositional tests live in `agent_close.rs` so that
+    // (a) `agent.rs` stays under the 1000-line budget, and (b) the test
+    // suite for the close-path helpers sits next to the production logic.
 }

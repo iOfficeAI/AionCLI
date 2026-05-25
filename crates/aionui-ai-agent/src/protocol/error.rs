@@ -1,5 +1,81 @@
 use agent_client_protocol::{Error as SdkError, ErrorCode};
-use aionui_common::AppError;
+use aionui_common::{AgentKillReason, AppError};
+
+/// Why an ACP session was closed / terminated.
+///
+/// Captured at the close site (cancel / kill / send-message-error) so the
+/// next user-facing toast can render something better than "session closed"
+/// or "Bad gateway". `summary` is the redacted, user-safe message — stderr
+/// MUST be filtered through `stderr_error_extractor::extract_error_message`
+/// before reaching this type. Raw stderr is logged via `tracing` only and
+/// must never land here.
+///
+/// Lifecycle:
+/// - writer: `AcpSession::record_close_reason`, called by the manager when
+///   a close path runs (`send_message` Err, `cancel`, `kill`, post-init
+///   process exit detection).
+/// - reader: `AcpSession::last_close_reason`, drained by the manager when
+///   composing the user-facing error message for the next toast.
+/// - invalidation: cleared on `clear_session_id` and on
+///   `record_close_reason(None)` so a rebuilt session starts fresh.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)] // `Killed`/`UserCancel` are wired by the manager close path; kept for completeness across all close sites.
+pub enum CloseReason {
+    /// User cancelled the in-flight prompt via `cancel()`. Distinct from
+    /// `Killed` so the toast can say "cancelled" instead of "killed".
+    UserCancel,
+
+    /// Manager invoked `kill()` (idle timeout, conversation deletion, …).
+    /// Carries the structured reason so the toast text is actionable.
+    Killed { reason: Option<AgentKillReason> },
+
+    /// CLI process exited unexpectedly. Mirrors `AcpError::Disconnected`
+    /// but with a redacted summary; stderr stays in tracing logs only.
+    ProcessExited {
+        exit_code: Option<i32>,
+        signal: Option<String>,
+        /// User-safe summary derived from `extract_error_message` over the
+        /// stderr tail. Empty when the extractor's allowlist did not match.
+        redacted_summary: String,
+    },
+
+    /// Generic upstream / protocol failure that closed the turn but where
+    /// the process is still alive. `display` is the
+    /// `user_facing_message`-stripped form of the originating `AppError`,
+    /// so it never starts with "Bad gateway: ".
+    Failed { display: String },
+}
+
+impl CloseReason {
+    /// Render a single-line, user-facing summary safe to broadcast over
+    /// WebSocket / put into HTTP responses. stderr never leaves the
+    /// `redacted_summary` field, which is itself allowlist-filtered.
+    pub fn user_facing_message(&self) -> String {
+        match self {
+            CloseReason::UserCancel => "Conversation cancelled".to_owned(),
+            CloseReason::Killed { reason } => match reason {
+                Some(AgentKillReason::IdleTimeout) => "Agent killed: idle timeout".to_owned(),
+                Some(AgentKillReason::TeamMcpRebuild) => "Agent killed: team MCP rebuild".to_owned(),
+                Some(AgentKillReason::TeamDeleted) => "Agent killed: team deleted".to_owned(),
+                Some(AgentKillReason::ConversationDeleted) => "Agent killed: conversation deleted".to_owned(),
+                None => "Agent killed".to_owned(),
+            },
+            CloseReason::ProcessExited {
+                exit_code,
+                signal,
+                redacted_summary,
+            } => {
+                let detail = format_exit_detail(*exit_code, signal.as_deref());
+                if redacted_summary.is_empty() {
+                    format!("Agent process exited{detail}")
+                } else {
+                    format!("Agent process exited{detail}: {redacted_summary}")
+                }
+            }
+            CloseReason::Failed { display } => display.clone(),
+        }
+    }
+}
 
 /// ACP-specific error type for protocol and process lifecycle errors.
 ///
@@ -268,6 +344,97 @@ impl From<AcpError> for AppError {
 mod tests {
     use super::*;
     use axum::http::StatusCode;
+
+    // ── CloseReason ─────────────────────────────────────────────────────
+
+    #[test]
+    fn close_reason_user_cancel_is_user_friendly() {
+        let msg = CloseReason::UserCancel.user_facing_message();
+        assert_eq!(msg, "Conversation cancelled");
+    }
+
+    #[test]
+    fn close_reason_killed_renders_each_kill_reason() {
+        assert_eq!(
+            CloseReason::Killed {
+                reason: Some(AgentKillReason::IdleTimeout)
+            }
+            .user_facing_message(),
+            "Agent killed: idle timeout"
+        );
+        assert_eq!(
+            CloseReason::Killed {
+                reason: Some(AgentKillReason::ConversationDeleted)
+            }
+            .user_facing_message(),
+            "Agent killed: conversation deleted"
+        );
+        assert_eq!(
+            CloseReason::Killed { reason: None }.user_facing_message(),
+            "Agent killed"
+        );
+    }
+
+    #[test]
+    fn close_reason_process_exited_renders_exit_code_and_summary() {
+        let msg = CloseReason::ProcessExited {
+            exit_code: Some(127),
+            signal: None,
+            redacted_summary: "usage limit exceeded".into(),
+        }
+        .user_facing_message();
+        assert!(msg.contains("exit code 127"), "got {msg}");
+        assert!(msg.contains("usage limit exceeded"), "got {msg}");
+    }
+
+    #[test]
+    fn close_reason_process_exited_omits_summary_when_empty() {
+        // No allowlist match → no trailing colon, no stray noise.
+        let msg = CloseReason::ProcessExited {
+            exit_code: Some(1),
+            signal: None,
+            redacted_summary: String::new(),
+        }
+        .user_facing_message();
+        assert!(msg.contains("exit code 1"), "got {msg}");
+        assert!(!msg.ends_with(": "), "must not have a dangling colon; got {msg}");
+    }
+
+    #[test]
+    fn close_reason_process_exited_includes_signal() {
+        let msg = CloseReason::ProcessExited {
+            exit_code: None,
+            signal: Some("signal:9".into()),
+            redacted_summary: String::new(),
+        }
+        .user_facing_message();
+        assert!(msg.contains("signal:9"), "got {msg}");
+    }
+
+    #[test]
+    fn close_reason_user_facing_message_is_safe_to_redisplay() {
+        // The helper produced a synthetic stderr containing fake credentials.
+        // The allowlist filter is responsible for keeping that out of the
+        // `redacted_summary` field — the user_facing_message helper itself
+        // must not invent or re-fetch any non-allowlisted content.
+        let reason = CloseReason::ProcessExited {
+            exit_code: Some(2),
+            signal: None,
+            redacted_summary: "rate limit exceeded".into(),
+        };
+        let msg = reason.user_facing_message();
+        assert!(!msg.contains("Bearer"), "must not include synthetic secret material");
+        assert!(!msg.contains("api_key="), "must not include synthetic secret material");
+        assert!(msg.contains("rate limit exceeded"));
+    }
+
+    #[test]
+    fn close_reason_failed_carries_through_user_facing_text() {
+        let reason = CloseReason::Failed {
+            display: "API Error: Internal server error".into(),
+        };
+        assert_eq!(reason.user_facing_message(), "API Error: Internal server error");
+    }
 
     #[test]
     fn retryable_variants() {
