@@ -23,6 +23,27 @@ use tracing::{debug, error, info, warn};
 /// Number of text chunks to accumulate before flushing to the database.
 const FLUSH_INTERVAL: u32 = 20;
 
+#[derive(Debug, Clone)]
+struct TextSegmentState {
+    id: String,
+    buffer: String,
+    created_at: i64,
+    record_created: bool,
+    flush_counter: u32,
+}
+
+#[derive(Debug, Clone)]
+struct PersistedTextSegment {
+    id: String,
+}
+
+#[derive(Debug, Clone)]
+struct ThinkingSegmentState {
+    id: String,
+    buffer: String,
+    started_at: i64,
+}
+
 /// Result returned after a relay turn has fully drained and finalized.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RelayOutcome {
@@ -80,97 +101,125 @@ impl StreamRelay {
         let started_at = now_ms();
         info!("StreamRelay started");
 
-        let mut text_buffer = String::new();
-        let mut thinking_buffer = String::new();
-        let mut thinking_started_at: Option<i64> = None;
-        let mut record_created = false;
-        let mut flush_counter: u32 = 0;
-        let mut has_thinking = false;
+        let mut full_text_buffer = String::new();
+        let mut text_segments: Vec<PersistedTextSegment> = Vec::new();
+        let mut active_text: Option<TextSegmentState> = None;
+        let mut active_thinking: Option<ThinkingSegmentState> = None;
+        let mut used_primary_text_msg_id = false;
+        let mut used_primary_thinking_msg_id = false;
 
         loop {
             match rx.recv().await {
-                Ok(event) => {
-                    match &event {
-                        AgentStreamEvent::Thinking(data) => {
-                            has_thinking = true;
-                            if data.status.as_deref() != Some("done") {
-                                if thinking_started_at.is_none() {
-                                    thinking_started_at = Some(now_ms());
-                                }
-                                thinking_buffer.push_str(&data.content);
-                            }
-                            self.forward_to_websocket(&event);
+                Ok(event) => match &event {
+                    AgentStreamEvent::Thinking(data) => {
+                        if data.status.as_deref() == Some("done") {
+                            self.complete_active_thinking(&mut active_thinking).await;
+                            continue;
                         }
-                        AgentStreamEvent::Text(data) => {
-                            self.forward_to_websocket(&event);
-                            text_buffer.push_str(&data.content);
-                            flush_counter += 1;
-                            if flush_counter >= FLUSH_INTERVAL {
-                                self.flush_text(&text_buffer, &mut record_created).await;
-                                flush_counter = 0;
-                            }
-                        }
-                        AgentStreamEvent::Finish(_) | AgentStreamEvent::Error(_) => {
-                            let elapsed_ms = now_ms() - started_at;
-                            let event_type = if matches!(event, AgentStreamEvent::Finish(_)) {
-                                "Finish"
-                            } else {
-                                "Error"
-                            };
-                            info!(
-                                event_type,
-                                elapsed_ms,
-                                text_len = text_buffer.len(),
-                                "StreamRelay received terminal event"
-                            );
-                            // Send thinking_done BEFORE the terminal event so the
-                            // frontend receives it while still in "running" state.
-                            // Otherwise the thinking_done arriving after finish
-                            // re-activates the processing indicator.
-                            if has_thinking {
-                                self.send_thinking_done(thinking_started_at);
-                            }
-                            self.forward_to_websocket(&event);
-                            self.persist_thinking(&thinking_buffer, thinking_started_at).await;
-                            let outcome = self.finalize(&text_buffer, &record_created, &event).await;
-                            if self.complete_turn {
-                                Self::complete_conversation(&self.repo, &self.broadcaster, &self.conversation_id).await;
-                            }
-                            break outcome;
-                        }
-                        AgentStreamEvent::ToolCall(data) => {
-                            self.forward_to_websocket(&event);
-                            self.persist_tool_call(data).await;
-                        }
-                        AgentStreamEvent::AcpToolCall(data) => {
-                            self.forward_to_websocket(&event);
-                            self.persist_acp_tool_call(data).await;
-                        }
-                        AgentStreamEvent::ToolGroup(entries) => {
-                            self.forward_to_websocket(&event);
-                            self.persist_tool_group(entries).await;
-                        }
-                        _ => {
-                            self.forward_to_websocket(&event);
+
+                        self.close_active_text_segment(&mut active_text, &mut text_segments, "finish")
+                            .await;
+
+                        let segment = active_thinking.get_or_insert_with(|| ThinkingSegmentState {
+                            id: Self::mint_segment_msg_id(&mut used_primary_thinking_msg_id, &self.msg_id),
+                            buffer: String::new(),
+                            started_at: now_ms(),
+                        });
+                        segment.buffer.push_str(&data.content);
+                        self.forward_to_websocket_with_msg_id(&segment.id, &event);
+                    }
+                    AgentStreamEvent::Text(data) => {
+                        self.complete_active_thinking(&mut active_thinking).await;
+
+                        let segment = active_text.get_or_insert_with(|| TextSegmentState {
+                            id: Self::mint_segment_msg_id(&mut used_primary_text_msg_id, &self.msg_id),
+                            buffer: String::new(),
+                            created_at: now_ms(),
+                            record_created: false,
+                            flush_counter: 0,
+                        });
+                        self.forward_to_websocket_with_msg_id(&segment.id, &event);
+                        segment.buffer.push_str(&data.content);
+                        full_text_buffer.push_str(&data.content);
+                        segment.flush_counter += 1;
+                        if segment.flush_counter >= FLUSH_INTERVAL {
+                            self.flush_text_segment(segment).await;
+                            segment.flush_counter = 0;
                         }
                     }
-                }
+                    AgentStreamEvent::Finish(_) | AgentStreamEvent::Error(_) => {
+                        let elapsed_ms = now_ms() - started_at;
+                        let event_type = if matches!(event, AgentStreamEvent::Finish(_)) {
+                            "Finish"
+                        } else {
+                            "Error"
+                        };
+                        info!(
+                            event_type,
+                            elapsed_ms,
+                            text_len = full_text_buffer.len(),
+                            "StreamRelay received terminal event"
+                        );
+
+                        self.complete_active_thinking(&mut active_thinking).await;
+                        self.close_active_text_segment(
+                            &mut active_text,
+                            &mut text_segments,
+                            if matches!(event, AgentStreamEvent::Error(_)) {
+                                "error"
+                            } else {
+                                "finish"
+                            },
+                        )
+                        .await;
+                        self.forward_to_websocket(&event);
+                        let outcome = self.finalize(&full_text_buffer, &text_segments, &event).await;
+                        if self.complete_turn {
+                            Self::complete_conversation(&self.repo, &self.broadcaster, &self.conversation_id).await;
+                        }
+                        break outcome;
+                    }
+                    AgentStreamEvent::ToolCall(data) => {
+                        self.complete_active_thinking(&mut active_thinking).await;
+                        self.close_active_text_segment(&mut active_text, &mut text_segments, "finish")
+                            .await;
+                        self.forward_to_websocket(&event);
+                        self.persist_tool_call(data).await;
+                    }
+                    AgentStreamEvent::AcpToolCall(data) => {
+                        self.complete_active_thinking(&mut active_thinking).await;
+                        self.close_active_text_segment(&mut active_text, &mut text_segments, "finish")
+                            .await;
+                        self.forward_to_websocket(&event);
+                        self.persist_acp_tool_call(data).await;
+                    }
+                    AgentStreamEvent::ToolGroup(entries) => {
+                        self.complete_active_thinking(&mut active_thinking).await;
+                        self.close_active_text_segment(&mut active_text, &mut text_segments, "finish")
+                            .await;
+                        self.forward_to_websocket(&event);
+                        self.persist_tool_group(entries).await;
+                    }
+                    _ => {
+                        self.forward_to_websocket(&event);
+                    }
+                },
                 Err(broadcast::error::RecvError::Closed) => {
                     let elapsed_ms = now_ms() - started_at;
                     warn!(
                         elapsed_ms,
-                        text_len = text_buffer.len(),
+                        text_len = full_text_buffer.len(),
                         "StreamRelay channel closed without terminal event"
                     );
-                    if has_thinking {
-                        self.send_thinking_done(thinking_started_at);
-                    }
-                    self.persist_thinking(&thinking_buffer, thinking_started_at).await;
+
+                    self.complete_active_thinking(&mut active_thinking).await;
+                    self.close_active_text_segment(&mut active_text, &mut text_segments, "finish")
+                        .await;
                     // Channel closed without finish/error — still finalize
                     let outcome = self
                         .finalize(
-                            &text_buffer,
-                            &record_created,
+                            &full_text_buffer,
+                            &text_segments,
                             &AgentStreamEvent::Finish(aionui_ai_agent::protocol::events::FinishEventData::default()),
                         )
                         .await;
@@ -186,9 +235,23 @@ impl StreamRelay {
         }
     }
 
+    fn mint_segment_msg_id(used_primary: &mut bool, primary_msg_id: &str) -> String {
+        if !*used_primary {
+            *used_primary = true;
+            primary_msg_id.to_owned()
+        } else {
+            ConversationService::mint_msg_id()
+        }
+    }
+
     /// Forward an agent event to connected WebSocket clients.
     #[tracing::instrument(skip_all)]
     fn forward_to_websocket(&self, event: &AgentStreamEvent) {
+        self.forward_to_websocket_with_msg_id(&self.msg_id, event);
+    }
+
+    #[tracing::instrument(skip_all)]
+    fn forward_to_websocket_with_msg_id(&self, msg_id: &str, event: &AgentStreamEvent) {
         let mut event_data = match serde_json::to_value(event) {
             Ok(v) => v,
             Err(e) => {
@@ -203,7 +266,7 @@ impl StreamRelay {
 
         let payload = json!({
             "conversation_id": self.conversation_id,
-            "msg_id": self.msg_id,
+            "msg_id": msg_id,
             "type": event_data.get("type").cloned().unwrap_or(json!("unknown")),
             "data": event_data.get("data").cloned().unwrap_or(json!({})),
             "hidden": false,
@@ -212,50 +275,87 @@ impl StreamRelay {
         self.broadcast_stream_payload(payload);
     }
 
-    /// Flush accumulated text to the database (create or update).
+    /// Flush an active text segment to the database (create or update).
     #[tracing::instrument(skip_all)]
-    async fn flush_text(&self, text: &str, record_created: &mut bool) {
-        if text.is_empty() {
+    async fn flush_text_segment(&self, segment: &mut TextSegmentState) {
+        if segment.buffer.is_empty() {
             return;
         }
 
-        let content = json!({ "content": text }).to_string();
+        let content = json!({ "content": segment.buffer }).to_string();
 
-        if *record_created {
+        if segment.record_created {
             let update = aionui_db::MessageRowUpdate {
                 content: Some(content),
                 status: Some(Some("work".into())),
                 hidden: None,
             };
-            if let Err(e) = self.repo.update_message(&self.msg_id, &update).await {
-                error!(error = %ErrorChain(&e), "Failed to update streaming message");
+            if let Err(e) = self.repo.update_message(&segment.id, &update).await {
+                error!(error = %ErrorChain(&e), "Failed to update streaming text segment");
             }
         } else {
-            // `id` and `msg_id` share the same value: primary key is the
-            // legacy contract, while `msg_id` is what the WebSocket stream
-            // and frontend message index use to correlate chunks to the
-            // persisted row. Keeping them equal avoids a schema migration.
             let row = MessageRow {
-                id: self.msg_id.clone(),
+                id: segment.id.clone(),
                 conversation_id: self.conversation_id.clone(),
-                msg_id: Some(self.msg_id.clone()),
+                msg_id: Some(segment.id.clone()),
                 r#type: "text".into(),
                 content,
                 position: Some("left".into()),
                 status: Some("work".into()),
                 hidden: false,
-                created_at: now_ms(),
+                created_at: segment.created_at,
             };
             if let Err(e) = self.repo.insert_message(&row).await {
-                error!(error = %ErrorChain(&e), "Failed to create streaming message");
+                error!(error = %ErrorChain(&e), "Failed to create streaming text segment");
             }
-            *record_created = true;
+            segment.record_created = true;
         }
     }
 
-    /// Finalize the assistant message on stream end.
     #[tracing::instrument(skip_all)]
-    async fn finalize(&self, text: &str, record_created: &bool, event: &AgentStreamEvent) -> RelayOutcome {
+    async fn finalize_text_segment(&self, segment: TextSegmentState, status: &str) -> Option<PersistedTextSegment> {
+        if segment.buffer.is_empty() {
+            return None;
+        }
+
+        let content = json!({ "content": segment.buffer }).to_string();
+        if segment.record_created {
+            let update = aionui_db::MessageRowUpdate {
+                content: Some(content),
+                status: Some(Some(status.to_owned())),
+                hidden: Some(false),
+            };
+            if let Err(e) = self.repo.update_message(&segment.id, &update).await {
+                error!(error = %ErrorChain(&e), "Failed to finalize text segment");
+            }
+        } else {
+            let row = MessageRow {
+                id: segment.id.clone(),
+                conversation_id: self.conversation_id.clone(),
+                msg_id: Some(segment.id.clone()),
+                r#type: "text".into(),
+                content,
+                position: Some("left".into()),
+                status: Some(status.to_owned()),
+                hidden: false,
+                created_at: segment.created_at,
+            };
+            if let Err(e) = self.repo.insert_message(&row).await {
+                error!(error = %ErrorChain(&e), "Failed to create finalized text segment");
+            }
+        }
+
+        Some(PersistedTextSegment { id: segment.id })
+    }
+
+    /// Finalize assistant text on stream end and apply middleware rewrites.
+    #[tracing::instrument(skip_all)]
+    async fn finalize(
+        &self,
+        text: &str,
+        text_segments: &[PersistedTextSegment],
+        event: &AgentStreamEvent,
+    ) -> RelayOutcome {
         let mut outcome = RelayOutcome::default();
         let status = match event {
             AgentStreamEvent::Error(_) => "error",
@@ -266,37 +366,57 @@ impl StreamRelay {
             let processed = self.process_final_text(text).await;
             let final_text = processed.message.trim().to_owned();
             let hidden = final_text.is_empty();
-            let content = json!({ "content": final_text }).to_string();
 
-            if *record_created || !hidden {
-                if *record_created {
+            if let Some(primary_segment) = text_segments.first() {
+                if processed.message != text || hidden {
+                    let content = json!({ "content": final_text }).to_string();
                     let update = aionui_db::MessageRowUpdate {
                         content: Some(content),
                         status: Some(Some(status.to_owned())),
                         hidden: Some(hidden),
                     };
-                    if let Err(e) = self.repo.update_message(&self.msg_id, &update).await {
-                        error!(error = %ErrorChain(&e), "Failed to finalize streaming message");
+                    if let Err(e) = self.repo.update_message(&primary_segment.id, &update).await {
+                        error!(error = %ErrorChain(&e), "Failed to rewrite finalized text segment");
+                    }
+                    self.send_final_text_override(&primary_segment.id, &processed.message, hidden);
+
+                    for segment in text_segments.iter().skip(1) {
+                        let hide_update = aionui_db::MessageRowUpdate {
+                            content: None,
+                            status: Some(Some(status.to_owned())),
+                            hidden: Some(true),
+                        };
+                        if let Err(e) = self.repo.update_message(&segment.id, &hide_update).await {
+                            error!(error = %ErrorChain(&e), "Failed to hide superseded text segment");
+                        }
+                        self.send_final_text_override(&segment.id, "", true);
                     }
                 } else {
-                    let row = MessageRow {
-                        id: self.msg_id.clone(),
-                        conversation_id: self.conversation_id.clone(),
-                        msg_id: Some(self.msg_id.clone()),
-                        r#type: "text".into(),
-                        content,
-                        position: Some("left".into()),
-                        status: Some(status.to_owned()),
-                        hidden,
-                        created_at: now_ms(),
-                    };
-                    if let Err(e) = self.repo.insert_message(&row).await {
-                        error!(error = %ErrorChain(&e), "Failed to create final message");
+                    for segment in text_segments {
+                        let status_update = aionui_db::MessageRowUpdate {
+                            content: None,
+                            status: Some(Some(status.to_owned())),
+                            hidden: Some(false),
+                        };
+                        if let Err(e) = self.repo.update_message(&segment.id, &status_update).await {
+                            error!(error = %ErrorChain(&e), "Failed to finalize text segment status");
+                        }
                     }
                 }
-
-                if processed.message != text || hidden {
-                    self.send_final_text_override(&processed.message, hidden);
+            } else if !hidden {
+                let row = MessageRow {
+                    id: self.msg_id.clone(),
+                    conversation_id: self.conversation_id.clone(),
+                    msg_id: Some(self.msg_id.clone()),
+                    r#type: "text".into(),
+                    content: json!({ "content": final_text }).to_string(),
+                    position: Some("left".into()),
+                    status: Some(status.to_owned()),
+                    hidden: false,
+                    created_at: now_ms(),
+                };
+                if let Err(e) = self.repo.insert_message(&row).await {
+                    error!(error = %ErrorChain(&e), "Failed to create final fallback message");
                 }
             }
 
@@ -324,33 +444,50 @@ impl StreamRelay {
         outcome
     }
 
-    /// Persist accumulated thinking content as a message in the database.
-    /// This ensures thinking blocks survive page refreshes.
     #[tracing::instrument(skip_all)]
-    async fn persist_thinking(&self, thinking_buffer: &str, started_at: Option<i64>) {
-        if thinking_buffer.is_empty() {
+    async fn complete_active_thinking(&self, active_thinking: &mut Option<ThinkingSegmentState>) {
+        let Some(segment) = active_thinking.take() else {
+            return;
+        };
+        let duration_ms = (now_ms() - segment.started_at).max(0);
+        self.send_thinking_done(&segment.id, duration_ms as u64);
+        if segment.buffer.is_empty() {
             return;
         }
-        let duration_ms = started_at.map(|t| (now_ms() - t).max(0));
         let content = json!({
-            "content": thinking_buffer,
+            "content": segment.buffer,
             "status": "done",
             "duration_ms": duration_ms,
         })
         .to_string();
         let row = MessageRow {
-            id: ConversationService::mint_msg_id(),
+            id: segment.id.clone(),
             conversation_id: self.conversation_id.clone(),
-            msg_id: Some(self.msg_id.clone()),
+            msg_id: Some(segment.id),
             r#type: "thinking".into(),
             content,
             position: Some("left".into()),
             status: Some("finish".into()),
             hidden: false,
-            created_at: started_at.unwrap_or_else(now_ms),
+            created_at: segment.started_at,
         };
         if let Err(e) = self.repo.insert_message(&row).await {
             error!(error = %ErrorChain(&e), "Failed to persist thinking message");
+        }
+    }
+
+    #[tracing::instrument(skip_all)]
+    async fn close_active_text_segment(
+        &self,
+        active_text: &mut Option<TextSegmentState>,
+        text_segments: &mut Vec<PersistedTextSegment>,
+        status: &str,
+    ) {
+        let Some(text_segment) = active_text.take() else {
+            return;
+        };
+        if let Some(segment) = self.finalize_text_segment(text_segment, status).await {
+            text_segments.push(segment);
         }
     }
 
@@ -572,15 +709,14 @@ impl StreamRelay {
     }
 
     /// Send a `thinking` event with `status: "done"` to close the thinking UI.
-    fn send_thinking_done(&self, started_at: Option<i64>) {
-        let duration = started_at.map(|t| (now_ms() - t).max(0) as u64);
+    fn send_thinking_done(&self, msg_id: &str, duration: u64) {
         let thinking_done = AgentStreamEvent::Thinking(ThinkingEventData {
             content: String::new(),
             subject: None,
-            duration,
+            duration: Some(duration),
             status: Some("done".into()),
         });
-        self.forward_to_websocket(&thinking_done);
+        self.forward_to_websocket_with_msg_id(msg_id, &thinking_done);
     }
 
     async fn process_final_text(&self, text: &str) -> MiddlewareResult {
@@ -593,10 +729,10 @@ impl StreamRelay {
         middleware.process(text, &self.user_id, &self.conversation_id).await
     }
 
-    fn send_final_text_override(&self, text: &str, hidden: bool) {
+    fn send_final_text_override(&self, msg_id: &str, text: &str, hidden: bool) {
         self.broadcast_stream_payload(json!({
             "conversation_id": self.conversation_id,
-            "msg_id": self.msg_id,
+            "msg_id": msg_id,
             "type": "content",
             "data": { "content": text },
             "hidden": hidden,
@@ -683,7 +819,7 @@ impl ICronService for SharedCronService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aionui_ai_agent::protocol::events::{ErrorEventData, FinishEventData, TextEventData};
+    use aionui_ai_agent::protocol::events::{ErrorEventData, FinishEventData, TextEventData, ThinkingEventData};
     use aionui_db::DbError;
     use std::sync::Mutex;
 
@@ -734,6 +870,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_text_tool_text_splits_text_segments() {
+        use aionui_ai_agent::protocol::events::tool_call::{ToolCallEventData, ToolCallStatus};
+
+        let repo = Arc::new(RecordingRepo::new());
+        let bus = Arc::new(aionui_realtime::BroadcastEventBus::new(64));
+        let (tx, _) = broadcast::channel(64);
+
+        let relay = StreamRelay::new(
+            "conv-1".into(),
+            "asst-1".into(),
+            "user-1".into(),
+            repo.clone(),
+            bus.clone(),
+            None,
+        );
+
+        let mut ws_rx = bus.subscribe();
+        let rx = tx.subscribe();
+
+        tx.send(AgentStreamEvent::Text(TextEventData {
+            content: "Alpha".into(),
+        }))
+        .unwrap();
+        tx.send(AgentStreamEvent::ToolCall(ToolCallEventData {
+            call_id: "tc-001".into(),
+            name: "read_file".into(),
+            args: json!({"path": "a.ts"}),
+            status: ToolCallStatus::Running,
+            description: None,
+            input: None,
+            output: None,
+        }))
+        .unwrap();
+        tx.send(AgentStreamEvent::Text(TextEventData { content: "Beta".into() }))
+            .unwrap();
+        tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+
+        relay.consume(rx).await;
+
+        let inserts = repo.take_inserts();
+        let text_msgs: Vec<_> = inserts.iter().filter(|msg| msg.r#type == "text").collect();
+        assert_eq!(text_msgs.len(), 2, "text should split across tool boundaries");
+        assert_eq!(text_msgs[0].id, "asst-1");
+        assert_ne!(text_msgs[0].id, text_msgs[1].id);
+
+        let mut text_event_msg_ids = Vec::new();
+        while let Ok(evt) = ws_rx.try_recv() {
+            if evt.name == "message.stream" && (evt.data["type"] == "text" || evt.data["type"] == "content") {
+                text_event_msg_ids.push(evt.data["msg_id"].as_str().unwrap_or_default().to_owned());
+            }
+        }
+        assert_eq!(text_event_msg_ids.len(), 2);
+        assert_eq!(text_event_msg_ids[0], "asst-1");
+        assert_ne!(text_event_msg_ids[0], text_event_msg_ids[1]);
+    }
+
+    #[tokio::test]
     async fn run_error_with_no_text_stores_tips_message() {
         let repo = Arc::new(RecordingRepo::new());
         let bus = Arc::new(aionui_realtime::BroadcastEventBus::new(64));
@@ -768,6 +961,71 @@ mod tests {
         let content: serde_json::Value = serde_json::from_str(&msg.content).unwrap();
         assert_eq!(content["content"], "Something went wrong");
         assert_eq!(content["type"], "error");
+    }
+
+    #[tokio::test]
+    async fn run_thinking_tool_thinking_splits_thinking_segments() {
+        use aionui_ai_agent::protocol::events::tool_call::{ToolCallEventData, ToolCallStatus};
+
+        let repo = Arc::new(RecordingRepo::new());
+        let bus = Arc::new(aionui_realtime::BroadcastEventBus::new(64));
+        let (tx, _) = broadcast::channel(64);
+
+        let relay = StreamRelay::new(
+            "conv-1".into(),
+            "asst-1".into(),
+            "user-1".into(),
+            repo.clone(),
+            bus.clone(),
+            None,
+        );
+
+        let mut ws_rx = bus.subscribe();
+        let rx = tx.subscribe();
+
+        tx.send(AgentStreamEvent::Thinking(ThinkingEventData {
+            content: "Plan A".into(),
+            subject: None,
+            duration: None,
+            status: Some("thinking".into()),
+        }))
+        .unwrap();
+        tx.send(AgentStreamEvent::ToolCall(ToolCallEventData {
+            call_id: "tc-001".into(),
+            name: "read_file".into(),
+            args: json!({"path": "a.ts"}),
+            status: ToolCallStatus::Running,
+            description: None,
+            input: None,
+            output: None,
+        }))
+        .unwrap();
+        tx.send(AgentStreamEvent::Thinking(ThinkingEventData {
+            content: "Plan B".into(),
+            subject: None,
+            duration: None,
+            status: Some("thinking".into()),
+        }))
+        .unwrap();
+        tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+
+        relay.consume(rx).await;
+
+        let inserts = repo.take_inserts();
+        let thinking_msgs: Vec<_> = inserts.iter().filter(|msg| msg.r#type == "thinking").collect();
+        assert_eq!(thinking_msgs.len(), 2, "thinking should split across tool boundaries");
+        assert_eq!(thinking_msgs[0].msg_id.as_deref(), Some("asst-1"));
+        assert_ne!(thinking_msgs[0].msg_id, thinking_msgs[1].msg_id);
+
+        let mut done_msg_ids = Vec::new();
+        while let Ok(evt) = ws_rx.try_recv() {
+            if evt.name == "message.stream" && evt.data["type"] == "thinking" && evt.data["data"]["status"] == "done" {
+                done_msg_ids.push(evt.data["msg_id"].as_str().unwrap_or_default().to_owned());
+            }
+        }
+        assert_eq!(done_msg_ids.len(), 2);
+        assert_eq!(done_msg_ids[0], "asst-1");
+        assert_ne!(done_msg_ids[0], done_msg_ids[1]);
     }
 
     #[tokio::test]
@@ -871,7 +1129,12 @@ mod tests {
 
         let inserts = repo.take_inserts();
         assert_eq!(inserts.len(), 1);
-        let content: serde_json::Value = serde_json::from_str(&inserts[0].content).unwrap();
+        let updates = repo.take_updates();
+        let final_update = updates
+            .iter()
+            .find(|(id, update)| id == "asst-1" && update.content.is_some())
+            .expect("expected cleaned final text update");
+        let content: serde_json::Value = serde_json::from_str(final_update.1.content.as_deref().unwrap()).unwrap();
         assert_eq!(content["content"].as_str().map(str::trim), Some("Hello"));
 
         let mut ws_events = vec![];
