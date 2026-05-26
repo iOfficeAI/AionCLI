@@ -32,8 +32,14 @@ pub fn provider_model_from_conversation_row(row: &ConversationRow) -> ProviderWi
         .unwrap_or_else(empty_provider_model)
 }
 
-/// Empty sentinel used when a conversation has no stored model.
-fn empty_provider_model() -> ProviderWithModel {
+/// Canonical sentinel `ProviderWithModel` used when a conversation row has
+/// no parseable model. Shared by both the interactive `send_message` path
+/// and the cron executor so they agree on the "no model selected" shape:
+/// `provider_id: ""`, `model: ""`, `use_model: None`. Non-aionrs factories
+/// ignore the field, while the aionrs factory surfaces a clear "Provider
+/// '' not found" error against the empty id rather than silently using a
+/// stale vendor label.
+pub fn empty_provider_model() -> ProviderWithModel {
     ProviderWithModel {
         provider_id: String::new(),
         model: String::new(),
@@ -132,6 +138,14 @@ mod tests {
         let m = provider_model_from_conversation_row(&row);
         assert_eq!(m.provider_id, "abc123");
         assert_eq!(m.model, "gpt-5");
+        assert!(m.use_model.is_none());
+    }
+
+    #[test]
+    fn empty_provider_model_returns_documented_sentinel() {
+        let m = empty_provider_model();
+        assert!(m.provider_id.is_empty());
+        assert!(m.model.is_empty());
         assert!(m.use_model.is_none());
     }
 

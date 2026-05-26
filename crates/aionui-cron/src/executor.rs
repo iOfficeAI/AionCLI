@@ -473,17 +473,17 @@ impl JobExecutor {
         // The interactive `send_message` path resolves the model by parsing
         // `conversation.model` via
         // `aionui_conversation::task_options::provider_model_from_conversation_row`.
-        // Cron must do the exact same thing for the same conversation,
-        // otherwise an aionrs job whose cached `agent_config.backend`
-        // is a stale vendor label (`"aionrs"`) reaches the factory and
-        // raises `Provider 'aionrs' not found` (Sentry ELECTRON-1HM).
-        // Falling back to `resolve_model(job)` only when the conversation
-        // row cannot be loaded preserves the legacy behaviour for the
-        // brief window before a new-conversation cron run persists its
-        // first row.
+        // Cron routes through the same helper so that an aionrs job whose
+        // cached `agent_config.backend` is a stale vendor label (`"aionrs"`)
+        // cannot reach the factory and raise `Provider 'aionrs' not found`
+        // (Sentry ELECTRON-1HM). `resolve_conversation` (called by
+        // `execute`/`execute_prepared` before this method runs) guarantees
+        // the row exists, so `Ok(None)` only fires on a delete racing the
+        // executor — we fall back to the canonical empty sentinel, which
+        // matches what the helper itself returns for unparseable rows.
         let model = match self.get_conversation_row(conversation_id).await {
             Ok(Some(row)) => aionui_conversation::task_options::provider_model_from_conversation_row(&row),
-            Ok(None) => resolve_model(job).unwrap_or_else(empty_provider_model),
+            Ok(None) => aionui_conversation::task_options::empty_provider_model(),
             Err(e) => {
                 error!(
                     job_id = %job.id,
@@ -922,18 +922,6 @@ async fn parse_agent_type(registry: &AgentRegistry, agent_type_str: &str) -> Age
 /// vendor label). `CronService::add_job`/`update_job` already rejects aionrs
 /// jobs lacking this field, so the `None` return here is defensive for any
 /// legacy in-memory row that somehow slipped through.
-/// Sentinel `ProviderWithModel` used when a conversation row exists but has
-/// no parseable model. Non-aionrs factories ignore the field; the aionrs
-/// factory produces a clear "Provider '' not found" error instead of
-/// silently using a stale vendor label.
-fn empty_provider_model() -> ProviderWithModel {
-    ProviderWithModel {
-        provider_id: String::new(),
-        model: String::new(),
-        use_model: None,
-    }
-}
-
 fn resolve_model(job: &CronJob) -> Option<ProviderWithModel> {
     if job.agent_type != "aionrs" {
         return None;
