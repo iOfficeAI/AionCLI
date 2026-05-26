@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.12](https://github.com/iOfficeAI/AionCore/compare/v0.1.11...v0.1.12) (2026-05-26)
+
+
+### Bug Fixes
+
+* **aionrs:** drop orphaned tool_call history on session resume (ELECTRON-1HV, ELECTRON-1J6) ([#330](https://github.com/iOfficeAI/AionCore/issues/330)) ([880722f](https://github.com/iOfficeAI/AionCore/commit/880722fd3b2f4e37fa5654cc5ed210cddbfd14b5))
+* **aionrs:** preserve tool call correlation across aborts ([#335](https://github.com/iOfficeAI/AionCore/issues/335)) ([d65c8ed](https://github.com/iOfficeAI/AionCore/commit/d65c8ed49be4a558aff99e907e359264d6729d1c))
+* **conversation:** unify provider/model resolution across send/cron paths (ELECTRON-1HX, ELECTRON-1HM) ([#326](https://github.com/iOfficeAI/AionCore/issues/326)) ([71e275a](https://github.com/iOfficeAI/AionCore/commit/71e275ae3295d88c9da5eacf9f959d4683b4043d))
+* split streamed message segments around tool boundaries ([#339](https://github.com/iOfficeAI/AionCore/issues/339)) ([476b1cc](https://github.com/iOfficeAI/AionCore/commit/476b1cc86f2adef8998477a666809dda50afca3e))
+* startup materialization and migration races ([#333](https://github.com/iOfficeAI/AionCore/issues/333)) ([bd26ccc](https://github.com/iOfficeAI/AionCore/commit/bd26ccc9e8b08e7ea953f03b383cff6f67e2acba))
+* **team-mcp:** use fixed server name to stay within 64-char tool limit (ELECTRON-1JY) ([#336](https://github.com/iOfficeAI/AionCore/issues/336)) ([eaa3aa0](https://github.com/iOfficeAI/AionCore/commit/eaa3aa098816191d8531ef0f1de12292e5e47cc5))
+* Windows release CRT linkage ([#332](https://github.com/iOfficeAI/AionCore/issues/332)) ([fb445da](https://github.com/iOfficeAI/AionCore/commit/fb445da48defb54769253ee8623b784f178a3d2e))
+
 ## [0.1.11](https://github.com/iOfficeAI/AionCore/compare/v0.1.10...v0.1.11) (2026-05-25)
 
 
