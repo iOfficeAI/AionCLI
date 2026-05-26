@@ -49,6 +49,21 @@ impl OutputSink for BackendOutputSink {
 
         let parsed_input = serde_json::from_str(input).unwrap_or(serde_json::Value::String(input.to_owned()));
 
+        tracing::debug!(
+            tool_use_id = %tool_use_id,
+            call_id = %call_id,
+            tool = name,
+            status = ?ToolCallStatus::Running,
+            "Derived internal tool_call id from aionrs tool_use_id"
+        );
+        tracing::info!(
+            tool_use_id = %tool_use_id,
+            call_id = %call_id,
+            tool = name,
+            status = ?ToolCallStatus::Running,
+            "Emitting aionrs tool_call event"
+        );
+
         let _ = self.event_tx.send(AgentStreamEvent::ToolCall(ToolCallEventData {
             call_id,
             name: name.to_owned(),
@@ -71,6 +86,14 @@ impl OutputSink for BackendOutputSink {
         } else {
             ToolCallStatus::Completed
         };
+
+        tracing::info!(
+            tool_use_id = %tool_use_id,
+            call_id = %call_id,
+            tool = name,
+            status = ?status,
+            "Emitting aionrs tool_result event"
+        );
 
         let _ = self.event_tx.send(AgentStreamEvent::ToolCall(ToolCallEventData {
             call_id,

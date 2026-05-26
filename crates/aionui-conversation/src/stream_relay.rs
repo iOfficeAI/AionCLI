@@ -358,7 +358,7 @@ impl StreamRelay {
     #[tracing::instrument(skip_all)]
     async fn persist_tool_call(&self, data: &aionui_ai_agent::protocol::events::tool_call::ToolCallEventData) {
         if data.call_id.trim().is_empty() {
-            error!(
+            warn!(
                 tool = %data.name,
                 status = ?data.status,
                 "Skipping tool_call persistence because call_id is empty"
@@ -387,7 +387,20 @@ impl StreamRelay {
                 hidden: None,
             };
             if let Err(e) = self.repo.update_message(&data.call_id, &update).await {
-                error!(error = %ErrorChain(&e), "Failed to update tool_call message");
+                error!(
+                    call_id = %data.call_id,
+                    tool = %data.name,
+                    status,
+                    error = %ErrorChain(&e),
+                    "Failed to update tool_call message"
+                );
+            } else {
+                debug!(
+                    call_id = %data.call_id,
+                    tool = %data.name,
+                    status,
+                    "Updated tool_call message"
+                );
             }
         } else {
             let row = MessageRow {
@@ -402,7 +415,20 @@ impl StreamRelay {
                 created_at: now_ms(),
             };
             if let Err(e) = self.repo.insert_message(&row).await {
-                error!(error = %ErrorChain(&e), "Failed to persist tool_call message");
+                error!(
+                    call_id = %data.call_id,
+                    tool = %data.name,
+                    status,
+                    error = %ErrorChain(&e),
+                    "Failed to persist tool_call message"
+                );
+            } else {
+                debug!(
+                    call_id = %data.call_id,
+                    tool = %data.name,
+                    status,
+                    "Persisted tool_call message"
+                );
             }
         }
     }
