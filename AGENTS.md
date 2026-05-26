@@ -20,6 +20,16 @@ Before adding a field:
 
 Only after exhausting the above — and explicitly documenting why each option is insufficient — add a new field. When doing so, also document its lifecycle (who writes, who reads, when it is invalidated) in a doc comment on the field.
 
+### Logging
+
+When changing a critical path, explicitly evaluate whether logs are needed for development diagnosis and production troubleshooting. Add structured logs with appropriate levels:
+- `debug` for detailed, high-frequency internal flow that helps verify behavior and diagnose issues in development
+- `info` for low-volume lifecycle boundaries useful in production
+- `warn` for malformed or unexpected data that is safely handled
+- `error` for contract violations or failed operations
+
+Production-visible logs must not include sensitive payloads such as prompts, tool input/output, file contents, command bodies, tokens, secrets, or raw provider requests/responses. If such payloads are needed for local debugging, they must be behind explicit development-only guards and never enabled by default.
+
 ## Architecture
 
 > For detailed background and design decisions, see [ARCHITECTURE.md](./ARCHITECTURE.md).
