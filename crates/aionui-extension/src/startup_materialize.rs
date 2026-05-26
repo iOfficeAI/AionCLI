@@ -13,14 +13,17 @@
 //! crash mid-write, never observe a half-populated target — the old tree
 //! stays in place until staging is fully ready.
 
+use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 
+use fs2::FileExt;
 use include_dir::Dir;
 use tracing::{info, warn};
 
 use crate::error::ExtensionError;
 
 const VERSION_FILE: &str = ".version";
+const LOCK_FILE_NAME: &str = ".builtin-skills.lock";
 const STAGING_DIR_NAME: &str = ".builtin-skills.tmp";
 const OLD_DIR_NAME: &str = ".builtin-skills.old";
 
@@ -53,7 +56,17 @@ pub async fn materialize_if_needed(
         version = binary_version,
         "materializing embedded builtin skills"
     );
-    materialize_embedded_builtin_skills(data_dir, corpus, binary_version).await?;
+    let _guard = MaterializeLockGuard::acquire(data_dir).await?;
+    if version_file_matches(&target, binary_version).await {
+        info!(
+            target = %target.display(),
+            version = binary_version,
+            "builtin skills up to date after materialize lock; skipping rewrite"
+        );
+        return Ok(false);
+    }
+
+    materialize_embedded_builtin_skills_unlocked(data_dir, corpus, binary_version).await?;
     Ok(true)
 }
 
@@ -71,6 +84,15 @@ async fn version_file_matches(target: &Path, binary_version: &str) -> bool {
 /// Unconditional materialize: stage, write each file, atomic rename.
 /// Exposed separately for tests that want to bypass the gate.
 pub async fn materialize_embedded_builtin_skills(
+    data_dir: &Path,
+    corpus: &Dir<'static>,
+    binary_version: &str,
+) -> Result<(), ExtensionError> {
+    let _guard = MaterializeLockGuard::acquire(data_dir).await?;
+    materialize_embedded_builtin_skills_unlocked(data_dir, corpus, binary_version).await
+}
+
+async fn materialize_embedded_builtin_skills_unlocked(
     data_dir: &Path,
     corpus: &Dir<'static>,
     binary_version: &str,
@@ -135,6 +157,36 @@ pub async fn materialize_embedded_builtin_skills(
     }
 
     Ok(())
+}
+
+struct MaterializeLockGuard {
+    file: std::fs::File,
+}
+
+impl MaterializeLockGuard {
+    async fn acquire(data_dir: &Path) -> std::io::Result<Self> {
+        let data_dir = data_dir.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            std::fs::create_dir_all(&data_dir)?;
+            let lock_path = data_dir.join(LOCK_FILE_NAME);
+            let file = OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(lock_path)?;
+            FileExt::lock_exclusive(&file)?;
+            Ok(Self { file })
+        })
+        .await
+        .map_err(|e| std::io::Error::other(format!("builtin skills lock task failed: {e}")))?
+    }
+}
+
+impl Drop for MaterializeLockGuard {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.file);
+    }
 }
 
 /// Recursively copy every file in an `include_dir::Dir` tree into `dest`.

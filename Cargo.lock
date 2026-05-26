@@ -600,6 +600,7 @@ dependencies = [
  "async-trait",
  "axum",
  "dirs",
+ "fs2",
  "http-body-util",
  "include_dir",
  "junction",

@@ -80,7 +80,7 @@ pub async fn init_database_memory() -> Result<Database, DbError> {
 
     // In-memory DBs are not shared across processes, so no advisory lock is
     // needed (and there is no on-disk path we could create one against).
-    run_migrations(&pool, None).await?;
+    run_migrations(&pool).await?;
     ensure_system_user(&pool).await?;
 
     info!("In-memory database initialized");
@@ -114,6 +114,21 @@ pub fn maybe_copy_legacy_database(target: &Path) -> Result<(), DbError> {
 }
 
 async fn try_init_file(path: &Path) -> Result<Database, DbError> {
+    // Serialize the whole file-backed startup path, not only the sqlx
+    // migrator. Opening a fresh SQLite file also runs connection-level PRAGMAs
+    // such as WAL setup, which can race before migrations start.
+    let lock_path = migrate_lock_path(path);
+    let _guard = match MigrateLockGuard::acquire(&lock_path) {
+        Ok(guard) => Some(guard),
+        Err(e) => {
+            // Don't fail startup if flock isn't available (e.g. on some
+            // network filesystems) - fall back to SQLite busy-timeout and
+            // retry-on-conflict behavior below.
+            warn!("Could not acquire database startup lock {}: {e}", lock_path.display());
+            None
+        }
+    };
+
     let opts = SqliteConnectOptions::new()
         .filename(path)
         .create_if_missing(true)
@@ -127,7 +142,7 @@ async fn try_init_file(path: &Path) -> Result<Database, DbError> {
         .await
         .map_err(DbError::Query)?;
 
-    run_migrations(&pool, Some(&migrate_lock_path(path))).await?;
+    run_migrations(&pool).await?;
     ensure_system_user(&pool).await?;
 
     info!("Database initialized at {}", path.display());
@@ -150,7 +165,17 @@ fn migrate_lock_path(db_path: &Path) -> PathBuf {
     p
 }
 
-async fn run_migrations(pool: &SqlitePool, lock_path: Option<&Path>) -> Result<(), DbError> {
+async fn run_migrations(pool: &SqlitePool) -> Result<(), DbError> {
+    // File-backed callers hold a cross-process startup lock before opening the
+    // SQLite pool. sqlx-sqlite's Migrate impl has no-op
+    // lock()/unlock() and the migrator does list_applied → apply without an
+    // outer transaction, so two processes opening the same DB simultaneously
+    // (e.g. Electron auto-update spawning v2.1.1 while v2.0.x is still
+    // shutting down, or `aioncore doctor` racing the server) can both decide
+    // to apply the same version and the slower one's INSERT into
+    // `_sqlx_migrations` blows up with `UNIQUE constraint failed:
+    // _sqlx_migrations.version`. The outer startup lock also covers
+    // schema-repair and connection PRAGMAs before migration execution.
     ensure_schema_columns(pool).await?;
     // Migration 002 rebuilds tables via RENAME+DROP. Two pragmas are needed:
     // - foreign_keys=OFF: prevents DROP TABLE from triggering ON DELETE CASCADE
@@ -162,26 +187,6 @@ async fn run_migrations(pool: &SqlitePool, lock_path: Option<&Path>) -> Result<(
         .execute(&mut *conn)
         .await
         .map_err(DbError::Query)?;
-
-    // Cross-process serialisation. sqlx-sqlite's Migrate impl has no-op
-    // lock()/unlock() and the migrator does list_applied → apply without an
-    // outer transaction, so two processes opening the same DB simultaneously
-    // (e.g. Electron auto-update spawning v2.1.1 while v2.0.x is still
-    // shutting down, or `aioncore doctor` racing the server) can both decide
-    // to apply the same version and the slower one's INSERT into
-    // `_sqlx_migrations` blows up with `UNIQUE constraint failed:
-    // _sqlx_migrations.version`. Acquire an advisory file lock for the
-    // duration of migrate-run so the two processes serialise. The lock is
-    // released when the guard drops.
-    let _guard = lock_path.and_then(|p| match MigrateLockGuard::acquire(p) {
-        Ok(guard) => Some(guard),
-        Err(e) => {
-            // Don't fail startup if flock isn't available (e.g. on some
-            // network filesystems) — fall back to retry-on-conflict below.
-            warn!("Could not acquire migrate lock {}: {e}", p.display());
-            None
-        }
-    });
 
     let result = run_migrations_with_retry(&mut conn).await;
 

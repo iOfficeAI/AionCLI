@@ -137,3 +137,35 @@ async fn concurrent_materialize_produces_consistent_tree() {
     assert_eq!(read_version(&target).as_deref(), Some("1.2.3"));
     assert!(target.join("example-skill").join("SKILL.md").is_file());
 }
+
+#[tokio::test]
+async fn concurrent_gate_materialize_all_callers_succeed() {
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().to_path_buf();
+    let mut handles = Vec::new();
+    for _ in 0..8 {
+        let dir = data_dir.clone();
+        handles.push(tokio::spawn(async move {
+            materialize_if_needed(&dir, &FIXTURE_CORPUS, "1.2.3").await
+        }));
+    }
+    let mut results = Vec::new();
+    for handle in handles {
+        results.push(handle.await.unwrap());
+    }
+
+    for result in &results {
+        assert!(
+            result.is_ok(),
+            "concurrent startup materialize callers should not fail: {results:?}"
+        );
+    }
+    assert!(
+        results.iter().filter(|result| matches!(result, Ok(true))).count() >= 1,
+        "at least one caller should perform the materialize write: {results:?}"
+    );
+
+    let target = tmp.path().join("builtin-skills");
+    assert_eq!(read_version(&target).as_deref(), Some("1.2.3"));
+    assert!(target.join("example-skill").join("SKILL.md").is_file());
+}
