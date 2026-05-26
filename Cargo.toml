@@ -51,11 +51,11 @@ aionui-cron = { path = "crates/aionui-cron" }
 aionui-assistant = { path = "crates/aionui-assistant" }
 aionui-app = { path = "crates/aionui-app" }
 
-aion-agent = { path = "../../../aionrs/.worktrees/fix-tool-call-id-correlation/crates/aion-agent" }
-aion-types = { path = "../../../aionrs/.worktrees/fix-tool-call-id-correlation/crates/aion-types" }
-aion-protocol = { path = "../../../aionrs/.worktrees/fix-tool-call-id-correlation/crates/aion-protocol" }
-aion-config = { path = "../../../aionrs/.worktrees/fix-tool-call-id-correlation/crates/aion-config" }
-aion-mcp = { path = "../../../aionrs/.worktrees/fix-tool-call-id-correlation/crates/aion-mcp" }
+aion-agent = { git = "https://github.com/iOfficeAI/aionrs.git", tag = "v0.1.27" }
+aion-types = { git = "https://github.com/iOfficeAI/aionrs.git", tag = "v0.1.27" }
+aion-protocol = { git = "https://github.com/iOfficeAI/aionrs.git", tag = "v0.1.27" }
+aion-config = { git = "https://github.com/iOfficeAI/aionrs.git", tag = "v0.1.27" }
+aion-mcp = { git = "https://github.com/iOfficeAI/aionrs.git", tag = "v0.1.27" }
 
 # Core framework
 tokio = { version = "1", features = ["full"] }
