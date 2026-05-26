@@ -80,9 +80,11 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             binary_name: aioncore.exe
+            rustflags: "-C target-feature=+crt-static"
           - os: windows-latest
             target: aarch64-pc-windows-msvc
             binary_name: aioncore.exe
+            rustflags: "-C target-feature=+crt-static"
 
     steps:
       - uses: actions/checkout@v6
@@ -116,7 +118,12 @@ jobs:
 
       - name: Build release binary
         shell: bash
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags || '' }}
         run: |
+          if [[ -n "${RUSTFLAGS:-}" ]]; then
+            echo "Using RUSTFLAGS=${RUSTFLAGS}"
+          fi
           if [[ "${{ matrix.use_cross }}" == "true" ]]; then
             cross build --release --target ${{ matrix.target }} -p aionui-app
           else
