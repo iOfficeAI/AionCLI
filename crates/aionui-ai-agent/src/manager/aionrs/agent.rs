@@ -195,6 +195,7 @@ impl crate::agent_task::IAgentTask for AionrsAgentManager {
                     conversation_id = %self.runtime.conversation_id(),
                     "Aionrs engine.run() cancelled by user"
                 );
+                engine.abort_current_turn("Tool execution canceled by user");
                 None
             }
         };
@@ -225,7 +226,8 @@ impl crate::agent_task::IAgentTask for AionrsAgentManager {
                 Err(AppError::Internal(error_msg))
             }
             None => {
-                // Cancelled — Finish already emitted by cancel()
+                self.runtime.emit_error("Stopped by user");
+                self.runtime.emit_finish(None);
                 Ok(())
             }
         }
@@ -239,12 +241,6 @@ impl crate::agent_task::IAgentTask for AionrsAgentManager {
         if let Ok(mut confs) = self.confirmations.write() {
             confs.clear();
         }
-        self.runtime
-            .emit(AgentStreamEvent::Error(crate::protocol::events::ErrorEventData {
-                message: "Stopped by user".into(),
-                code: None,
-            }));
-        self.runtime.emit_finish(None);
         // Signal the tokio::select! in send_message() to drop engine.run()
         self.cancel_notify.notify_waiters();
         Ok(())
@@ -436,7 +432,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stop_emits_finish_event_and_sets_status() {
+    async fn stop_only_signals_in_flight_run() {
         let agent = AionrsAgentManager::new("conv-stop".into(), "/project".into(), make_test_config(), None)
             .await
             .unwrap();
@@ -444,18 +440,8 @@ mod tests {
 
         agent.cancel().await.unwrap();
 
-        assert_eq!(agent.status(), Some(ConversationStatus::Finished));
-
-        match rx.try_recv().unwrap() {
-            AgentStreamEvent::Error(data) => {
-                assert!(data.message.contains("Stopped"));
-            }
-            other => panic!("Expected Error, got {:?}", other),
-        }
-        match rx.try_recv().unwrap() {
-            AgentStreamEvent::Finish(_) => {}
-            other => panic!("Expected Finish, got {:?}", other),
-        }
+        assert_eq!(agent.status(), Some(ConversationStatus::Pending));
+        assert!(matches!(rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)));
     }
 
     #[tokio::test]
