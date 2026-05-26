@@ -357,6 +357,15 @@ impl StreamRelay {
     /// Persist a Gemini-style tool_call event.
     #[tracing::instrument(skip_all)]
     async fn persist_tool_call(&self, data: &aionui_ai_agent::protocol::events::tool_call::ToolCallEventData) {
+        if data.call_id.trim().is_empty() {
+            error!(
+                tool = %data.name,
+                status = ?data.status,
+                "Skipping tool_call persistence because call_id is empty"
+            );
+            return;
+        }
+
         let status = match data.status {
             ToolCallStatus::Running => "work",
             ToolCallStatus::Completed => "finish",

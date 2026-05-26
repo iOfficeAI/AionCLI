@@ -1,9 +1,5 @@
-use std::collections::HashMap;
-use std::sync::Mutex;
-
 use aion_agent::output::OutputSink;
 use tokio::sync::broadcast;
-use uuid::Uuid;
 
 use crate::protocol::events::{
     AgentStreamEvent, ErrorEventData, FinishEventData, StartEventData, TextEventData, ThinkingEventData, TipType,
@@ -12,14 +8,19 @@ use crate::protocol::events::{
 
 pub struct BackendOutputSink {
     event_tx: broadcast::Sender<AgentStreamEvent>,
-    active_calls: Mutex<HashMap<String, String>>,
 }
 
 impl BackendOutputSink {
     pub fn new(event_tx: broadcast::Sender<AgentStreamEvent>) -> Self {
-        Self {
-            event_tx,
-            active_calls: Mutex::new(HashMap::new()),
+        Self { event_tx }
+    }
+
+    fn internal_call_id(tool_use_id: &str) -> Option<String> {
+        let id = tool_use_id.trim();
+        if id.is_empty() {
+            None
+        } else {
+            Some(format!("aionrs-{id}"))
         }
     }
 }
@@ -40,14 +41,13 @@ impl OutputSink for BackendOutputSink {
         }));
     }
 
-    fn emit_tool_call(&self, name: &str, input: &str) {
-        let parsed_input = serde_json::from_str(input).unwrap_or(serde_json::Value::String(input.to_owned()));
-        let call_id = format!("aionrs-{}", Uuid::now_v7());
+    fn emit_tool_call(&self, tool_use_id: &str, name: &str, input: &str) {
+        let Some(call_id) = Self::internal_call_id(tool_use_id) else {
+            tracing::error!(tool = name, "Cannot emit tool_call with empty tool_use_id");
+            return;
+        };
 
-        self.active_calls
-            .lock()
-            .unwrap()
-            .insert(name.to_owned(), call_id.clone());
+        let parsed_input = serde_json::from_str(input).unwrap_or(serde_json::Value::String(input.to_owned()));
 
         let _ = self.event_tx.send(AgentStreamEvent::ToolCall(ToolCallEventData {
             call_id,
@@ -60,14 +60,17 @@ impl OutputSink for BackendOutputSink {
         }));
     }
 
-    fn emit_tool_result(&self, name: &str, is_error: bool, content: &str) {
+    fn emit_tool_result(&self, tool_use_id: &str, name: &str, is_error: bool, content: &str) {
+        let Some(call_id) = Self::internal_call_id(tool_use_id) else {
+            tracing::error!(tool = name, "Cannot emit tool_result with empty tool_use_id");
+            return;
+        };
+
         let status = if is_error {
             ToolCallStatus::Error
         } else {
             ToolCallStatus::Completed
         };
-
-        let call_id = self.active_calls.lock().unwrap().remove(name).unwrap_or_default();
 
         let _ = self.event_tx.send(AgentStreamEvent::ToolCall(ToolCallEventData {
             call_id,
@@ -153,7 +156,7 @@ mod tests {
     #[test]
     fn emit_tool_call_sends_running_tool_call() {
         let (sink, mut rx) = make_sink();
-        sink.emit_tool_call("Read", r#"{"path":"/tmp/a.txt"}"#);
+        sink.emit_tool_call("call_read_1", "Read", r#"{"path":"/tmp/a.txt"}"#);
         let event = rx.try_recv().unwrap();
         match event {
             AgentStreamEvent::ToolCall(data) => {
@@ -167,7 +170,7 @@ mod tests {
     #[test]
     fn emit_tool_result_success_sends_completed() {
         let (sink, mut rx) = make_sink();
-        sink.emit_tool_result("Read", false, "file content here");
+        sink.emit_tool_result("call_read_1", "Read", false, "file content here");
         let event = rx.try_recv().unwrap();
         match event {
             AgentStreamEvent::ToolCall(data) => {
@@ -181,7 +184,7 @@ mod tests {
     #[test]
     fn emit_tool_result_error_sends_error_status() {
         let (sink, mut rx) = make_sink();
-        sink.emit_tool_result("Bash", true, "command failed");
+        sink.emit_tool_result("call_bash_1", "Bash", true, "command failed");
         let event = rx.try_recv().unwrap();
         match event {
             AgentStreamEvent::ToolCall(data) => {
@@ -190,6 +193,33 @@ mod tests {
             }
             other => panic!("Expected ToolCall, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn duplicate_tool_names_use_distinct_internal_call_ids() {
+        let (sink, mut rx) = make_sink();
+
+        sink.emit_tool_call("call_a", "Glob", r#"{"pattern":"*.rs"}"#);
+        sink.emit_tool_call("call_b", "Glob", r#"{"pattern":"*.toml"}"#);
+        sink.emit_tool_result("call_a", "Glob", false, "first");
+        sink.emit_tool_result("call_b", "Glob", false, "second");
+
+        let events = (0..4).map(|_| rx.try_recv().unwrap()).collect::<Vec<_>>();
+
+        let mut call_ids = vec![];
+        for event in events {
+            match event {
+                AgentStreamEvent::ToolCall(data) => call_ids.push((data.call_id, data.status)),
+                other => panic!("Expected ToolCall, got {:?}", other),
+            }
+        }
+
+        assert_eq!(call_ids[0].0, "aionrs-call_a");
+        assert_eq!(call_ids[1].0, "aionrs-call_b");
+        assert_eq!(call_ids[2].0, "aionrs-call_a");
+        assert_eq!(call_ids[3].0, "aionrs-call_b");
+        assert_eq!(call_ids[2].1, ToolCallStatus::Completed);
+        assert_eq!(call_ids[3].1, ToolCallStatus::Completed);
     }
 
     #[test]
@@ -242,7 +272,7 @@ mod tests {
     #[test]
     fn emit_tool_call_carries_input() {
         let (sink, mut rx) = make_sink();
-        sink.emit_tool_call("Glob", r#"{"pattern":"**/*.rs"}"#);
+        sink.emit_tool_call("call_glob_1", "Glob", r#"{"pattern":"**/*.rs"}"#);
         let event = rx.try_recv().unwrap();
         match event {
             AgentStreamEvent::ToolCall(data) => {
@@ -258,14 +288,14 @@ mod tests {
     #[test]
     fn emit_tool_result_carries_output_and_matching_call_id() {
         let (sink, mut rx) = make_sink();
-        sink.emit_tool_call("Glob", r#"{"pattern":"**/*.rs"}"#);
+        sink.emit_tool_call("call_glob_1", "Glob", r#"{"pattern":"**/*.rs"}"#);
         let start_event = rx.try_recv().unwrap();
         let start_call_id = match &start_event {
             AgentStreamEvent::ToolCall(data) => data.call_id.clone(),
             _ => panic!("Expected ToolCall"),
         };
 
-        sink.emit_tool_result("Glob", false, "src/main.rs\nsrc/lib.rs");
+        sink.emit_tool_result("call_glob_1", "Glob", false, "src/main.rs\nsrc/lib.rs");
         let event = rx.try_recv().unwrap();
         match event {
             AgentStreamEvent::ToolCall(data) => {
@@ -281,7 +311,7 @@ mod tests {
     #[test]
     fn emit_tool_result_empty_content_omits_output() {
         let (sink, mut rx) = make_sink();
-        sink.emit_tool_result("Glob", false, "");
+        sink.emit_tool_result("call_glob_1", "Glob", false, "");
         let event = rx.try_recv().unwrap();
         match event {
             AgentStreamEvent::ToolCall(data) => {
@@ -297,8 +327,8 @@ mod tests {
         let sink = BackendOutputSink::new(tx);
         sink.emit_text_delta("hello", "msg-1");
         sink.emit_thinking("thought", "msg-1");
-        sink.emit_tool_call("Read", "{}");
-        sink.emit_tool_result("Read", false, "ok");
+        sink.emit_tool_call("call_read_1", "Read", "{}");
+        sink.emit_tool_result("call_read_1", "Read", false, "ok");
         sink.emit_stream_start("msg-1");
         sink.emit_stream_end("msg-1", 1, 100, 50, 0, 0);
         sink.emit_error("err");
