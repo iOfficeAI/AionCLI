@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.13](https://github.com/iOfficeAI/AionCore/compare/v0.1.12...v0.1.13) (2026-05-26)
+
+
+### Bug Fixes
+
+* **conversation:** avoid thinking/text segment id collision ([#342](https://github.com/iOfficeAI/AionCore/issues/342)) ([7aae690](https://github.com/iOfficeAI/AionCore/commit/7aae690063be683101b7bacc8e916e9d2b990ede))
+
 ## [0.1.12](https://github.com/iOfficeAI/AionCore/compare/v0.1.11...v0.1.12) (2026-05-26)
 
 
