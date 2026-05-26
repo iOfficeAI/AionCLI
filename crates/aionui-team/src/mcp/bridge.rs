@@ -12,12 +12,13 @@ use std::path::PathBuf;
 
 use agent_client_protocol::schema::{EnvVariable, McpServer, McpServerStdio};
 
-pub use aionui_api_types::TeamMcpStdioConfig;
+pub use aionui_api_types::{TEAM_MCP_SERVER_NAME, TeamMcpStdioConfig};
 
 /// Stdio MCP server description ready to be handed to `session/new`.
 ///
-/// Field shapes are fixed by [phase1 interface-contracts.md §3]:
-/// - `name` = `"aionui-team-<team_id>"`
+/// Field shapes:
+/// - `name` = `"aionui-team"` (fixed; team routing is done via `port` + `token`,
+///   not via the server name — see `TeamMcpServer` per-team TCP listener)
 /// - `command` = absolute path to the backend binary (resolved via
 ///   `std::env::current_exe()` at app startup)
 /// - `args` = `["mcp-bridge"]`
@@ -35,12 +36,12 @@ impl TeamMcpStdioServerSpec {
     ///
     /// `backend_binary_path` is the absolute path to the `aioncore`
     /// executable (phase1 single-binary constraint — no standalone bridge).
-    /// `team_id` is read from `cfg.team_id` rather than taken as a separate
-    /// parameter so the wire-level server name stays in sync with the
-    /// persisted config across every consumer.
     pub fn from_config(backend_binary_path: &str, cfg: &TeamMcpStdioConfig) -> Self {
+        // `cfg.team_id` is intentionally not embedded in the server name — see
+        // `TEAM_MCP_SERVER_NAME` doc comment. It is still kept on the persisted
+        // config for diagnostics and future consumers.
         Self {
-            name: format!("aionui-team-{}", cfg.team_id),
+            name: TEAM_MCP_SERVER_NAME.to_owned(),
             command: backend_binary_path.to_owned(),
             args: vec!["mcp-bridge".to_owned()],
             env: vec![
@@ -87,7 +88,7 @@ mod tests {
     fn from_config_fills_all_fields() {
         let spec = TeamMcpStdioServerSpec::from_config("/usr/bin/aioncore", &sample_cfg());
 
-        assert_eq!(spec.name, "aionui-team-team-42");
+        assert_eq!(spec.name, TEAM_MCP_SERVER_NAME);
         assert_eq!(spec.command, "/usr/bin/aioncore");
         assert_eq!(spec.args, vec!["mcp-bridge".to_owned()]);
         assert_eq!(spec.env.len(), 3);
@@ -118,7 +119,7 @@ mod tests {
 
         // `Stdio` variant is `#[serde(untagged)]` inside `McpServer`, so the
         // JSON is the raw `McpServerStdio` shape — no `"type":"stdio"` tag.
-        assert_eq!(json["name"], "aionui-team-team-42");
+        assert_eq!(json["name"], TEAM_MCP_SERVER_NAME);
         assert_eq!(json["command"], "/bin/aioncore");
         assert_eq!(json["args"], serde_json::json!(["mcp-bridge"]));
 

@@ -1124,10 +1124,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stdio_spec_embeds_team_and_binary_path() {
+    async fn stdio_spec_uses_fixed_name_and_binary_path() {
         let session = start_session().await;
         let spec = session.stdio_spec("lead-1");
-        assert_eq!(spec.name, "aionui-team-t1");
+        assert_eq!(spec.name, crate::mcp::TEAM_MCP_SERVER_NAME);
         assert_eq!(spec.command, "/tmp/aioncore-test");
         assert_eq!(spec.args, vec!["mcp-bridge".to_string()]);
         assert!(spec.env.iter().any(|(k, v)| k == "TEAM_AGENT_SLOT_ID" && v == "lead-1"));

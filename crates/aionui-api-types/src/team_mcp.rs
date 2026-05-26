@@ -6,6 +6,16 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Fixed wire-level MCP server name for the team stdio bridge.
+///
+/// Anthropic's tool name regex caps total length at 64 chars and the wire-level
+/// tool name is `mcp__<server_name>__<tool>`. A 36-char UUID v7 `team_id`
+/// embedded in the server name pushed `team_describe_assistant` to 78 chars and
+/// caused `invalid_request_error: 工具名称过长` (ELECTRON-1JY). Team routing
+/// has always been done via per-team TCP port + auth token, so the team_id was
+/// redundant in the server name.
+pub const TEAM_MCP_SERVER_NAME: &str = "aionui-team";
+
 /// Connection config for the Guide MCP stdio server in solo conversations.
 ///
 /// Passed through `AcpBuildExtra::guide_mcp_config` by the factory so that
@@ -20,10 +30,9 @@ pub struct GuideMcpConfig {
 
 /// Stdio connection config for the team session MCP server.
 ///
-/// `team_id` is persisted alongside the connection triple so every
-/// consumer (D3 spec builder, D10 ACP injector, D7 bridge subcommand)
-/// can derive the wire-level MCP server name `aionui-team-<team_id>`
-/// without threading a second parameter through unrelated call sites.
+/// `team_id` is persisted for diagnostics; the wire-level MCP server name is
+/// the fixed [`TEAM_MCP_SERVER_NAME`] (team routing happens via per-team TCP
+/// port + auth token, not via the server name — see ELECTRON-1JY).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TeamMcpStdioConfig {
     pub team_id: String,
@@ -58,6 +67,29 @@ mod tests {
         let json = serde_json::to_string(&cfg).unwrap();
         let parsed: TeamMcpStdioConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(cfg, parsed);
+    }
+
+    /// ELECTRON-1JY regression: Anthropic caps tool names at 64 chars,
+    /// where the wire-level name is `mcp__<server_name>__<tool>`. The
+    /// previous design embedded a 36-char UUID v7 `team_id` into the
+    /// server name, which pushed `team_describe_assistant` to 78 chars
+    /// and triggered `invalid_request_error: 工具名称过长`.
+    ///
+    /// This test pins the longest known team tool name against the
+    /// 64-char bound so any future tool / rename that would re-break the
+    /// limit fails locally instead of in production.
+    #[test]
+    fn team_mcp_tool_names_stay_within_anthropic_64_char_limit() {
+        // Longest tool name currently registered on the team MCP server.
+        // Update if a longer-named tool is added.
+        let longest_tool = "team_describe_assistant";
+        let wire_name = format!("mcp__{TEAM_MCP_SERVER_NAME}__{longest_tool}");
+        assert!(
+            wire_name.len() <= 64,
+            "Anthropic 64-char tool-name limit exceeded: {} ({} chars)",
+            wire_name,
+            wire_name.len()
+        );
     }
 
     #[test]

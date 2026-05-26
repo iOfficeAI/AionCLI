@@ -131,5 +131,5 @@ pub use team::{
     TeamAgentShutdownPayload, TeamAgentSpawnedPayload, TeamAgentStatusPayload, TeamListResponse, TeamMcpPhase,
     TeamMcpStatusPayload, TeamResponse, TeammateMessagePayload,
 };
-pub use team_mcp::{GuideMcpConfig, TeamMcpStdioConfig};
+pub use team_mcp::{GuideMcpConfig, TEAM_MCP_SERVER_NAME, TeamMcpStdioConfig};
 pub use websocket::WebSocketMessage;

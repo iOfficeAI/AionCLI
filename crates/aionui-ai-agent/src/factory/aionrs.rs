@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use aion_agent::session::SessionManager;
 use aion_config::config::{McpServerConfig, TransportType};
-use aionui_api_types::{AionrsBuildExtra, GuideMcpConfig, TeamMcpStdioConfig};
+use aionui_api_types::{AionrsBuildExtra, GuideMcpConfig, TEAM_MCP_SERVER_NAME, TeamMcpStdioConfig};
 use aionui_common::AppError;
 use tracing::{debug, info};
 
@@ -291,7 +291,7 @@ fn team_mcp_to_config(cfg: &TeamMcpStdioConfig) -> HashMap<String, McpServerConf
         deferred: Some(false),
     };
 
-    HashMap::from([(format!("aionui-team-{}", cfg.team_id), server)])
+    HashMap::from([(TEAM_MCP_SERVER_NAME.to_owned(), server)])
 }
 
 fn guide_mcp_to_config(
@@ -496,9 +496,9 @@ mod tests {
 
         let result = resolve_mcp_servers(&overrides, "conv-1");
         assert_eq!(result.len(), 1);
-        assert!(result.contains_key("aionui-team-team-42"));
+        assert!(result.contains_key(TEAM_MCP_SERVER_NAME));
 
-        let server = &result["aionui-team-team-42"];
+        let server = &result[TEAM_MCP_SERVER_NAME];
         assert_eq!(server.transport, TransportType::Stdio);
         assert_eq!(server.command.as_deref(), Some("/usr/bin/backend"));
         assert_eq!(server.args.as_deref(), Some(&["mcp-team-stdio".to_owned()][..]));

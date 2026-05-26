@@ -9,7 +9,11 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 use tracing::debug;
 
 /// MCP tool prefixes that are auto-approved without user permission.
-const AUTO_APPROVE_PREFIXES: &[&str] = &["mcp__aionui-team-", "mcp__aionui-team-guide__"];
+///
+/// `mcp__aionui-team__` matches the team stdio bridge tools (server name is now
+/// the fixed `aionui-team` — see `TEAM_MCP_SERVER_NAME`).
+/// `mcp__aionui-team-guide__` matches the solo-session Guide tools.
+const AUTO_APPROVE_PREFIXES: &[&str] = &["mcp__aionui-team__", "mcp__aionui-team-guide__"];
 
 /// Routes ACP permission requests from the protocol layer to the user
 /// (via `event_tx`) and back (via `confirm`). Owns the receiver channel

@@ -2,7 +2,7 @@ use crate::capability::team_guide_prompt;
 use crate::shared_kernel::PersistedSessionState;
 use agent_client_protocol::schema::{EnvVariable, McpServer, McpServerStdio, NewSessionRequest};
 use aionui_api_types::AgentMetadata;
-use aionui_api_types::{AcpBuildExtra, GuideMcpConfig, TeamMcpStdioConfig};
+use aionui_api_types::{AcpBuildExtra, GuideMcpConfig, TEAM_MCP_SERVER_NAME, TeamMcpStdioConfig};
 use aionui_common::CommandSpec;
 use std::path::PathBuf;
 
@@ -148,7 +148,7 @@ fn team_mcp_server(cfg: &TeamMcpStdioConfig) -> McpServer {
         EnvVariable::new(TeamMcpStdioConfig::ENV_TOKEN.to_owned(), cfg.token.clone()),
         EnvVariable::new(TeamMcpStdioConfig::ENV_SLOT_ID.to_owned(), cfg.slot_id.clone()),
     ];
-    let stdio = McpServerStdio::new(format!("aionui-team-{}", cfg.team_id), &cfg.binary_path)
+    let stdio = McpServerStdio::new(TEAM_MCP_SERVER_NAME, &cfg.binary_path)
         .args(vec!["mcp-team-stdio".to_owned()])
         .env(env);
     McpServer::Stdio(stdio)
@@ -238,7 +238,7 @@ mod tests {
         let servers = resolve_mcp_servers(&config, "conv-1", Vec::new());
         assert_eq!(servers.len(), 1);
         match &servers[0] {
-            McpServer::Stdio(s) => assert!(s.name.contains("team-1")),
+            McpServer::Stdio(s) => assert_eq!(s.name, TEAM_MCP_SERVER_NAME),
             _ => panic!("expected stdio server"),
         }
     }
@@ -365,7 +365,7 @@ mod tests {
         let servers = resolve_mcp_servers(&config, "conv-1", user);
         assert_eq!(servers.len(), 2);
         match &servers[0] {
-            McpServer::Stdio(s) => assert!(s.name.contains("team-1"), "team must come first"),
+            McpServer::Stdio(s) => assert_eq!(s.name, TEAM_MCP_SERVER_NAME, "team must come first"),
             _ => panic!("expected stdio"),
         }
         match &servers[1] {

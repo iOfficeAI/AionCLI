@@ -21,7 +21,8 @@ pub use error::TeamError;
 pub use events::TeamEventEmitter;
 pub use guide::{GuideMcpServer, handle_aion_list_models};
 pub use mailbox::Mailbox;
-pub use mcp::{TeamMcpServer, TeamMcpStdioConfig, TeamMcpStdioServerSpec};
+pub use mcp::{TEAM_MCP_SERVER_NAME, TeamMcpServer, TeamMcpStdioConfig, TeamMcpStdioServerSpec};
+
 pub use prompts::{build_lead_prompt, build_teammate_prompt, build_wake_payload};
 pub use routes::{TeamRouterState, team_routes};
 pub use scheduler::{
