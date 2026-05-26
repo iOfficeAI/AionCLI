@@ -105,8 +105,7 @@ impl StreamRelay {
         let mut text_segments: Vec<PersistedTextSegment> = Vec::new();
         let mut active_text: Option<TextSegmentState> = None;
         let mut active_thinking: Option<ThinkingSegmentState> = None;
-        let mut used_primary_text_msg_id = false;
-        let mut used_primary_thinking_msg_id = false;
+        let mut used_primary_segment_msg_id = false;
 
         loop {
             match rx.recv().await {
@@ -121,7 +120,7 @@ impl StreamRelay {
                             .await;
 
                         let segment = active_thinking.get_or_insert_with(|| ThinkingSegmentState {
-                            id: Self::mint_segment_msg_id(&mut used_primary_thinking_msg_id, &self.msg_id),
+                            id: Self::mint_segment_msg_id(&mut used_primary_segment_msg_id, &self.msg_id),
                             buffer: String::new(),
                             started_at: now_ms(),
                         });
@@ -132,7 +131,7 @@ impl StreamRelay {
                         self.complete_active_thinking(&mut active_thinking).await;
 
                         let segment = active_text.get_or_insert_with(|| TextSegmentState {
-                            id: Self::mint_segment_msg_id(&mut used_primary_text_msg_id, &self.msg_id),
+                            id: Self::mint_segment_msg_id(&mut used_primary_segment_msg_id, &self.msg_id),
                             buffer: String::new(),
                             created_at: now_ms(),
                             record_created: false,
@@ -1026,6 +1025,67 @@ mod tests {
         assert_eq!(done_msg_ids.len(), 2);
         assert_eq!(done_msg_ids[0], "asst-1");
         assert_ne!(done_msg_ids[0], done_msg_ids[1]);
+    }
+
+    #[tokio::test]
+    async fn run_thinking_then_text_uses_distinct_segment_ids() {
+        let repo = Arc::new(RecordingRepo::new());
+        let bus = Arc::new(aionui_realtime::BroadcastEventBus::new(64));
+        let (tx, _) = broadcast::channel(64);
+
+        let relay = StreamRelay::new(
+            "conv-1".into(),
+            "asst-1".into(),
+            "user-1".into(),
+            repo.clone(),
+            bus.clone(),
+            None,
+        );
+
+        let mut ws_rx = bus.subscribe();
+        let rx = tx.subscribe();
+
+        tx.send(AgentStreamEvent::Thinking(ThinkingEventData {
+            content: "Plan first".into(),
+            subject: None,
+            duration: None,
+            status: Some("thinking".into()),
+        }))
+        .unwrap();
+        tx.send(AgentStreamEvent::Text(TextEventData {
+            content: "Final answer".into(),
+        }))
+        .unwrap();
+        tx.send(AgentStreamEvent::Finish(FinishEventData::default())).unwrap();
+
+        relay.consume(rx).await;
+
+        let inserts = repo.take_inserts();
+        let thinking_msgs: Vec<_> = inserts.iter().filter(|msg| msg.r#type == "thinking").collect();
+        let text_msgs: Vec<_> = inserts.iter().filter(|msg| msg.r#type == "text").collect();
+
+        assert_eq!(thinking_msgs.len(), 1);
+        assert_eq!(text_msgs.len(), 1);
+        assert_eq!(thinking_msgs[0].id, "asst-1");
+        assert_ne!(thinking_msgs[0].id, text_msgs[0].id);
+
+        let mut text_msg_ids = Vec::new();
+        let mut thinking_done_ids = Vec::new();
+        while let Ok(evt) = ws_rx.try_recv() {
+            if evt.name != "message.stream" {
+                continue;
+            }
+            if evt.data["type"] == "text" || evt.data["type"] == "content" {
+                text_msg_ids.push(evt.data["msg_id"].as_str().unwrap_or_default().to_owned());
+            }
+            if evt.data["type"] == "thinking" && evt.data["data"]["status"] == "done" {
+                thinking_done_ids.push(evt.data["msg_id"].as_str().unwrap_or_default().to_owned());
+            }
+        }
+
+        assert_eq!(thinking_done_ids, vec!["asst-1".to_string()]);
+        assert_eq!(text_msg_ids.len(), 1);
+        assert_ne!(text_msg_ids[0], "asst-1");
     }
 
     #[tokio::test]
