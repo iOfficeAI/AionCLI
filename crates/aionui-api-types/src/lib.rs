@@ -3,6 +3,7 @@ mod acp;
 mod acp_prompt_hook;
 mod agent_build_extra;
 mod agent_discovery;
+mod analytics;
 mod assistant;
 mod auth;
 mod channel;
@@ -38,6 +39,10 @@ pub use agent_build_extra::{
     SlashCommandItem,
 };
 pub use agent_discovery::{AgentEnvEntry, AgentHandshake, AgentMetadata, AgentSource, AgentSourceInfo, BehaviorPolicy};
+pub use analytics::{
+    AgentUsageQuery, AgentUsageResponse, SessionRow, TokenKindBreakdown, TrendPoint, UsageByAgent, UsageByModel,
+    UsageByProject, UsageSourceStatus, UsageSummary, UsageTrend,
+};
 pub use assistant::{
     AssistantResponse, AssistantSource, CreateAssistantRequest, ImportAssistantsRequest, ImportAssistantsResult,
     ImportError, SetAssistantStateRequest, UpdateAssistantRequest,

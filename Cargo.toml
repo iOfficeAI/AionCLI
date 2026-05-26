@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/aionui-analytics",
     "crates/aionui-assets",
     "crates/aionui-common",
     "crates/aionui-db",
@@ -30,6 +31,7 @@ license = "MIT"
 
 [workspace.dependencies]
 # Internal crates
+aionui-analytics = { path = "crates/aionui-analytics" }
 aionui-common = { path = "crates/aionui-common" }
 aionui-assets = { path = "crates/aionui-assets" }
 aionui-db = { path = "crates/aionui-db" }
