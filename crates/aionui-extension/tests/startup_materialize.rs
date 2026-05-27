@@ -114,6 +114,40 @@ async fn gate_triggers_when_version_file_missing() {
 }
 
 #[tokio::test]
+async fn gate_keeps_existing_tree_when_refresh_fails() {
+    let tmp = TempDir::new().unwrap();
+    let target = tmp.path().join("builtin-skills");
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::write(target.join(".version"), "0.0.0").unwrap();
+    std::fs::write(target.join("sentinel"), "keep-existing").unwrap();
+    std::fs::write(tmp.path().join(".builtin-skills.tmp"), "stale-file").unwrap();
+
+    let wrote = materialize_if_needed(tmp.path(), &FIXTURE_CORPUS, "1.2.3")
+        .await
+        .unwrap();
+
+    assert!(!wrote, "refresh failure should fall back to existing tree");
+    assert_eq!(read_version(&target).as_deref(), Some("0.0.0"));
+    assert!(
+        target.join("sentinel").is_file(),
+        "existing tree must be preserved when refresh fails"
+    );
+}
+
+#[tokio::test]
+async fn gate_fails_when_initial_materialize_fails_without_existing_tree() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(tmp.path().join(".builtin-skills.tmp"), "stale-file").unwrap();
+
+    let result = materialize_if_needed(tmp.path(), &FIXTURE_CORPUS, "1.2.3").await;
+
+    assert!(
+        result.is_err(),
+        "first startup must not silently continue without a usable builtin-skills tree"
+    );
+}
+
+#[tokio::test]
 async fn concurrent_materialize_produces_consistent_tree() {
     // Two concurrent invocations share the same staging/target paths, so
     // at most one reliably wins the atomic rename; the other may legally

@@ -14,7 +14,9 @@
 //! stays in place until staging is fully ready.
 
 use std::fs::OpenOptions;
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use fs2::FileExt;
 use include_dir::Dir;
@@ -26,6 +28,13 @@ const VERSION_FILE: &str = ".version";
 const LOCK_FILE_NAME: &str = ".builtin-skills.lock";
 const STAGING_DIR_NAME: &str = ".builtin-skills.tmp";
 const OLD_DIR_NAME: &str = ".builtin-skills.old";
+const STARTUP_FILE_RETRY_DELAYS: [Duration; 5] = [
+    Duration::from_millis(50),
+    Duration::from_millis(100),
+    Duration::from_millis(200),
+    Duration::from_millis(400),
+    Duration::from_millis(800),
+];
 
 /// Decide whether to materialize based on the `.version` file, then do it.
 /// Returns `true` if a write happened, `false` if the gate said "skip".
@@ -66,7 +75,19 @@ pub async fn materialize_if_needed(
         return Ok(false);
     }
 
-    materialize_embedded_builtin_skills_unlocked(data_dir, corpus, binary_version).await?;
+    match materialize_embedded_builtin_skills_unlocked(data_dir, corpus, binary_version).await {
+        Ok(()) => {}
+        Err(e) if existing_builtin_skills_looks_usable(&target).await => {
+            warn!(
+                target = %target.display(),
+                version = binary_version,
+                error = %e,
+                "failed to refresh builtin skills; continuing with existing tree"
+            );
+            return Ok(false);
+        }
+        Err(e) => return Err(e),
+    }
     Ok(true)
 }
 
@@ -106,7 +127,11 @@ async fn materialize_embedded_builtin_skills_unlocked(
 
     // Clean any leftover staging from a previous crashed run.
     if staging.exists() {
-        tokio::fs::remove_dir_all(&staging).await.map_err(|e| {
+        retry_startup_file_op("remove builtin skills staging dir", &staging, || {
+            tokio::fs::remove_dir_all(&staging)
+        })
+        .await
+        .map_err(|e| {
             ExtensionError::Io(std::io::Error::new(
                 e.kind(),
                 format!("failed to clean staging dir {}: {e}", staging.display()),
@@ -124,16 +149,43 @@ async fn materialize_embedded_builtin_skills_unlocked(
     if target.exists() {
         if old.exists() {
             // Tolerate leftover .old from a crashed rename sequence.
-            let _ = tokio::fs::remove_dir_all(&old).await;
+            if let Err(e) = retry_startup_file_op("remove old builtin skills dir", &old, || {
+                tokio::fs::remove_dir_all(&old)
+            })
+            .await
+            {
+                warn!(
+                    old = %old.display(),
+                    error = %e,
+                    "failed to remove stale old builtin skills tree before refresh"
+                );
+            }
         }
-        tokio::fs::rename(&target, &old).await?;
+        retry_startup_file_op("rename builtin skills target to old", &target, || {
+            tokio::fs::rename(&target, &old)
+        })
+        .await?;
     }
 
-    if let Err(e) = tokio::fs::rename(&staging, &target).await {
+    if let Err(e) = retry_startup_file_op("rename builtin skills staging to target", &staging, || {
+        tokio::fs::rename(&staging, &target)
+    })
+    .await
+    {
         // Try to restore the original target so we don't leave the user
         // with no builtin skills.
-        if old.exists() {
-            let _ = tokio::fs::rename(&old, &target).await;
+        if old.exists()
+            && let Err(restore_error) = retry_startup_file_op("restore old builtin skills target", &old, || {
+                tokio::fs::rename(&old, &target)
+            })
+            .await
+        {
+            warn!(
+                old = %old.display(),
+                target = %target.display(),
+                error = %restore_error,
+                "failed to restore old builtin skills tree after refresh failure"
+            );
         }
         return Err(ExtensionError::Io(std::io::Error::new(
             e.kind(),
@@ -147,7 +199,10 @@ async fn materialize_embedded_builtin_skills_unlocked(
 
     // Best-effort cleanup of the superseded tree.
     if old.exists()
-        && let Err(e) = tokio::fs::remove_dir_all(&old).await
+        && let Err(e) = retry_startup_file_op("remove superseded builtin skills dir", &old, || {
+            tokio::fs::remove_dir_all(&old)
+        })
+        .await
     {
         warn!(
             old = %old.display(),
@@ -157,6 +212,52 @@ async fn materialize_embedded_builtin_skills_unlocked(
     }
 
     Ok(())
+}
+
+async fn existing_builtin_skills_looks_usable(target: &Path) -> bool {
+    if !target.is_dir() {
+        return false;
+    }
+    tokio::fs::metadata(target.join(VERSION_FILE))
+        .await
+        .map(|metadata| metadata.is_file())
+        .unwrap_or(false)
+}
+
+async fn retry_startup_file_op<T, F, Fut>(operation: &str, path: &Path, mut op: F) -> std::io::Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = std::io::Result<T>>,
+{
+    for (attempt, delay) in STARTUP_FILE_RETRY_DELAYS.iter().enumerate() {
+        match op().await {
+            Ok(value) => return Ok(value),
+            Err(e) if is_retryable_startup_file_error(&e) => {
+                warn!(
+                    operation,
+                    path = %path.display(),
+                    attempt = attempt + 1,
+                    retry_after_ms = delay.as_millis(),
+                    raw_os_error = ?e.raw_os_error(),
+                    error = %e,
+                    "Startup file operation failed; retrying"
+                );
+                tokio::time::sleep(*delay).await;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    op().await
+}
+
+fn is_retryable_startup_file_error(error: &std::io::Error) -> bool {
+    match error.kind() {
+        std::io::ErrorKind::Interrupted
+        | std::io::ErrorKind::PermissionDenied
+        | std::io::ErrorKind::TimedOut
+        | std::io::ErrorKind::WouldBlock => true,
+        _ => matches!(error.raw_os_error(), Some(5 | 32 | 33)),
+    }
 }
 
 struct MaterializeLockGuard {
