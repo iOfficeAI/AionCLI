@@ -1,15 +1,14 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use aionui_ai_agent::IWorkerTaskManager;
-use aionui_ai_agent::types::SendMessageData;
-use aionui_common::ConversationStatus;
-use aionui_conversation::ConversationService;
+use aionui_api_types::SendMessageRequest;
+use aionui_conversation::IConversationService;
+use aionui_conversation::conv_service_trait::ConversationStatus as ConvServiceStatus;
 use aionui_realtime::EventBroadcaster;
 use dashmap::DashMap;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::mailbox::Mailbox;
 use crate::scheduler::TeammateManager;
@@ -82,6 +81,11 @@ impl EventLoopRegistry {
 }
 
 /// Context shared across all iterations of one agent's event loop.
+///
+/// `conversation_service` is the single conv-layer entry point used by the
+/// loop for warmup, send and runtime status reads. The legacy
+/// connect-layer task-manager field was removed in Phase 3 — biz-layer
+/// code reaches the connect layer only through this trait.
 pub struct AgentLoopContext {
     pub team_id: String,
     pub slot_id: String,
@@ -89,8 +93,7 @@ pub struct AgentLoopContext {
     pub session: Arc<TeamSession>,
     pub scheduler: Arc<TeammateManager>,
     pub mailbox: Arc<Mailbox>,
-    pub task_manager: Arc<dyn IWorkerTaskManager>,
-    pub conversation_service: ConversationService,
+    pub conversation_service: Arc<dyn IConversationService>,
     pub broadcaster: Arc<dyn EventBroadcaster>,
     /// Used to notify other agents' event loops (e.g. leader after all-settled).
     pub registry: Arc<EventLoopRegistry>,
@@ -161,85 +164,57 @@ async fn run_event_loop(
     }
 }
 
-/// Execute one agent turn: warmup → guard → set Working → StreamRelay → send_message (blocking).
-/// Returns `Some(true)` on success, `Some(false)` on error,
-/// `None` if the turn was not started (guard hit, warmup fail, etc.).
+/// Execute one agent turn through the conv-layer service.
+///
+/// Flow:
+/// 1. Mirror unread mailbox rows into the agent conversation as left bubbles.
+/// 2. `IConversationService::warmup` ensures the connector is alive.
+/// 3. `IConversationService::status` skips the turn if a previous one is
+///    still running (the conv-layer `ConvActor` mutex is the single
+///    serializer; this read is a lock-free fast-path that avoids
+///    contending the actor when a redundant wake fires).
+/// 4. `IConversationService::send` dispatches the turn — relay,
+///    persistence, broadcast and continuation handling all live in the
+///    conv layer now, so the team event loop only owns scheduler and
+///    mailbox bookkeeping.
+///
+/// Returns `Some(true)` on success, `Some(false)` on send failure,
+/// `None` if the turn was skipped (warmup failed or already running).
 async fn execute_turn(ctx: &AgentLoopContext, input: &crate::session::WakeInput) -> Option<bool> {
     ctx.session.mirror_unread_to_conversation(input).await;
 
-    // Ensure agent task exists
-    let handle = match ctx.task_manager.get_task(&input.conversation_id) {
-        Some(h) => h,
-        None => {
-            if let Err(e) = ctx
-                .conversation_service
-                .warmup(&ctx.user_id, &input.conversation_id, &ctx.task_manager)
-                .await
-            {
-                warn!(
-                    team_id = %ctx.team_id,
-                    slot_id = %ctx.slot_id,
-                    conversation_id = %input.conversation_id,
-                    error = %e,
-                    "event loop: warmup failed"
-                );
-                return None;
-            }
-            match ctx.task_manager.get_task(&input.conversation_id) {
-                Some(h) => h,
-                None => {
-                    warn!(
-                        team_id = %ctx.team_id,
-                        slot_id = %ctx.slot_id,
-                        conversation_id = %input.conversation_id,
-                        "event loop: no task after warmup"
-                    );
-                    return None;
-                }
-            }
-        }
-    };
-
-    // Guard: skip if already running
-    if handle.status() == Some(ConversationStatus::Running) {
-        return None;
-    }
-    let repo = ctx.conversation_service.conversation_repo();
-    // Phase 2 transitional: aionui-team still consults DB.status as a
-    // belt-and-braces guard against duplicate dispatch. The conv layer's
-    // ConvActor is the source of truth (`handle.status()` above), but
-    // teammate scheduling still writes DB.status until Phase 4/5 finishes
-    // routing it through `IConversationService`. The `#[allow(deprecated)]`
-    // is scoped to this single read so unrelated reintroductions of
-    // `row.status` keep firing the lint.
-    #[allow(deprecated)]
-    if let Ok(Some(row)) = repo.get(&input.conversation_id).await
-        && row.status.as_deref() == Some("running")
+    if let Err(e) = ctx
+        .conversation_service
+        .warmup(&ctx.user_id, &input.conversation_id)
+        .await
     {
+        warn!(
+            team_id = %ctx.team_id,
+            slot_id = %ctx.slot_id,
+            conversation_id = %input.conversation_id,
+            error = %e,
+            "event loop: warmup failed"
+        );
         return None;
     }
 
-    // Point-of-no-return: set Working + claim DB running
-    let _ = ctx.scheduler.set_status(&ctx.slot_id, TeammateStatus::Working).await;
-    let update = aionui_db::ConversationRowUpdate {
-        status: Some("running".to_owned()),
-        updated_at: Some(aionui_common::now_ms()),
-        ..Default::default()
-    };
-    let _ = repo.update(&input.conversation_id, &update).await;
+    if matches!(
+        ctx.conversation_service.status(&input.conversation_id),
+        ConvServiceStatus::Running { .. }
+    ) {
+        debug!(
+            team_id = %ctx.team_id,
+            slot_id = %ctx.slot_id,
+            conversation_id = %input.conversation_id,
+            "event loop: turn already running, skipping"
+        );
+        return None;
+    }
 
-    // StreamRelay for response persistence + WebSocket forwarding
-    let msg_id = ConversationService::mint_msg_id();
-    let rx = handle.subscribe();
-    let relay = aionui_conversation::stream_relay::StreamRelay::new(
-        input.conversation_id.clone(),
-        msg_id.clone(),
-        ctx.user_id.clone(),
-        Arc::clone(repo),
-        ctx.broadcaster.clone(),
-        None,
-    );
-    tokio::spawn(async move { relay.consume(rx).await });
+    // Point-of-no-return: switch the slot to Working before invoking send
+    // so the UI reflects intent immediately. DB.status writes are gone —
+    // the conv-layer ConvActor is the single source of truth.
+    let _ = ctx.scheduler.set_status(&ctx.slot_id, TeammateStatus::Working).await;
 
     // Collect files from unread messages (user-attached files)
     let files: Vec<String> = input
@@ -250,22 +225,26 @@ async fn execute_turn(ctx: &AgentLoopContext, input: &crate::session::WakeInput)
         .cloned()
         .collect();
 
-    let data = SendMessageData {
+    let req = SendMessageRequest {
         content: input.first_message.clone(),
-        msg_id,
         files,
         inject_skills: Vec::new(),
+        hidden: false,
     };
 
-    let turn_ok = match handle.send_message(data).await {
-        Ok(()) => true,
+    let turn_ok = match ctx
+        .conversation_service
+        .send(&ctx.user_id, &input.conversation_id, req)
+        .await
+    {
+        Ok(_msg_id) => true,
         Err(e) => {
             warn!(
                 team_id = %ctx.team_id,
                 slot_id = %ctx.slot_id,
                 conversation_id = %input.conversation_id,
                 error = %e,
-                "event loop: send_message failed"
+                "event loop: send failed"
             );
             false
         }
@@ -288,16 +267,11 @@ async fn execute_turn(ctx: &AgentLoopContext, input: &crate::session::WakeInput)
 }
 
 /// Finalize a completed turn: reset DB status, mark idle (or error), cascade to leader.
-async fn finalize_turn(ctx: &AgentLoopContext, finish_ok: bool, conversation_id: &str) {
-    // Reset conversation DB status so future turns pass the guard check.
-    let repo = ctx.conversation_service.conversation_repo();
-    let update = aionui_db::ConversationRowUpdate {
-        status: Some("finished".to_owned()),
-        updated_at: Some(aionui_common::now_ms()),
-        ..Default::default()
-    };
-    let _ = repo.update(conversation_id, &update).await;
-
+async fn finalize_turn(ctx: &AgentLoopContext, finish_ok: bool, _conversation_id: &str) {
+    // DB.status writes are gone (Phase 2/3) — the conv-layer ConvActor
+    // and StreamRelay finalize the conversation row. The team event loop
+    // only owns slot-scheduler bookkeeping and the cross-agent wake
+    // cascade.
     if !finish_ok {
         let _ = ctx.scheduler.set_status(&ctx.slot_id, TeammateStatus::Error).await;
     }

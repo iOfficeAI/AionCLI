@@ -1,13 +1,13 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Weak};
 
-use aionui_ai_agent::IWorkerTaskManager;
-use aionui_ai_agent::types::SendMessageData;
-use aionui_common::AgentKillReason;
+use aionui_api_types::SendMessageRequest;
 use aionui_conversation::ConversationService;
+use aionui_conversation::IConversationService;
+use aionui_conversation::conv_service_trait::ConversationStatus as ConvServiceStatus;
 use aionui_db::ITeamRepository;
 use aionui_realtime::EventBroadcaster;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::error::TeamError;
 use crate::event_loop::EventLoopRegistry;
@@ -16,7 +16,6 @@ use crate::mcp::{TeamMcpServer, TeamMcpStdioConfig, TeamMcpStdioServerSpec};
 use crate::prompts::{build_lead_prompt, build_teammate_prompt, build_wake_payload};
 use crate::scheduler::{TeammateManager, normalize_name};
 use crate::service::TeamSessionService;
-use crate::service::spawn_support::resolve_full_auto_mode;
 use crate::task_board::TaskBoard;
 use crate::types::{MailboxMessageType, Team, TeamAgent, TeammateRole, TeammateStatus};
 
@@ -60,7 +59,13 @@ pub struct TeamSession {
     task_board: Arc<TaskBoard>,
     mcp_server: TeamMcpServer,
     backend_binary_path: Arc<PathBuf>,
-    task_manager: Arc<dyn IWorkerTaskManager>,
+    /// Conv-layer entry point used by the inline-wake fallback. The legacy
+    /// connect-layer task-manager field was removed in Phase 3 — the
+    /// connect layer is reachable only through this trait.
+    /// Process-rebuild concerns (kill+warmup after MCP config change)
+    /// stay in `TeamSessionService` where the task-manager dep still
+    /// lives until Phase 5.
+    conversation_service: Arc<dyn IConversationService>,
     /// Owner user_id for this team — needed when spawn_agent creates a
     /// new conversation (conversations are scoped per user).
     user_id: String,
@@ -84,7 +89,7 @@ impl TeamSession {
         repo: Arc<dyn ITeamRepository>,
         broadcaster: Arc<dyn EventBroadcaster>,
         backend_binary_path: Arc<PathBuf>,
-        task_manager: Arc<dyn IWorkerTaskManager>,
+        conversation_service: Arc<dyn IConversationService>,
         user_id: String,
         service: Weak<TeamSessionService>,
     ) -> Result<Self, TeamError> {
@@ -124,7 +129,7 @@ impl TeamSession {
             task_board,
             mcp_server,
             backend_binary_path,
-            task_manager,
+            conversation_service,
             user_id,
             service,
             broadcaster,
@@ -415,8 +420,14 @@ impl TeamSession {
         self.try_wake_inline(slot_id, files).await;
     }
 
-    /// Legacy inline wake implementation. Used as fallback when no event loop
-    /// is registered for the slot.
+    /// Inline wake fallback used when no event loop is registered for the
+    /// slot (unit tests, brief race window during spawn).
+    ///
+    /// Phase 3 routes the dispatch through `IConversationService::send` so
+    /// the conv-layer `ConvActor` mutex is the single serializer; the
+    /// previous direct `task_manager.get_task` + `agent.send_message`
+    /// path is gone. Status is read via the trait's `status` fast path
+    /// instead of the connect-layer handle's `status()`.
     async fn try_wake_inline(&self, slot_id: &str, files: Option<Vec<String>>) {
         if !self.scheduler.acquire_wake_lock(slot_id) {
             return;
@@ -447,34 +458,39 @@ impl TeamSession {
 
         self.mirror_unread_to_conversation(&input).await;
 
-        let handle = if let Some(h) = self.task_manager.get_task(&input.conversation_id) {
-            h
-        } else {
-            self.scheduler.release_wake_lock(slot_id);
-            return;
-        };
-
-        if handle.status() == Some(aionui_common::ConversationStatus::Running) {
+        if matches!(
+            self.conversation_service.status(&input.conversation_id),
+            ConvServiceStatus::Running { .. }
+        ) {
+            debug!(
+                team_id = %self.team.id,
+                slot_id,
+                conversation_id = %input.conversation_id,
+                "try_wake_inline: turn already running, skipping"
+            );
             self.scheduler.release_wake_lock(slot_id);
             return;
         }
 
         let _ = self.scheduler.set_status(slot_id, TeammateStatus::Working).await;
 
-        let msg_id = ConversationService::mint_msg_id();
-        let data = SendMessageData {
+        let req = SendMessageRequest {
             content: input.first_message,
-            msg_id,
             files: files.unwrap_or_default(),
             inject_skills: Vec::new(),
+            hidden: false,
         };
 
-        if let Err(err) = handle.send_message(data).await {
+        if let Err(err) = self
+            .conversation_service
+            .send(&self.user_id, &input.conversation_id, req)
+            .await
+        {
             warn!(
                 team_id = %self.team.id,
                 slot_id,
                 error = %err,
-                "try_wake_inline: send_message failed"
+                "try_wake_inline: send failed"
             );
             let _ = self.scheduler.set_status(slot_id, TeammateStatus::Idle).await;
             self.scheduler.release_wake_lock(slot_id);
@@ -589,18 +605,16 @@ impl TeamSession {
 
     pub async fn remove_agent(&self, slot_id: &str) -> Result<(), TeamError> {
         self.event_loops.remove(slot_id);
-        let conversation_id = self.scheduler.remove_agent(slot_id).await?;
-        if let Some(conv_id) = conversation_id
-            && let Err(e) = self.task_manager.kill(&conv_id, Some(AgentKillReason::TeamDeleted))
-        {
-            warn!(
-                team_id = %self.team.id,
-                slot_id,
-                conversation_id = %conv_id,
-                error = %e,
-                "remove_agent: task_manager.kill failed (non-fatal)"
-            );
-        }
+        let _conversation_id = self.scheduler.remove_agent(slot_id).await?;
+        // Process kill is intentionally not done here in Phase 3+: the
+        // upstream `TeamSessionService::remove_agent` calls
+        // `IConversationService::delete` first, which fires the
+        // `task_manager_delete_hook` that tears the connector down. Doing
+        // an extra kill from the biz layer would either be redundant
+        // (no-op after delete) or reach into the connect-layer surface
+        // that Phase 3 forbids. Phase 5 surfaces a real
+        // `IConversationService::shutdown` if a stronger guarantee is
+        // needed.
         Ok(())
     }
 
@@ -712,25 +726,20 @@ impl TeamSession {
         // time (10-30s). Running it asynchronously ensures `spawn_agent`
         // returns promptly so the MCP tool call completes without blocking
         // the leader's connection loop.
+        //
+        // The MCP-rebuild step (kill+warmup against the connect-layer
+        // task manager) lives in `TeamSessionService::attach_spawned_agent_process_bg`
+        // — Phase 3 keeps the connect-layer dep there until Phase 5
+        // surfaces a process-rebuild trait method.
         {
             let team_id = self.team.id.clone();
             let user_id = self.user_id.clone();
             let agent_clone = new_agent.clone();
             let mcp_stdio_cfg = self.mcp_stdio_config(&new_agent.slot_id);
-            let task_manager = self.task_manager.clone();
             tokio::spawn(async move {
-                // Push the team MCP stdio config into the new conversation's
-                // extras, then kill + rebuild the agent task so the freshly
-                // spawned process boots with the MCP handshake pointing at
-                // our session.
-                if let Err(err) = Self::attach_spawned_agent_process_bg(
-                    &service,
-                    &agent_clone,
-                    mcp_stdio_cfg,
-                    &user_id,
-                    &task_manager,
-                )
-                .await
+                if let Err(err) = service
+                    .attach_spawned_agent_process_bg(&agent_clone, mcp_stdio_cfg, &user_id)
+                    .await
                 {
                     warn!(
                         team_id = %team_id,
@@ -756,50 +765,6 @@ impl TeamSession {
         }
 
         Ok(new_agent)
-    }
-
-    /// Persist the team MCP stdio config into the spawned agent's conversation
-    /// row, then kill any pre-existing task and warm up the new one.
-    ///
-    /// This is a static helper suitable for use inside `tokio::spawn` (no
-    /// `&self` borrow). The caller passes all necessary context by value.
-    async fn attach_spawned_agent_process_bg(
-        service: &TeamSessionService,
-        agent: &TeamAgent,
-        mcp_stdio_cfg: crate::mcp::TeamMcpStdioConfig,
-        user_id: &str,
-        task_manager: &Arc<dyn IWorkerTaskManager>,
-    ) -> Result<(), TeamError> {
-        let patch = serde_json::json!({
-            "team_mcp_stdio_config": mcp_stdio_cfg,
-            "session_mode": resolve_full_auto_mode(&agent.backend),
-        });
-
-        service
-            .conversation_service_ref()
-            .update_extra(&agent.conversation_id, patch)
-            .await
-            .map_err(|e| {
-                TeamError::InvalidRequest(format!(
-                    "failed to persist team_mcp_stdio_config for {}: {e}",
-                    agent.slot_id
-                ))
-            })?;
-
-        let _ = task_manager.kill(&agent.conversation_id, Some(AgentKillReason::TeamMcpRebuild));
-
-        service
-            .conversation_service_ref()
-            .warmup(user_id, &agent.conversation_id, task_manager)
-            .await
-            .map_err(|e| {
-                TeamError::InvalidRequest(format!(
-                    "failed to warm up spawned agent {}: {e}",
-                    agent.conversation_id
-                ))
-            })?;
-
-        Ok(())
     }
 
     pub fn stop(&self) {
@@ -840,13 +805,14 @@ mod tests {
     use super::*;
     use crate::test_utils::MockTeamRepo;
     use crate::types::{Team, TeamAgent, TeammateRole};
-    use aionui_ai_agent::agent_task::{AgentInstance, IAgentTask, IMockAgent};
-    use aionui_ai_agent::protocol::events::AgentStreamEvent;
-    use aionui_ai_agent::shared_kernel::approval_key;
-    use aionui_ai_agent::types::BuildTaskOptions;
-    use aionui_ai_agent::types::SendMessageData;
-    use aionui_api_types::{AgentModeResponse, WebSocketMessage};
-    use aionui_common::{AgentKillReason, AgentType, AppError, Confirmation, ConversationStatus, TimestampMs, now_ms};
+    use aionui_api_types::{
+        ConversationListResponse, ConversationResponse, CreateConversationRequest, ListConversationsQuery,
+        WebSocketMessage,
+    };
+    use aionui_common::AppError;
+    use aionui_conversation::IConversationService;
+    use aionui_conversation::conv_service_trait::{ConversationEvent, ConversationStatus as ConvServiceStatus};
+    use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use tokio::sync::broadcast;
 
@@ -882,175 +848,128 @@ mod tests {
         Arc::new(PathBuf::from("/tmp/aioncore-test"))
     }
 
-    /// Mock agent whose `send_message` pushes the received payload into a
-    /// shared log, optionally failing with a configurable error.
-    struct RecordingAgent {
-        conversation_id: String,
-        sent: Arc<Mutex<Vec<SendMessageData>>>,
-        fail_with: Option<String>,
-        event_tx: broadcast::Sender<AgentStreamEvent>,
+    /// Captured fields of a single `IConversationService::send` call.
+    /// Phase 3 replaces the old `SendMessageData` capture with the same
+    /// shape the trait now exposes (`user_id`, `conversation_id`,
+    /// `SendMessageRequest`).
+    #[derive(Debug, Clone)]
+    pub(super) struct SendCall {
+        pub user_id: String,
+        pub conversation_id: String,
+        pub content: String,
+        pub files: Vec<String>,
     }
 
-    impl RecordingAgent {
-        fn new(conversation_id: &str, sent: Arc<Mutex<Vec<SendMessageData>>>, fail_with: Option<String>) -> Self {
+    /// In-memory mock for [`IConversationService`]. Records every `send`
+    /// call into a shared log and lets tests configure per-conversation
+    /// statuses + per-call failures.
+    ///
+    /// Methods unused by the inline-wake path (`create` / `delete` /
+    /// `get` / `list` / `cancel` / `subscribe`) are stubbed so the trait
+    /// is satisfied; if a future test reaches them we fail loudly so the
+    /// scaffolding is updated together with the production change.
+    struct MockConvService {
+        sent: Arc<Mutex<Vec<SendCall>>>,
+        statuses: Mutex<HashMap<String, ConvServiceStatus>>,
+        send_error: Option<String>,
+        known_convs: Mutex<std::collections::HashSet<String>>,
+        event_tx: broadcast::Sender<ConversationEvent>,
+    }
+
+    impl MockConvService {
+        fn new(known_convs: &[&str], send_error: Option<String>) -> Self {
             let (event_tx, _) = broadcast::channel(4);
+            let mut set = std::collections::HashSet::new();
+            for c in known_convs {
+                set.insert((*c).to_string());
+            }
             Self {
-                conversation_id: conversation_id.into(),
-                sent,
-                fail_with,
+                sent: Arc::new(Mutex::new(Vec::new())),
+                statuses: Mutex::new(HashMap::new()),
+                send_error,
+                known_convs: Mutex::new(set),
                 event_tx,
             }
         }
+
+        fn sent_log(&self) -> Arc<Mutex<Vec<SendCall>>> {
+            self.sent.clone()
+        }
     }
 
     #[async_trait::async_trait]
-    impl IAgentTask for RecordingAgent {
-        fn agent_type(&self) -> AgentType {
-            AgentType::Acp
+    impl IConversationService for MockConvService {
+        async fn create(&self, _user_id: &str, _opts: CreateConversationRequest) -> Result<String, AppError> {
+            unimplemented!("MockConvService::create is not used by session tests")
         }
-        fn conversation_id(&self) -> &str {
-            &self.conversation_id
-        }
-        fn workspace(&self) -> &str {
-            "/tmp/ws"
-        }
-        fn status(&self) -> Option<ConversationStatus> {
-            None
-        }
-        fn last_activity_at(&self) -> TimestampMs {
-            now_ms()
-        }
-        fn subscribe(&self) -> broadcast::Receiver<AgentStreamEvent> {
-            self.event_tx.subscribe()
-        }
-        async fn send_message(&self, data: SendMessageData) -> Result<(), AppError> {
-            self.sent.lock().unwrap().push(data);
-            match &self.fail_with {
-                Some(msg) => Err(AppError::Internal(msg.clone())),
-                None => Ok(()),
-            }
-        }
-        async fn cancel(&self) -> Result<(), AppError> {
+        async fn delete(&self, _user_id: &str, _id: &str) -> Result<(), AppError> {
             Ok(())
         }
-        fn kill(&self, _reason: Option<AgentKillReason>) -> Result<(), AppError> {
+        async fn get(&self, _user_id: &str, _id: &str) -> Result<ConversationResponse, AppError> {
+            unimplemented!("MockConvService::get is not used by session tests")
+        }
+        async fn list(&self, _user_id: &str, _q: ListConversationsQuery) -> Result<ConversationListResponse, AppError> {
+            unimplemented!("MockConvService::list is not used by session tests")
+        }
+        async fn warmup(&self, _user_id: &str, id: &str) -> Result<(), AppError> {
+            // Inline-wake fallback skips warmup for unknown conversations.
+            // Be lenient so tests that never seed `known_convs` still pass —
+            // the send path is what actually matters for the inline wake.
+            if !self.known_convs.lock().unwrap().contains(id) {
+                return Ok(());
+            }
             Ok(())
         }
-    }
-
-    #[async_trait::async_trait]
-    impl IMockAgent for RecordingAgent {
-        fn get_confirmations(&self) -> Vec<Confirmation> {
-            Vec::new()
-        }
-        fn check_approval(&self, action: &str, command_type: Option<&str>) -> bool {
-            let _ = approval_key(Some(action), command_type);
-            false
-        }
-        async fn mode(&self) -> Result<AgentModeResponse, AppError> {
-            Ok(AgentModeResponse {
-                mode: "default".into(),
-                initialized: false,
-            })
-        }
-    }
-
-    /// In-memory stub for [`IWorkerTaskManager`]. Only `get_task` is
-    /// exercised by D7b; the other methods are unreachable in these tests
-    /// and panic to surface drift early.
-    struct StubTaskManager {
-        tasks: Mutex<std::collections::HashMap<String, AgentInstance>>,
-        kill_calls: Mutex<Vec<(String, Option<AgentKillReason>)>>,
-        kill_error: Option<String>,
-    }
-
-    impl StubTaskManager {
-        fn new() -> Self {
-            Self {
-                tasks: Mutex::new(std::collections::HashMap::new()),
-                kill_calls: Mutex::new(Vec::new()),
-                kill_error: None,
-            }
-        }
-
-        /// Build a stub whose `kill` always fails with `AppError::NotFound` so
-        /// tests can exercise the non-fatal kill branch in `remove_agent`.
-        fn with_kill_error(msg: &str) -> Self {
-            Self {
-                tasks: Mutex::new(std::collections::HashMap::new()),
-                kill_calls: Mutex::new(Vec::new()),
-                kill_error: Some(msg.to_owned()),
-            }
-        }
-
-        fn insert(&self, conv_id: &str, handle: AgentInstance) {
-            self.tasks.lock().unwrap().insert(conv_id.into(), handle);
-        }
-
-        fn kill_calls(&self) -> Vec<(String, Option<AgentKillReason>)> {
-            self.kill_calls.lock().unwrap().clone()
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl IWorkerTaskManager for StubTaskManager {
-        fn get_task(&self, conversation_id: &str) -> Option<AgentInstance> {
-            self.tasks.lock().unwrap().get(conversation_id).cloned()
-        }
-        async fn get_or_build_task(
+        async fn send(
             &self,
-            _conversation_id: &str,
-            _options: BuildTaskOptions,
-        ) -> Result<AgentInstance, AppError> {
-            panic!("get_or_build_task should not be called in D7b tests")
+            user_id: &str,
+            id: &str,
+            req: aionui_api_types::SendMessageRequest,
+        ) -> Result<String, AppError> {
+            self.sent.lock().unwrap().push(SendCall {
+                user_id: user_id.to_owned(),
+                conversation_id: id.to_owned(),
+                content: req.content,
+                files: req.files,
+            });
+            match &self.send_error {
+                Some(msg) => Err(AppError::Internal(msg.clone())),
+                None => Ok(format!("msg-{id}")),
+            }
         }
-        fn kill(&self, conversation_id: &str, reason: Option<AgentKillReason>) -> Result<(), AppError> {
-            self.kill_calls
+        async fn cancel(&self, _user_id: &str, _id: &str) -> Result<(), AppError> {
+            Ok(())
+        }
+        fn status(&self, id: &str) -> ConvServiceStatus {
+            self.statuses
                 .lock()
                 .unwrap()
-                .push((conversation_id.to_owned(), reason));
-            if let Some(msg) = &self.kill_error {
-                return Err(AppError::NotFound(msg.clone()));
-            }
-            Ok(())
+                .get(id)
+                .cloned()
+                .unwrap_or(ConvServiceStatus::Idle)
         }
-        fn kill_and_wait(
-            &self,
-            conversation_id: &str,
-            reason: Option<AgentKillReason>,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
-            let _ = self.kill(conversation_id, reason);
-            Box::pin(std::future::ready(()))
-        }
-        fn clear(&self) {}
-        fn active_count(&self) -> usize {
-            self.tasks.lock().unwrap().len()
-        }
-        fn collect_idle(&self, _idle_threshold_ms: TimestampMs) -> Vec<String> {
-            Vec::new()
+        fn subscribe(&self, _id: &str) -> broadcast::Receiver<ConversationEvent> {
+            self.event_tx.subscribe()
         }
     }
 
-    /// Build a task_manager pre-populated with a [`RecordingAgent`] per
-    /// conversation in `conv_ids`. `fail_with` — when set — makes
-    /// `send_message` fail for every agent so tests can exercise the
-    /// log-not-throw path.
-    fn task_manager_with_agents(
+    /// Build a `MockConvService` aware of `conv_ids`. Returns the trait
+    /// object plus the shared sent-log so tests can assert dispatch.
+    /// `fail_with` — when set — makes every `send` fail with that message
+    /// so the log-not-throw path is exercised.
+    fn mock_conv_service(
         conv_ids: &[&str],
         fail_with: Option<String>,
-    ) -> (Arc<dyn IWorkerTaskManager>, Arc<Mutex<Vec<SendMessageData>>>) {
-        let sent: Arc<Mutex<Vec<SendMessageData>>> = Arc::new(Mutex::new(Vec::new()));
-        let stub = StubTaskManager::new();
-        for conv_id in conv_ids {
-            let agent = AgentInstance::Mock(Arc::new(RecordingAgent::new(conv_id, sent.clone(), fail_with.clone())));
-            stub.insert(conv_id, agent);
-        }
-        (Arc::new(stub), sent)
+    ) -> (Arc<dyn IConversationService>, Arc<Mutex<Vec<SendCall>>>) {
+        let svc = Arc::new(MockConvService::new(conv_ids, fail_with));
+        let sent = svc.sent_log();
+        (svc, sent)
     }
 
-    /// Empty task_manager — `get_task` returns `None` for every conversation.
-    fn empty_task_manager() -> Arc<dyn IWorkerTaskManager> {
-        Arc::new(StubTaskManager::new())
+    /// Empty `IConversationService` — accepts every conversation but
+    /// records nothing. Used by tests that don't care about dispatch.
+    fn empty_conv_service() -> Arc<dyn IConversationService> {
+        Arc::new(MockConvService::new(&[], None))
     }
 
     fn make_team() -> Team {
@@ -1097,7 +1016,7 @@ mod tests {
             repo,
             broadcaster,
             backend_path(),
-            empty_task_manager(),
+            empty_conv_service(),
             "user-test".into(),
             Weak::<TeamSessionService>::new(),
         )
@@ -1144,7 +1063,7 @@ mod tests {
             repo_dyn,
             broadcaster,
             backend_path(),
-            empty_task_manager(),
+            empty_conv_service(),
             "user-test".into(),
             Weak::<TeamSessionService>::new(),
         )
@@ -1170,7 +1089,7 @@ mod tests {
             repo_dyn,
             broadcaster,
             backend_path(),
-            empty_task_manager(),
+            empty_conv_service(),
             "user-test".into(),
             Weak::<TeamSessionService>::new(),
         )
@@ -1224,65 +1143,16 @@ mod tests {
         session.stop();
     }
 
-    // -- W5-D30d-1: remove_agent kills the agent process ---------------------
-
-    #[tokio::test]
-    async fn remove_agent_calls_task_manager_kill() {
-        let repo: Arc<dyn ITeamRepository> = Arc::new(MockTeamRepo::new());
-        let broadcaster: Arc<dyn EventBroadcaster> = Arc::new(NullBroadcaster);
-        let stub = Arc::new(StubTaskManager::new());
-        let stub_dyn: Arc<dyn IWorkerTaskManager> = stub.clone();
-        let session = TeamSession::start(
-            make_team(),
-            repo,
-            broadcaster,
-            backend_path(),
-            stub_dyn,
-            "user-test".into(),
-            Weak::<TeamSessionService>::new(),
-        )
-        .await
-        .unwrap();
-
-        session.remove_agent("worker-1").await.unwrap();
-
-        let calls = stub.kill_calls();
-        assert_eq!(calls.len(), 1, "kill invoked exactly once");
-        assert_eq!(calls[0].0, "c2", "kill targets removed slot's conversation_id");
-        assert!(
-            matches!(calls[0].1, Some(AgentKillReason::TeamDeleted)),
-            "kill reason carries AgentKillReason"
-        );
-        session.stop();
-    }
-
-    #[tokio::test]
-    async fn remove_agent_is_non_fatal_when_kill_fails() {
-        let repo: Arc<dyn ITeamRepository> = Arc::new(MockTeamRepo::new());
-        let broadcaster: Arc<dyn EventBroadcaster> = Arc::new(NullBroadcaster);
-        let stub = Arc::new(StubTaskManager::with_kill_error("task not found"));
-        let stub_dyn: Arc<dyn IWorkerTaskManager> = stub.clone();
-        let session = TeamSession::start(
-            make_team(),
-            repo,
-            broadcaster,
-            backend_path(),
-            stub_dyn,
-            "user-test".into(),
-            Weak::<TeamSessionService>::new(),
-        )
-        .await
-        .unwrap();
-
-        // kill returns Err(AppError::NotFound) but remove_agent must still
-        // succeed — NotFound means the worker already died, which is OK.
-        session.remove_agent("worker-1").await.unwrap();
-
-        let agents = session.scheduler.list_agents().await;
-        assert_eq!(agents.len(), 1, "slot still removed even after kill failure");
-        assert_eq!(stub.kill_calls().len(), 1);
-        session.stop();
-    }
+    // -- W5-D30d-1 was a connect-layer assertion (`task_manager.kill` after
+    //   `remove_agent`). Phase 3 moved that responsibility upstream:
+    //   `TeamSessionService::remove_agent` now calls
+    //   `IConversationService::delete`, which fires the
+    //   `task_manager_delete_hook` that tears the connector down. Because
+    //   `TeamSession::remove_agent` no longer touches the connect layer,
+    //   the original tests (`remove_agent_calls_task_manager_kill` /
+    //   `remove_agent_is_non_fatal_when_kill_fails`) lose their target.
+    //   Process-teardown coverage now lives next to the conversation
+    //   service in `aionui-conversation`.
 
     #[tokio::test]
     async fn rename_agent_in_session() {
@@ -1568,7 +1438,7 @@ mod tests {
 
     // -- D7b wake-path tests -------------------------------------------------
 
-    async fn start_session_with(task_manager: Arc<dyn IWorkerTaskManager>) -> (TeamSession, Arc<MockTeamRepo>) {
+    async fn start_session_with(conv_service: Arc<dyn IConversationService>) -> (TeamSession, Arc<MockTeamRepo>) {
         let repo = Arc::new(MockTeamRepo::new());
         let repo_dyn: Arc<dyn ITeamRepository> = repo.clone();
         let broadcaster: Arc<dyn EventBroadcaster> = Arc::new(NullBroadcaster);
@@ -1577,7 +1447,7 @@ mod tests {
             repo_dyn,
             broadcaster,
             backend_path(),
-            task_manager,
+            conv_service,
             "user-test".into(),
             Weak::<TeamSessionService>::new(),
         )
@@ -1587,9 +1457,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn send_message_forwards_files_to_task_manager() {
-        let (task_manager, sent) = task_manager_with_agents(&["c1"], None);
-        let (session, _repo) = start_session_with(task_manager).await;
+    async fn send_message_forwards_files_to_conversation_service() {
+        let (conv_service, sent) = mock_conv_service(&["c1"], None);
+        let (session, _repo) = start_session_with(conv_service).await;
 
         session
             .send_message("Hello", Some(vec!["/tmp/a.txt".into(), "/tmp/b.txt".into()]))
@@ -1597,18 +1467,19 @@ mod tests {
             .unwrap();
 
         let log = sent.lock().unwrap();
-        assert_eq!(log.len(), 1, "expected exactly one send_message call");
+        assert_eq!(log.len(), 1, "expected exactly one IConversationService::send call");
         assert_eq!(log[0].files, vec!["/tmp/a.txt", "/tmp/b.txt"]);
         assert!(log[0].content.contains("Hello"));
-        assert!(!log[0].msg_id.is_empty());
+        assert_eq!(log[0].user_id, "user-test");
+        assert_eq!(log[0].conversation_id, "c1");
         session.stop();
     }
 
     #[tokio::test]
     async fn send_message_without_active_task_does_not_error() {
-        // Empty task_manager → get_task returns None → log-not-throw: the
+        // Empty conv-service → no recorded send → log-not-throw: the
         // mailbox write must still succeed and the call must return Ok.
-        let (session, repo) = start_session_with(empty_task_manager()).await;
+        let (session, repo) = start_session_with(empty_conv_service()).await;
 
         session
             .send_message("queued", None)
@@ -1622,27 +1493,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn send_message_swallows_task_manager_send_failure() {
-        // Agent present but send_message fails — D7b must log and return Ok
+    async fn send_message_swallows_conversation_service_send_failure() {
+        // ConvService present but send fails — D7b must log and return Ok
         // (P0#46). A propagated error would invite retries that double-write
         // the mailbox.
-        let (task_manager, sent) = task_manager_with_agents(&["c1"], Some("boom".into()));
-        let (session, _repo) = start_session_with(task_manager).await;
+        let (conv_service, sent) = mock_conv_service(&["c1"], Some("boom".into()));
+        let (session, _repo) = start_session_with(conv_service).await;
 
         session
             .send_message("payload", None)
             .await
             .expect("wake failure must be swallowed");
 
-        // The attempt still reached the agent, so the sent log has one entry.
+        // The attempt still reached the conv service, so the sent log has
+        // one entry — failure happens after dispatch.
         assert_eq!(sent.lock().unwrap().len(), 1);
         session.stop();
     }
 
     #[tokio::test]
     async fn send_message_to_agent_targets_specific_conversation() {
-        let (task_manager, sent) = task_manager_with_agents(&["c1", "c2"], None);
-        let (session, _repo) = start_session_with(task_manager).await;
+        let (conv_service, sent) = mock_conv_service(&["c1", "c2"], None);
+        let (session, _repo) = start_session_with(conv_service).await;
 
         session
             .send_message_to_agent("worker-1", "do X", Some(vec!["/tmp/x.md".into()]))
@@ -1651,6 +1523,7 @@ mod tests {
 
         let log = sent.lock().unwrap();
         assert_eq!(log.len(), 1);
+        assert_eq!(log[0].conversation_id, "c2", "send must target the worker conversation");
         assert_eq!(log[0].files, vec!["/tmp/x.md"]);
         assert!(log[0].content.contains("do X"));
         session.stop();
@@ -1661,8 +1534,8 @@ mod tests {
         // compute_wake_input returns should_send=true whenever the mailbox has
         // unread entries, regardless of content. Ensure the wake still fires
         // when a caller passes an empty string.
-        let (task_manager, sent) = task_manager_with_agents(&["c1"], None);
-        let (session, _repo) = start_session_with(task_manager).await;
+        let (conv_service, sent) = mock_conv_service(&["c1"], None);
+        let (session, _repo) = start_session_with(conv_service).await;
 
         session.send_message("", None).await.unwrap();
 
@@ -1680,7 +1553,7 @@ mod tests {
             repo,
             broadcaster,
             backend_path(),
-            empty_task_manager(),
+            empty_conv_service(),
             "user-test".into(),
             Weak::<TeamSessionService>::new(),
         )
@@ -1699,7 +1572,7 @@ mod tests {
             repo,
             broadcaster,
             backend_path(),
-            empty_task_manager(),
+            empty_conv_service(),
             "user-test".into(),
             Weak::<TeamSessionService>::new(),
         )

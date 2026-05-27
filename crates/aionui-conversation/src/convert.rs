@@ -64,19 +64,25 @@ pub fn row_to_response_with_extra(
 
     let agent_type: AgentType = string_to_enum(&row.r#type)?;
 
-    // Phase 2: status is derived from the runtime ConvActor, not the DB
-    // column. The mapping flattens the new two-state machine into the
-    // legacy three-state enum so frontend compatibility holds for one
-    // more cycle: Running → legacy Running, Idle/missing → legacy Finished.
-    // The `Pending` variant disappears from server-emitted responses —
-    // that distinction is being dropped along with `aionui_common::ConversationStatus`
-    // in Phase 5/6. Existing rows whose DB.status is "pending" still
-    // appear as `Finished` to the client, which is fine: clients read
-    // `Finished | Running` only when deciding whether the input box should
-    // be enabled.
+    // Phase 2: runtime status (Idle/Running) is derived from the ConvActor
+    // map. When no actor exists for this row (newly-created conversation,
+    // or one that has not been opened since process start), fall back to
+    // the legacy DB.status so the wire format keeps emitting `pending`
+    // for the never-opened state. The legacy three-state enum
+    // (Pending/Running/Finished) is preserved end-to-end through Phase 5;
+    // Phase 6 schedules the DTO/column cleanup. Frontend compatibility
+    // requires `pending` for newly-created rows so the empty conversation
+    // view renders correctly.
+    #[allow(deprecated)]
     let status: ConversationStatus = match actors.get(&row.id).map(|a| a.public_status()) {
         Some(ConvConversationStatus::Running { .. }) => ConversationStatus::Running,
-        _ => ConversationStatus::Finished,
+        Some(ConvConversationStatus::Idle) => ConversationStatus::Finished,
+        None => row
+            .status
+            .as_deref()
+            .map(string_to_enum)
+            .transpose()?
+            .unwrap_or(ConversationStatus::Pending),
     };
 
     let source: Option<ConversationSource> = row.source.as_deref().map(string_to_enum).transpose()?;
@@ -332,9 +338,10 @@ mod tests {
         let resp = row_to_response(row, Path::new("/tmp/data"), &actors).unwrap();
         assert_eq!(resp.id, "conv_1");
         assert_eq!(resp.r#type, AgentType::Acp);
-        // Phase 2: status no longer comes from row.status. With no actor
-        // registered, the runtime view is Idle, which maps to legacy `Finished`.
-        assert_eq!(resp.status, ConversationStatus::Finished);
+        // Phase 2: when no actor is registered, status falls back to the
+        // legacy DB.status so the wire format keeps emitting `pending` for
+        // never-opened rows. Once an actor exists, runtime state takes over.
+        assert_eq!(resp.status, ConversationStatus::Pending);
         assert_eq!(resp.source, Some(ConversationSource::Aionui));
         assert_eq!(resp.model.unwrap().model, "m1");
         assert_eq!(resp.extra["workspace"], "/project");
