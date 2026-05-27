@@ -336,10 +336,6 @@ impl IAgentConnector for AionrsAgentManager {
     // Delegates to the crate-private `IAgentTask` impl on `Self` or to
     // the inherent helpers below.
 
-    fn status(&self) -> Option<ConversationStatus> {
-        self.runtime.status()
-    }
-
     async fn send_message(&self, data: SendMessageData) -> Result<(), AppError> {
         crate::agent_task::IAgentTask::send_message(self, data).await
     }
@@ -620,7 +616,10 @@ mod tests {
         let agent = AionrsAgentManager::new("conv-1".into(), "/project".into(), make_test_config(), None)
             .await
             .unwrap();
-        assert_eq!(IAgentConnector::status(&agent), Some(ConversationStatus::Pending));
+        assert_eq!(
+            crate::agent_task::IAgentTask::status(&agent),
+            Some(ConversationStatus::Pending)
+        );
     }
 
     #[tokio::test]
@@ -638,7 +637,10 @@ mod tests {
             .unwrap();
         assert!(IAgentConnector::kill(&agent, None).is_ok());
         // kill() is a no-op for aionrs (no subprocess); status remains Pending.
-        assert_eq!(IAgentConnector::status(&agent), Some(ConversationStatus::Pending));
+        assert_eq!(
+            crate::agent_task::IAgentTask::status(&agent),
+            Some(ConversationStatus::Pending)
+        );
     }
 
     #[tokio::test]
@@ -674,7 +676,10 @@ mod tests {
 
         IAgentConnector::cancel(&agent).await.unwrap();
 
-        assert_eq!(IAgentConnector::status(&agent), Some(ConversationStatus::Pending));
+        assert_eq!(
+            crate::agent_task::IAgentTask::status(&agent),
+            Some(ConversationStatus::Pending)
+        );
         assert!(matches!(rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)));
     }
 

@@ -26,6 +26,7 @@ use crate::types::SendMessageData;
 pub(crate) trait IAgentTask: Send + Sync {
     /// Current conversation status. `None` if the agent has not
     /// transitioned into a known status yet.
+    #[allow(dead_code)]
     fn status(&self) -> Option<ConversationStatus>;
 
     /// Send a user message to the agent. Returns once the agent has

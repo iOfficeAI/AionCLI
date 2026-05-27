@@ -13,7 +13,6 @@ use aionui_ai_agent::IAgentConnector;
 use aionui_ai_agent::manager::aionrs::AionrsAgentManager;
 use aionui_ai_agent::types::AionrsResolvedConfig;
 use aionui_ai_agent::{SkillIndex, build_system_instructions_with_skills_index};
-use aionui_api_types::ConversationStatus;
 use aionui_common::{AgentKillReason, AgentType};
 use serde_json::json;
 
@@ -68,7 +67,6 @@ async fn aionrs_agent_metadata() {
     assert_eq!(IAgentConnector::agent_type(&agent), AgentType::Aionrs);
     assert_eq!(IAgentConnector::workspace(&agent), "/work");
     assert_eq!(IAgentConnector::conversation_id(&agent), "conv-abc");
-    assert_eq!(IAgentConnector::status(&agent), Some(ConversationStatus::Pending));
     assert!(agent.get_confirmations().is_empty());
     assert!(!agent.check_approval("any", None));
 }

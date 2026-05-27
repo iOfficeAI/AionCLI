@@ -86,49 +86,6 @@ pub struct ConvActor {
     last_activity_ms: AtomicI64,
 }
 
-/// RAII guard returned by [`ConvActor::begin_turn`]. Holding it keeps
-/// the conversation in `Running`; dropping it transitions state back
-/// to `Idle` (synchronously, via `try_lock`) and notifies any waiter
-/// in `wait_for_idle`.
-///
-/// We use `try_lock` in `Drop` because `Drop` cannot await; the
-/// design guarantees that during a turn-end transition no other
-/// caller is contending for `state` (the turn task is single-owner
-/// of the slot). On the rare contention case we still notify so
-/// `wait_for_idle` will re-check on the next iteration.
-pub struct TurnHandle {
-    actor: Arc<ConvActor>,
-    /// `None` once `Drop` has fired — guards against accidental
-    /// double-execution if the type ever grows manual `drop` paths.
-    armed: bool,
-}
-
-impl Drop for TurnHandle {
-    fn drop(&mut self) {
-        if !self.armed {
-            return;
-        }
-        self.armed = false;
-
-        // Synchronous transition. The turn task is the sole owner of
-        // the running slot, so this should never contend.
-        if let Ok(mut guard) = self.actor.state.try_lock() {
-            *guard = ConvState::Idle;
-            self.actor.write_public(ConversationStatus::Idle);
-        } else {
-            // Defence in depth: if some other path is briefly holding
-            // the lock, leave a Notify trail so `wait_for_idle` will
-            // re-check. The lock's holder must transition the state
-            // itself (only `wait_for_idle` ever holds it during turn
-            // end, and it already settles to Idle on its own path).
-        }
-        // Refresh activity timestamp so the conv-layer idle scanner
-        // observes turn-end as a fresh activity boundary.
-        self.actor.touch_activity();
-        self.actor.idle_notify.notify_waiters();
-    }
-}
-
 impl ConvActor {
     pub fn new(id: String) -> Arc<Self> {
         let (event_tx, _) = broadcast::channel(256);
@@ -147,13 +104,6 @@ impl ConvActor {
     /// constant time per entry.
     pub fn last_activity_ms(&self) -> TimestampMs {
         self.last_activity_ms.load(Ordering::Relaxed)
-    }
-
-    /// Test-only override so unit tests can backdate an actor and
-    /// exercise the idle-scan threshold without sleeping.
-    #[cfg(test)]
-    pub(crate) fn set_last_activity_ms_for_test(&self, ms: TimestampMs) {
-        self.last_activity_ms.store(ms, Ordering::Relaxed);
     }
 
     /// Refresh the activity timestamp to "now". Internal helper called
@@ -253,6 +203,74 @@ impl ConvActor {
             Ok(mut guard) => *guard = status,
             Err(mut poisoned) => **poisoned.get_mut() = status,
         }
+    }
+
+    async fn finish_turn(self: &Arc<Self>) {
+        let mut guard = self.state.lock().await;
+        *guard = ConvState::Idle;
+        self.write_public(ConversationStatus::Idle);
+        self.touch_activity();
+        self.idle_notify.notify_waiters();
+    }
+}
+
+impl ConvActor {
+    /// Test-only override so unit tests can backdate an actor and
+    /// exercise the idle-scan threshold without sleeping.
+    #[cfg(test)]
+    pub(crate) fn set_last_activity_ms_for_test(&self, ms: TimestampMs) {
+        self.last_activity_ms.store(ms, Ordering::Relaxed);
+    }
+}
+
+/// RAII guard returned by [`ConvActor::begin_turn`]. Holding it keeps
+/// the conversation in `Running`; [`TurnHandle::release`] transitions
+/// state back to `Idle` and notifies any waiter in `wait_for_idle`.
+///
+/// `Drop` is a best-effort fallback for error paths. Production turn
+/// completion should call `release().await` so the state transition is
+/// completed before downstream observers see the terminal event.
+pub struct TurnHandle {
+    actor: Arc<ConvActor>,
+    /// `false` after `release` / `Drop` has fired — guards against
+    /// accidental double-execution.
+    armed: bool,
+}
+
+impl TurnHandle {
+    pub async fn release(mut self) {
+        if !self.armed {
+            return;
+        }
+        self.armed = false;
+        self.actor.finish_turn().await;
+    }
+}
+
+impl Drop for TurnHandle {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        self.armed = false;
+
+        let actor = self.actor.clone();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                actor.finish_turn().await;
+            });
+            return;
+        }
+
+        if let Ok(mut guard) = actor.state.try_lock() {
+            *guard = ConvState::Idle;
+            actor.write_public(ConversationStatus::Idle);
+        } else {
+            // No runtime and the lock is contended. Leave a notify trail
+            // so waiters re-check; normal async turn paths use release().
+        }
+        actor.touch_activity();
+        actor.idle_notify.notify_waiters();
     }
 }
 

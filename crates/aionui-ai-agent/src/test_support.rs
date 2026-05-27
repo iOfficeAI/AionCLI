@@ -15,8 +15,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use aionui_api_types::{
-    AgentModeResponse, ConversationStatus, GetModelInfoResponse, SideQuestionRequest, SideQuestionResponse,
-    SlashCommandItem,
+    AgentModeResponse, GetModelInfoResponse, SideQuestionRequest, SideQuestionResponse, SlashCommandItem,
 };
 use aionui_common::{AgentKillReason, AgentType, AppError, Confirmation, TimestampMs};
 use async_trait::async_trait;
@@ -38,7 +37,6 @@ pub struct MockConnector {
     conversation_id: String,
     workspace: String,
     agent_type: AgentType,
-    status: Option<ConversationStatus>,
     legacy_tx: broadcast::Sender<AgentStreamEvent>,
     connector_tx: broadcast::Sender<ConnectorEvent>,
     confirmations: Mutex<Vec<Confirmation>>,
@@ -124,10 +122,6 @@ impl IAgentConnector for MockConnector {
     }
     fn subscribe_legacy(&self) -> broadcast::Receiver<AgentStreamEvent> {
         self.legacy_tx.subscribe()
-    }
-
-    fn status(&self) -> Option<ConversationStatus> {
-        self.status
     }
 
     async fn send_message(&self, data: SendMessageData) -> Result<(), AppError> {
@@ -251,7 +245,6 @@ pub struct MockConnectorBuilder {
     conversation_id: String,
     workspace: String,
     agent_type: AgentType,
-    status: Option<ConversationStatus>,
     confirmations: Vec<Confirmation>,
     allow_direct_confirm: bool,
     scripts: VecDeque<Vec<AgentStreamEvent>>,
@@ -264,7 +257,6 @@ impl MockConnectorBuilder {
             conversation_id: conversation_id.into(),
             workspace: "/tmp/test".into(),
             agent_type: AgentType::Acp,
-            status: None,
             confirmations: Vec::new(),
             allow_direct_confirm: false,
             scripts: VecDeque::new(),
@@ -279,11 +271,6 @@ impl MockConnectorBuilder {
 
     pub fn agent_type(mut self, ty: AgentType) -> Self {
         self.agent_type = ty;
-        self
-    }
-
-    pub fn status(mut self, status: ConversationStatus) -> Self {
-        self.status = Some(status);
         self
     }
 
@@ -317,7 +304,6 @@ impl MockConnectorBuilder {
             conversation_id: self.conversation_id,
             workspace: self.workspace,
             agent_type: self.agent_type,
-            status: self.status,
             legacy_tx,
             connector_tx,
             confirmations: Mutex::new(self.confirmations),

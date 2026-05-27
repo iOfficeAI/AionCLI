@@ -1201,8 +1201,8 @@ mod tests {
     use aionui_ai_agent::connector::{ConnectorError, ConnectorEvent, TurnSummary};
     use aionui_ai_agent::protocol::events::FinishEventData;
     use aionui_api_types::{
-        AgentModeResponse, ConversationStatus, GetModelInfoResponse, SideQuestionRequest, SideQuestionResponse,
-        SlashCommandItem, WebSocketMessage,
+        AgentModeResponse, GetModelInfoResponse, SideQuestionRequest, SideQuestionResponse, SlashCommandItem,
+        WebSocketMessage,
     };
     use aionui_common::{AgentKillReason, Confirmation, PaginatedResult, TimestampMs};
     use aionui_db::{
@@ -2257,10 +2257,6 @@ mod tests {
 
         fn subscribe_legacy(&self) -> broadcast::Receiver<AgentStreamEvent> {
             self.event_tx.subscribe()
-        }
-
-        fn status(&self) -> Option<ConversationStatus> {
-            Some(ConversationStatus::Pending)
         }
 
         async fn send_message(&self, data: SendMessageData) -> Result<(), aionui_common::AppError> {

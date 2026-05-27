@@ -199,7 +199,9 @@ async fn second_send_after_cancel_does_not_see_running_state() {
         drop(h);
     }
 
-    // After drop the actor must be Idle so the next caller is not blocked.
+    // After the guard is released the actor must become Idle so the
+    // next caller is not blocked.
+    actor.wait_for_idle().await;
     assert_eq!(trait_svc.status(&conv_id), ConversationStatus::Idle);
 
     // A fresh begin_turn must succeed (no Conflict).

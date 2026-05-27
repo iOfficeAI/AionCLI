@@ -112,10 +112,6 @@ impl IAgentConnector for AcpAgentManager {
     // Each method delegates to the crate-private `IAgentTask` impl on
     // `Self` or to the inherent helpers on `AcpAgentManager`.
 
-    fn status(&self) -> Option<ConversationStatus> {
-        crate::agent_task::IAgentTask::status(self)
-    }
-
     async fn send_message(&self, data: SendMessageData) -> Result<(), AppError> {
         crate::agent_task::IAgentTask::send_message(self, data).await
     }

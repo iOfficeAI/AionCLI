@@ -16,7 +16,9 @@ use aionui_api_types::{
     CloneConversationRequest, ConversationStatus, CreateConversationRequest, ListConversationsQuery,
     SearchMessagesQuery, SendMessageRequest, UpdateConversationRequest, WebSocketMessage,
 };
-use aionui_common::{AgentType, AppError, Confirmation, ConversationSource, PaginatedResult, TimestampMs};
+use aionui_common::{
+    AgentKillReason, AgentType, AppError, Confirmation, ConversationSource, PaginatedResult, TimestampMs,
+};
 use aionui_db::models::{
     AcpSessionRow, AgentMetadataRow, ConversationArtifactRow, ConversationRow, MessageRow, UpdateAgentHandshakeParams,
     UpsertAgentMetadataParams,
@@ -486,6 +488,31 @@ fn make_service_with_resolver(
         acp_session_repo,
     );
     (svc, broadcaster, repo, factory)
+}
+
+fn make_service_with_mock_factory() -> (
+    ConversationService,
+    Arc<MockBroadcaster>,
+    Arc<MockRepo>,
+    Arc<MockConnectorFactory>,
+    Arc<dyn IAgentConnectorFactory>,
+) {
+    let repo = Arc::new(MockRepo::new());
+    let broadcaster = Arc::new(MockBroadcaster::new());
+    let agent_metadata_repo: Arc<dyn IAgentMetadataRepository> = Arc::new(StubAgentMetadataRepo);
+    let acp_session_repo: Arc<dyn IAcpSessionRepository> = Arc::new(StubAcpSessionRepo);
+    let factory = MockConnectorFactory::builder().build();
+    let factory_dyn: Arc<dyn IAgentConnectorFactory> = factory.clone();
+    let svc = ConversationService::new(
+        std::env::temp_dir(),
+        broadcaster.clone(),
+        Arc::new(FixedSkillResolver { names: vec![] }),
+        factory_dyn.clone(),
+        repo.clone(),
+        agent_metadata_repo,
+        acp_session_repo,
+    );
+    (svc, broadcaster, repo, factory, factory_dyn)
 }
 
 fn make_create_req() -> CreateConversationRequest {
@@ -1082,7 +1109,7 @@ fn insert_scripted_connector(
     conversation_id: &str,
     scripts: Vec<Vec<AgentStreamEvent>>,
 ) -> StdArc<MockConnector> {
-    let mut builder = MockConnectorBuilder::new(conversation_id).status(ConversationStatus::Finished);
+    let mut builder = MockConnectorBuilder::new(conversation_id);
     for script in scripts {
         builder = builder.script(script);
     }
@@ -2294,4 +2321,74 @@ async fn cancel_idle_resolves_owner_and_is_noop_for_missing_row() {
     <ConversationService as crate::conv_service_trait::IConversationService>::cancel_idle(&svc, "missing")
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn warmup_marks_conversation_idle_for_runtime_status_and_scanner() {
+    let (svc, _broadcaster, _repo, _factory, factory_dyn) = make_service_with_mock_factory();
+    let conv = svc.create("user_1", make_create_req()).await.unwrap();
+
+    assert_eq!(
+        svc.get("user_1", &conv.id).await.unwrap().status,
+        ConversationStatus::Pending
+    );
+
+    svc.warmup("user_1", &conv.id, &factory_dyn).await.unwrap();
+
+    assert_eq!(
+        svc.get("user_1", &conv.id).await.unwrap().status,
+        ConversationStatus::Finished
+    );
+    let idle = <ConversationService as crate::conv_service_trait::IConversationService>::collect_idle(&svc, -1);
+    assert_eq!(idle, vec![conv.id]);
+}
+
+#[tokio::test]
+async fn cancel_inherent_path_waits_for_actor_idle() {
+    let (svc, _broadcaster, _repo, factory, factory_dyn) = make_service_with_mock_factory();
+    let conv = svc.create("user_1", make_create_req()).await.unwrap();
+    let connector = MockConnector::builder(&conv.id).build_arc();
+    let connector_dyn: Arc<dyn IAgentConnector> = connector.clone();
+    factory.insert(&conv.id, connector_dyn);
+
+    let actor = svc.get_or_create_actor(&conv.id);
+    let turn_handle = actor.begin_turn("msg-running".into()).await.unwrap();
+    let drop_task = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        drop(turn_handle);
+    });
+
+    let started = std::time::Instant::now();
+    svc.cancel("user_1", &conv.id, &factory_dyn).await.unwrap();
+    let elapsed = started.elapsed();
+
+    drop_task.await.unwrap();
+    assert!(
+        elapsed >= std::time::Duration::from_millis(15),
+        "inherent cancel returned before the actor released its running slot ({elapsed:?})"
+    );
+    assert_eq!(
+        <ConversationService as crate::conv_service_trait::IConversationService>::status(&svc, &conv.id),
+        crate::conv_service_trait::ConversationStatus::Idle
+    );
+    assert!(connector.was_cancelled());
+}
+
+#[tokio::test]
+async fn cancel_idle_drops_connector_with_idle_timeout_reason() {
+    let (svc, _broadcaster, _repo, factory, factory_dyn) = make_service_with_mock_factory();
+    let conv = svc.create("user_1", make_create_req()).await.unwrap();
+
+    svc.warmup("user_1", &conv.id, &factory_dyn).await.unwrap();
+    assert_eq!(factory.active_count(), 1);
+
+    <ConversationService as crate::conv_service_trait::IConversationService>::cancel_idle(&svc, &conv.id)
+        .await
+        .unwrap();
+
+    assert_eq!(factory.active_count(), 0);
+    assert_eq!(
+        factory.drop_calls(),
+        vec![(conv.id, Some(AgentKillReason::IdleTimeout))]
+    );
 }

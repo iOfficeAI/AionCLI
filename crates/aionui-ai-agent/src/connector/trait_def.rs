@@ -2,19 +2,14 @@
 //!
 //! The trait carries the full agent control surface (turn lifecycle plus
 //! mode/model/usage/confirmations) so external callers consume agents
-//! exclusively through `Arc<dyn IAgentConnector>`. The
-//! `status() -> Option<ConversationStatus>` hook is the one concession to
-//! legacy semantics: it is the only piece of conversation-runtime
-//! vocabulary that lives here, kept so the idle scanner / collect-idle
-//! code paths continue to work against a `dyn IAgentConnector`.
+//! exclusively through `Arc<dyn IAgentConnector>`.
 //!
 //! Object-safe by construction: no generic methods, no `Self` by value.
 
 use std::pin::Pin;
 
 use aionui_api_types::{
-    AgentModeResponse, ConversationStatus, GetModelInfoResponse, SideQuestionRequest, SideQuestionResponse,
-    SlashCommandItem,
+    AgentModeResponse, GetModelInfoResponse, SideQuestionRequest, SideQuestionResponse, SlashCommandItem,
 };
 use aionui_common::{AgentKillReason, AgentType, AppError, Confirmation, TimestampMs};
 use tokio::sync::broadcast;
@@ -113,10 +108,6 @@ pub trait IAgentConnector: Send + Sync {
     fn subscribe_legacy(&self) -> broadcast::Receiver<AgentStreamEvent>;
 
     // ── Lifecycle / control surface ─────────────────────────────────────
-
-    /// Current conversation status. `None` if the agent has not
-    /// transitioned into a known status yet.
-    fn status(&self) -> Option<ConversationStatus>;
 
     /// Send a user message to the agent. Returns once the agent has
     /// accepted the turn; actual streaming proceeds on the broadcast

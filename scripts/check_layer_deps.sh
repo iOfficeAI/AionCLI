@@ -135,6 +135,16 @@ for token in "${ai_agent_internal_forbidden[@]}"; do
     check_token "$token" "crates/aionui-ai-agent/"
 done
 
+# Rule: connect-layer public connector surface must not expose
+# conversation-runtime vocabulary. `ConvActor` / `IConversationService`
+# are the runtime source of truth; connectors speak protocol/process.
+if grep -RInE \
+    --include='*.rs' \
+    "\\bConversationStatus\\b" \
+    crates/aionui-ai-agent/src/connector 2>/dev/null; then
+    violations+=("crates/aionui-ai-agent/src/connector: forbidden ConversationStatus in connector surface")
+fi
+
 if (( ${#violations[@]} > 0 )); then
     echo "Layer-dep violations:" >&2
     for v in "${violations[@]}"; do

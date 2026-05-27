@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use aionui_ai_agent::types::{BuildTaskOptions, SendMessageData};
-use aionui_ai_agent::{IAgentConnector, IAgentConnectorFactory};
+use aionui_ai_agent::{ConnectorError, IAgentConnector, IAgentConnectorFactory};
 
 use crate::response_middleware::ICronService;
 use aionui_api_types::{
@@ -13,8 +13,8 @@ use aionui_api_types::{
     UpdateConversationRequest, WebSocketMessage,
 };
 use aionui_common::{
-    AgentType, AppError, ConversationSource, ErrorChain, OnConversationDelete, PaginatedResult, generate_short_id,
-    now_ms,
+    AgentKillReason, AgentType, AppError, ConversationSource, ErrorChain, OnConversationDelete, PaginatedResult,
+    generate_short_id, now_ms,
 };
 use aionui_db::models::MessageRow;
 use aionui_db::{
@@ -1145,11 +1145,7 @@ impl ConversationService {
                 Arc::clone(&broadcaster),
                 cron_service.clone(),
             )
-            .with_turn_release_hook(move || {
-                // `TurnHandle::Drop` transitions `ConvActor` back to
-                // `Idle` and notifies any `wait_for_idle` waiter.
-                drop(turn_handle);
-            });
+            .with_turn_handle(turn_handle);
 
             let rx = agent.subscribe_legacy();
             let send_agent = agent.clone();
@@ -1230,12 +1226,20 @@ impl ConversationService {
 
         let Some(agent) = connector_factory.get(conversation_id) else {
             info!("No active agent to cancel; treating as idempotent success");
+            if let Some(actor) = self.actors.get(conversation_id) {
+                actor.wait_for_idle().await;
+            }
             return Ok(());
         };
 
-        if let Err(e) = agent.cancel().await {
-            warn!(error = %ErrorChain(&e), "Failed to cancel agent");
-            return Err(e);
+        if let Err(e) = agent.cancel_current_turn().await {
+            let err = connector_error_to_app_error(e);
+            warn!(error = %ErrorChain(&err), "Failed to cancel agent turn");
+            return Err(err);
+        }
+
+        if let Some(actor) = self.actors.get(conversation_id) {
+            actor.wait_for_idle().await;
         }
 
         info!("Stream canceled");
@@ -1267,6 +1271,7 @@ impl ConversationService {
         // Persist auto-resolved workspace if factory picked a different path.
         self.maybe_persist_workspace(conversation_id, &stored_workspace, agent.workspace())
             .await?;
+        self.get_or_create_actor(conversation_id).mark_idle().await;
 
         debug!("Agent warmed up");
         Ok(())
@@ -1674,32 +1679,19 @@ impl crate::conv_service_trait::IConversationService for ConversationService {
             .filter(|r| r.user_id == user_id)
             .ok_or_else(|| AppError::NotFound(format!("Conversation {id} not found")))?;
 
-        // 1. Best-effort: tell the underlying agent to stop.
-        if let Some(agent) = self.connector_factory.get(id)
-            && let Err(e) = agent.cancel().await
-        {
-            warn!(error = %ErrorChain(&e), "Agent cancel failed; proceeding to wait for actor idle");
-        }
-
-        // 2. Wait for the running turn to fully release the actor's slot.
-        //    Idempotent: returns immediately if no turn is in flight.
-        if let Some(actor) = self.actors.get(id) {
-            actor.wait_for_idle().await;
-        }
-
-        Ok(())
+        ConversationService::cancel(self, user_id, id, &self.connector_factory).await
     }
 
     async fn cancel_idle(&self, id: &str) -> Result<(), AppError> {
-        // Resolve the owner from the row so the system-scoped cancel
-        // can reuse the regular `cancel` codepath (auth check + agent
-        // ack + actor wait). Missing rows are treated as "already
-        // cancelled" — the scanner could race with a manual delete.
-        let Some(row) = self.conversation_repo.get(id).await? else {
+        // Missing rows are treated as already cleaned up — the scanner
+        // can race with a manual delete.
+        if self.conversation_repo.get(id).await?.is_none() {
             return Ok(());
-        };
-        let user_id = row.user_id;
-        <Self as crate::conv_service_trait::IConversationService>::cancel(self, &user_id, id).await
+        }
+        self.connector_factory
+            .drop_connector(id, Some(AgentKillReason::IdleTimeout));
+        self.drop_actor(id);
+        Ok(())
     }
 
     fn status(&self, id: &str) -> crate::conv_service_trait::ConversationStatus {
@@ -1723,6 +1715,17 @@ impl crate::conv_service_trait::IConversationService for ConversationService {
                 (is_idle && actor.last_activity_ms() < cutoff).then(|| entry.key().clone())
             })
             .collect()
+    }
+}
+
+fn connector_error_to_app_error(error: ConnectorError) -> AppError {
+    match error {
+        ConnectorError::Other(err) => err,
+        ConnectorError::Busy => AppError::Conflict("Agent turn already in flight".into()),
+        ConnectorError::NotOpen
+        | ConnectorError::Cancelled
+        | ConnectorError::Protocol(_)
+        | ConnectorError::SubprocessDied(_) => AppError::Internal(error.to_string()),
     }
 }
 

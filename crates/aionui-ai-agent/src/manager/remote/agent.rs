@@ -455,10 +455,6 @@ impl IAgentConnector for RemoteAgentManager {
     // Delegates to the crate-private `IAgentTask` impl on `Self` or to
     // the inherent helpers on `RemoteAgentManager`.
 
-    fn status(&self) -> Option<ConversationStatus> {
-        self.runtime.status()
-    }
-
     async fn send_message(&self, data: SendMessageData) -> Result<(), AppError> {
         crate::agent_task::IAgentTask::send_message(self, data).await
     }

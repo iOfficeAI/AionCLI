@@ -306,10 +306,6 @@ impl crate::connector::IAgentConnector for NanobotAgentManager {
         self.runtime.subscribe()
     }
 
-    fn status(&self) -> Option<ConversationStatus> {
-        self.runtime.status()
-    }
-
     async fn send_message(&self, data: SendMessageData) -> Result<(), AppError> {
         crate::agent_task::IAgentTask::send_message(self, data).await
     }

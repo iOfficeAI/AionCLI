@@ -140,7 +140,6 @@ impl OnConversationDelete for ConnectorFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aionui_api_types::ConversationStatus;
     use aionui_common::{AgentType, Confirmation, ProviderWithModel, TimestampMs};
     use futures_util::FutureExt;
     use tokio::sync::broadcast;
@@ -194,9 +193,6 @@ mod tests {
 
         // Lifecycle/control surface: trivial stubs since the only
         // callers under test are the slot-management tests.
-        fn status(&self) -> Option<ConversationStatus> {
-            None
-        }
         async fn send_message(&self, _data: SendMessageData) -> Result<(), AppError> {
             Ok(())
         }

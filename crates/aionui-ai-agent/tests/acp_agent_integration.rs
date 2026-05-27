@@ -24,7 +24,6 @@ use aionui_ai_agent::factory::acp_assembler::{WorkspaceInfo, assemble_acp_params
 use aionui_ai_agent::manager::acp::AcpAgentManager;
 use aionui_ai_agent::registry::AgentRegistry;
 use aionui_ai_agent::{AgentStreamEvent, IAgentConnector};
-use aionui_api_types::ConversationStatus;
 use aionui_db::{SqliteAgentMetadataRepository, init_database_memory};
 use tokio::sync::broadcast;
 
@@ -265,36 +264,30 @@ async fn acp_agent_session_id_captured_from_start() {
 #[ignore = "requires JSON-RPC mock agent"]
 async fn acp_agent_status_transitions() {
     let _guard = serial();
-    let (agent, mut rx) = make_mock_agent(
+    let (_agent, mut rx) = make_mock_agent(
         r#"sleep 0.1 && echo '{"type":"start","data":{}}' && sleep 0.3 && echo '{"type":"finish","data":{}}'"#,
         "claude",
     )
     .await;
 
-    // Initial status: None
-    assert_eq!(agent.status(), None);
-
     // Wait for Start event
     wait_for_event(&mut rx, |e| matches!(e, AgentStreamEvent::Start(_))).await;
-    assert_eq!(agent.status(), Some(ConversationStatus::Running));
 
     // Wait for Finish event
     wait_for_event(&mut rx, |e| matches!(e, AgentStreamEvent::Finish(_))).await;
-    assert_eq!(agent.status(), Some(ConversationStatus::Finished));
 }
 
 #[tokio::test]
 #[ignore = "requires JSON-RPC mock agent"]
 async fn acp_agent_error_event_sets_finished() {
     let _guard = serial();
-    let (agent, mut rx) = make_mock_agent(
+    let (_agent, mut rx) = make_mock_agent(
         r#"echo '{"type":"start","data":{}}' && sleep 0.1 && echo '{"type":"error","data":{"message":"timeout"}}'"#,
         "claude",
     )
     .await;
 
     wait_for_event(&mut rx, |e| matches!(e, AgentStreamEvent::Error(_))).await;
-    assert_eq!(agent.status(), Some(ConversationStatus::Finished));
 }
 
 #[tokio::test]
