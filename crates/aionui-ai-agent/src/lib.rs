@@ -3,6 +3,7 @@ pub(crate) mod agent_runtime;
 pub mod agent_task;
 pub mod capability;
 pub mod cc_switch;
+pub mod connector;
 pub mod factory;
 pub(crate) mod idle_scanner;
 pub mod manager;
@@ -27,6 +28,9 @@ pub use capability::skill_manager::{
     AcpSkillManager, SkillDefinition, SkillIndex, build_skills_index_text, build_system_instructions,
     build_system_instructions_with_skills_index, detect_skill_load_request, prepare_first_message,
     prepare_first_message_with_skills_index,
+};
+pub use connector::{
+    ChunkPayload, ConnectorError, ConnectorEvent, ExitInfo, IAgentConnector, StopReason, ToolUsePayload, TurnSummary,
 };
 pub use factory::{AgentFactoryDeps, build_agent_factory};
 pub use idle_scanner::start_idle_scanner;
