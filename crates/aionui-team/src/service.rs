@@ -4,7 +4,7 @@ pub(crate) mod spawn_support;
 use std::path::PathBuf;
 use std::sync::{Arc, Weak};
 
-use aionui_ai_agent::IWorkerTaskManager;
+use aionui_ai_agent::IAgentConnectorFactory;
 use aionui_api_types::{
     AddAgentRequest, CreateConversationRequest, CreateTeamRequest, GuideMcpConfig, TeamAgentResponse, TeamMcpPhase,
     TeamMcpStatusPayload, TeamResponse, WebSocketMessage,
@@ -33,7 +33,7 @@ pub struct TeamSessionService {
     provider_repo: Arc<dyn IProviderRepository>,
     conversation_service: ConversationService,
     broadcaster: Arc<dyn EventBroadcaster>,
-    task_manager: Arc<dyn IWorkerTaskManager>,
+    connector_factory: Arc<dyn IAgentConnectorFactory>,
     backend_binary_path: Arc<PathBuf>,
     sessions: Arc<DashMap<String, SessionEntry>>,
     /// Per-team mutex serializing `add_agent` so concurrent callers cannot
@@ -64,7 +64,7 @@ impl TeamSessionService {
         provider_repo: Arc<dyn IProviderRepository>,
         conversation_service: ConversationService,
         broadcaster: Arc<dyn EventBroadcaster>,
-        task_manager: Arc<dyn IWorkerTaskManager>,
+        connector_factory: Arc<dyn IAgentConnectorFactory>,
         backend_binary_path: Arc<PathBuf>,
         guide_mcp_config: Option<GuideMcpConfig>,
     ) -> Arc<Self> {
@@ -74,7 +74,7 @@ impl TeamSessionService {
             provider_repo,
             conversation_service,
             broadcaster,
-            task_manager,
+            connector_factory,
             backend_binary_path,
             sessions: Arc::new(DashMap::new()),
             add_agent_locks: Arc::new(DashMap::new()),
@@ -335,8 +335,14 @@ impl TeamSessionService {
             .agents
             .iter()
             .map(|agent| {
-                self.task_manager
-                    .kill_and_wait(&agent.conversation_id, Some(AgentKillReason::TeamDeleted))
+                let factory = self.connector_factory.clone();
+                let conv_id = agent.conversation_id.clone();
+                async move {
+                    if let Some(connector) = factory.get(&conv_id) {
+                        connector.kill_and_wait(Some(AgentKillReason::TeamDeleted)).await;
+                    }
+                    factory.drop_connector(&conv_id, Some(AgentKillReason::TeamDeleted));
+                }
             })
             .collect();
 
@@ -579,7 +585,7 @@ impl TeamSessionService {
     /// Flow (mcp.md §4.3):
     /// 1. Start `TeamSession` (opens the MCP TCP server).
     /// 2. For each agent: persist `team_mcp_stdio_config` into
-    ///    `conversation.extra` → `task_manager.kill(conv_id, TeamMcpRebuild)`
+    ///    `conversation.extra` → `connector_factory.drop_connector(conv_id, TeamMcpRebuild)`
     ///    → `conversation_service.warmup(...)` rebuilds the ACP process with
     ///    the new extra.
     /// 3. Spawn per-agent event loops that drain the mailbox whenever notified.
@@ -750,13 +756,12 @@ impl TeamSessionService {
                 return Err(TeamError::InvalidRequest(msg));
             }
 
-            let _ = self
-                .task_manager
-                .kill(&agent.conversation_id, Some(AgentKillReason::TeamMcpRebuild));
+            self.connector_factory
+                .drop_connector(&agent.conversation_id, Some(AgentKillReason::TeamMcpRebuild));
 
             if let Err(e) = self
                 .conversation_service
-                .warmup(user_id, &agent.conversation_id, &self.task_manager)
+                .warmup(user_id, &agent.conversation_id, &self.connector_factory)
                 .await
             {
                 let msg = format!("failed to warm up rebuilt agent {}: {e}", agent.slot_id);
@@ -891,7 +896,7 @@ impl TeamSessionService {
         let team = Team::from_row(&row)?;
 
         for agent in &team.agents {
-            if let Some(instance) = self.task_manager.get_task(&agent.conversation_id)
+            if let Some(instance) = self.connector_factory.get(&agent.conversation_id)
                 && let Err(e) = instance.set_mode(mode).await
             {
                 warn!(

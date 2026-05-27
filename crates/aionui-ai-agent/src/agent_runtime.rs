@@ -14,7 +14,8 @@ use std::sync::{Arc, RwLock};
 
 use tokio::sync::broadcast;
 
-use aionui_common::{ConversationStatus, TimestampMs, now_ms};
+use aionui_api_types::ConversationStatus;
+use aionui_common::{TimestampMs, now_ms};
 
 use crate::protocol::events::{AgentStreamEvent, ErrorEventData, FinishEventData};
 

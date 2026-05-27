@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
-use aionui_ai_agent::IWorkerTaskManager;
+use aionui_ai_agent::IAgentConnectorFactory;
+use aionui_ai_agent::test_support::MockConnectorFactory;
 use aionui_api_types::{
-    CreateConversationRequest, ListConversationsQuery, UpdateConversationRequest, WebSocketMessage,
+    ConversationStatus, CreateConversationRequest, ListConversationsQuery, UpdateConversationRequest, WebSocketMessage,
 };
-use aionui_common::{AgentKillReason, AgentType, AppError, ConversationSource, ConversationStatus, TimestampMs};
+use aionui_common::{AgentType, AppError, ConversationSource};
 use aionui_conversation::ConversationService;
 use aionui_conversation::skill_resolver::SkillResolver;
 use aionui_db::{SqliteConversationRepository, init_database_memory};
@@ -36,39 +37,6 @@ impl EventBroadcaster for TestBroadcaster {
     }
 }
 
-struct NoopTaskManager;
-
-#[async_trait::async_trait]
-impl IWorkerTaskManager for NoopTaskManager {
-    fn get_task(&self, _: &str) -> Option<aionui_ai_agent::AgentInstance> {
-        None
-    }
-    async fn get_or_build_task(
-        &self,
-        _: &str,
-        _: aionui_ai_agent::types::BuildTaskOptions,
-    ) -> Result<aionui_ai_agent::AgentInstance, AppError> {
-        Err(AppError::Internal("noop".into()))
-    }
-    fn kill(&self, _: &str, _: Option<AgentKillReason>) -> Result<(), AppError> {
-        Ok(())
-    }
-    fn kill_and_wait(
-        &self,
-        _: &str,
-        _: Option<AgentKillReason>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
-        Box::pin(std::future::ready(()))
-    }
-    fn clear(&self) {}
-    fn active_count(&self) -> usize {
-        0
-    }
-    fn collect_idle(&self, _: TimestampMs) -> Vec<String> {
-        vec![]
-    }
-}
-
 struct EmptySkillResolver;
 
 #[async_trait::async_trait]
@@ -91,7 +59,11 @@ impl SkillResolver for EmptySkillResolver {
     }
 }
 
-async fn setup() -> (ConversationService, Arc<TestBroadcaster>, Arc<dyn IWorkerTaskManager>) {
+async fn setup() -> (
+    ConversationService,
+    Arc<TestBroadcaster>,
+    Arc<dyn IAgentConnectorFactory>,
+) {
     let db = init_database_memory().await.unwrap();
     let repo = Arc::new(SqliteConversationRepository::new(db.pool().clone()));
     let broadcaster = Arc::new(TestBroadcaster::new());
@@ -99,7 +71,7 @@ async fn setup() -> (ConversationService, Arc<TestBroadcaster>, Arc<dyn IWorkerT
         Arc::new(aionui_db::SqliteAgentMetadataRepository::new(db.pool().clone()));
     let acp_session_repo: Arc<dyn aionui_db::IAcpSessionRepository> =
         Arc::new(aionui_db::SqliteAcpSessionRepository::new(db.pool().clone()));
-    let task_mgr: Arc<dyn IWorkerTaskManager> = Arc::new(NoopTaskManager);
+    let task_mgr: Arc<dyn IAgentConnectorFactory> = MockConnectorFactory::builder().build();
     let svc = ConversationService::new(
         std::env::temp_dir(),
         broadcaster.clone(),
@@ -752,8 +724,9 @@ async fn update_accepts_top_level_model_for_aionrs() {
 #[tokio::test]
 async fn update_non_aionrs_extra_model_does_not_kill_task() {
     // Verifies the explicit rule that `extra.model` changes for non-aionrs
-    // do NOT trigger task_manager.kill. Since our `NoopTaskManager::kill` is
-    // a no-op we can't assert the negative directly; we assert the update
+    // do NOT trigger task_manager.kill. Since our default `MockConnectorFactory`
+    // does not record drop_connector via this path we can't assert the negative
+    // directly; we assert the update
     // succeeds and the merged extra carries the new field, and that top-level
     // model remains None.
     let (svc, _, task_mgr) = setup().await;
@@ -810,7 +783,7 @@ async fn create_acp_seeds_acp_session_runtime_from_extra() {
         Arc::new(aionui_db::SqliteAgentMetadataRepository::new(db.pool().clone()));
     let acp_session_repo: Arc<dyn aionui_db::IAcpSessionRepository> =
         Arc::new(SqliteAcpSessionRepository::new(db.pool().clone()));
-    let task_mgr: Arc<dyn IWorkerTaskManager> = Arc::new(NoopTaskManager);
+    let task_mgr: Arc<dyn IAgentConnectorFactory> = MockConnectorFactory::builder().build();
     let svc = aionui_conversation::ConversationService::new(
         std::env::temp_dir(),
         broadcaster.clone(),
@@ -860,7 +833,7 @@ async fn create_acp_skips_seed_when_extra_has_empty_runtime_fields() {
         Arc::new(aionui_db::SqliteAgentMetadataRepository::new(db.pool().clone()));
     let acp_session_repo: Arc<dyn aionui_db::IAcpSessionRepository> =
         Arc::new(SqliteAcpSessionRepository::new(db.pool().clone()));
-    let task_mgr: Arc<dyn IWorkerTaskManager> = Arc::new(NoopTaskManager);
+    let task_mgr: Arc<dyn IAgentConnectorFactory> = MockConnectorFactory::builder().build();
     let svc = aionui_conversation::ConversationService::new(
         std::env::temp_dir(),
         broadcaster.clone(),

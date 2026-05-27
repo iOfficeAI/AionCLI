@@ -67,6 +67,26 @@ rg "MAX_.*CONTINUATIONS|continuation_count|pending_send" crates/aionui-conversat
 
 MUST return zero matches.
 
+### 6. The conv layer owns idle-conversation cleanup
+
+Idle decision logic lives in `aionui-conversation`. Specifically:
+
+- `start_idle_scanner` — the periodic background task that walks the
+  active actor map — lives in `crates/aionui-conversation/src/idle_scanner.rs`.
+- The "idle for ≥ N seconds AND `ConvState::Idle`" predicate is
+  `IConversationService::collect_idle`, paired with
+  `IConversationService::cancel_idle` which performs the actual
+  shutdown.
+- The scanner consumes `Arc<dyn IConversationService>`; it must NOT
+  reach into the connect layer to ask agents about their own idle
+  status.
+
+The connect-layer `IAgentConnectorFactory` (in `aionui-ai-agent`)
+intentionally exposes no idle-policy hooks. If the connector needs to
+participate in shutdown, the conv layer drives it through
+`IConversationService::cancel_idle`, which already calls
+`connector.kill(reason = IdleTimeout)` under the hood.
+
 ## Module layout
 
 | Module | Responsibility |
@@ -80,15 +100,17 @@ MUST return zero matches.
 | `state.rs` | `ConversationRouterState` |
 | `response_middleware.rs` | Cron + `<think>` post-processing |
 | `skill_resolver.rs` / `skill_snapshot.rs` | Extension/skill plumbing |
-| `task_options.rs` | Build options for the connect-layer task manager |
+| `task_options.rs` | Build options forwarded to connect-layer connector factory |
+| `idle_scanner.rs` | `start_idle_scanner` background task (see Hard rule 6) |
 
 ## Allowed dependencies
 
 - `aionui-common`, `aionui-db`, `aionui-realtime`, `aionui-api-types`
-- `aionui-ai-agent` (connect layer) — through `IAgentConnector` ONLY.
-  Do not import `IAgentTask`, `IWorkerTaskManager`, `AgentInstance`
-  in new code; existing legacy uses are scheduled for removal in
-  Phase 5.
+- `aionui-ai-agent` (connect layer) — through `IAgentConnectorFactory`
+  + `Arc<dyn IAgentConnector>` ONLY. The legacy task-manager surface
+  (`IWorkerTaskManager`, `AgentInstance`, `IAgentTask`,
+  `WorkerTaskManagerImpl`) was deleted in Phase 5; reintroducing any of
+  those names is blocked by `scripts/check_layer_deps.sh`.
 
 ## Forbidden dependencies
 

@@ -209,11 +209,17 @@ mod tests {
         async fn cancel(&self, _user_id: &str, _id: &str) -> Result<(), AppError> {
             Ok(())
         }
+        async fn cancel_idle(&self, _id: &str) -> Result<(), AppError> {
+            Ok(())
+        }
         fn status(&self, _id: &str) -> ConvConversationStatus {
             ConvConversationStatus::Idle
         }
         fn subscribe(&self, _id: &str) -> broadcast::Receiver<ConversationEvent> {
             self.tx.subscribe()
+        }
+        fn collect_idle(&self, _threshold_ms: i64) -> Vec<String> {
+            Vec::new()
         }
     }
 

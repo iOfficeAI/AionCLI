@@ -1,12 +1,24 @@
 //! New connect-layer trait. See spec § Connect layer: `IAgentConnector`.
 //!
-//! Speaks protocol/process language only. Does **not** import or expose
-//! conversation-status types — those belong to the conv layer (see
-//! `aionui-conversation`).
+//! Phase 5 (additive): the trait now also carries the task-manager method
+//! surface (mode/model/usage/confirmations/etc.) so the upcoming
+//! `AgentInstance` removal is a pure type-flip — every `agent.X()` call
+//! site keeps compiling against `Arc<dyn IAgentConnector>` without
+//! re-shaping the call. The `status() -> Option<ConversationStatus>` hook
+//! is the one concession to legacy semantics: it is the only piece of
+//! conversation-runtime vocabulary that lives here, kept solely so the
+//! existing idle scanner / collect-idle code paths continue to work
+//! against a `dyn IAgentConnector` once the swap lands.
 //!
 //! Object-safe by construction: no generic methods, no `Self` by value.
 
-use aionui_common::{AgentKillReason, AgentType, AppError, TimestampMs};
+use std::pin::Pin;
+
+use aionui_api_types::{
+    AgentModeResponse, ConversationStatus, GetModelInfoResponse, SideQuestionRequest, SideQuestionResponse,
+    SlashCommandItem,
+};
+use aionui_common::{AgentKillReason, AgentType, AppError, Confirmation, TimestampMs};
 use tokio::sync::broadcast;
 
 use crate::protocol::events::AgentStreamEvent;
@@ -100,6 +112,98 @@ pub trait IAgentConnector: Send + Sync {
     /// Subscribe to the legacy `AgentStreamEvent` channel — kept for
     /// callers that have not yet migrated. Will be removed in Phase 5.
     fn subscribe_legacy(&self) -> broadcast::Receiver<AgentStreamEvent>;
+
+    // ── Task-manager method surface (Phase 5 additive) ─────────────────
+    //
+    // These mirror the existing `IAgentTask` / `AgentInstance` surface
+    // 1:1 so the upcoming Task 5-7 swap (Arc<dyn IAgentConnector> in
+    // place of AgentInstance) is a pure type-flip — every existing call
+    // site keeps compiling. Implementations delegate to the same code
+    // paths the IAgentTask impls already use; behaviour parity is
+    // intentional.
+
+    /// Current conversation status. `None` if the agent has not
+    /// transitioned into a known status yet. Mirrors
+    /// `IAgentTask::status` so the legacy idle scanner stays usable
+    /// against `dyn IAgentConnector`.
+    fn status(&self) -> Option<ConversationStatus>;
+
+    /// Send a user message to the agent. Returns once the agent has
+    /// accepted the turn; actual streaming proceeds on the broadcast
+    /// channel returned by [`Self::subscribe_legacy`]. Mirrors
+    /// `IAgentTask::send_message`.
+    async fn send_message(&self, data: SendMessageData) -> Result<(), AppError>;
+
+    /// Stop the current streaming response without killing the agent.
+    /// `AppError`-flavoured counterpart to [`Self::cancel_current_turn`]
+    /// — kept so the conv layer's `agent.cancel().await?` flow can
+    /// migrate without re-shaping its error handling. Mirrors
+    /// `IAgentTask::cancel`.
+    async fn cancel(&self) -> Result<(), AppError>;
+
+    /// Terminate the agent process. Mirrors `IAgentTask::kill`.
+    fn kill(&self, reason: Option<AgentKillReason>) -> Result<(), AppError>;
+
+    /// Terminate the agent process and return a future that resolves
+    /// when the underlying OS process / WS connection has fully closed.
+    /// Mirrors `AgentInstance::kill_and_wait`.
+    fn kill_and_wait(&self, reason: Option<AgentKillReason>) -> Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+
+    /// Pending confirmation items for this connector. Variants without
+    /// a confirmation surface return an empty list. Mirrors
+    /// `AgentInstance::get_confirmations`.
+    fn get_confirmations(&self) -> Vec<Confirmation>;
+
+    /// Submit a confirmation response for a pending tool call. Mirrors
+    /// `AgentInstance::confirm`.
+    fn confirm(&self, msg_id: &str, call_id: &str, data: serde_json::Value, always_allow: bool)
+    -> Result<(), AppError>;
+
+    /// Whether an action is auto-approved in this session. Mirrors
+    /// `AgentInstance::check_approval`.
+    fn check_approval(&self, action: &str, command_type: Option<&str>) -> bool;
+
+    /// Session key for connectors that expose one (currently
+    /// OpenClaw). Mirrors `AgentInstance::get_session_key`.
+    fn get_session_key(&self) -> Option<String>;
+
+    /// Current session mode. Connectors without a modal concept return
+    /// `mode = "default"`, `initialized = false`. Mirrors
+    /// `AgentInstance::get_mode`.
+    async fn get_mode(&self) -> Result<AgentModeResponse, AppError>;
+
+    /// Set the session mode. Connectors without a modal concept
+    /// surface `BadRequest`. Mirrors `AgentInstance::set_mode`.
+    async fn set_mode(&self, mode: &str) -> Result<(), AppError>;
+
+    /// Current model info (id + label + available list). Connectors
+    /// without a model picker return `model_info = None`. Mirrors
+    /// `AgentInstance::get_model`.
+    async fn get_model(&self) -> Result<GetModelInfoResponse, AppError>;
+
+    /// Switch the active model. Connectors without a model picker
+    /// surface `BadRequest`. Mirrors `AgentInstance::set_model`.
+    async fn set_model(&self, model_id: &str) -> Result<(), AppError>;
+
+    /// Cached session usage as a snake_case JSON object (per the ACP
+    /// SDK schema, normalised). Connectors that don't track usage
+    /// return `None`. Mirrors `AgentInstance::get_usage`.
+    async fn get_usage(&self) -> Result<Option<serde_json::Value>, AppError>;
+
+    /// Slash commands available in the current session. Connectors
+    /// without a slash-command catalog return an empty list. Mirrors
+    /// `AgentInstance::get_slash_commands`.
+    async fn get_slash_commands(&self) -> Result<Vec<SlashCommandItem>, AppError>;
+
+    /// Dispatch a side-question to the agent. Connectors without
+    /// side-question support return `status = "unsupported"`. Mirrors
+    /// `AgentInstance::handle_side_question`.
+    async fn handle_side_question(&self, req: SideQuestionRequest) -> Result<SideQuestionResponse, AppError>;
+
+    /// OpenClaw-specific runtime diagnostics. All other connectors
+    /// return `Value::Null` so diagnostic UIs degrade gracefully.
+    /// Mirrors `AgentInstance::get_openclaw_runtime`.
+    async fn get_openclaw_runtime(&self) -> Result<serde_json::Value, AppError>;
 }
 
 #[cfg(test)]

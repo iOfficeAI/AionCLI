@@ -21,7 +21,8 @@ async fn response_json(body: Body) -> serde_json::Value {
 async fn build_app() -> axum::Router {
     let db = aionui_db::init_database_memory().await.unwrap();
     let services = AppServices::from_config(db, &AppConfig::default()).await.unwrap();
-    aionui_app::create_router(&services).await
+    let (router, _conv_service) = aionui_app::create_router(&services).await;
+    router
 }
 
 #[tokio::test]

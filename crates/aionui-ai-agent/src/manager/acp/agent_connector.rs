@@ -5,10 +5,15 @@
 //! here speaks protocol/process language only — no conversation-runtime
 //! concepts leak into the connector surface.
 
+use std::pin::Pin;
 use std::time::Duration;
 
 use agent_client_protocol::schema::{CancelNotification, SessionId};
-use aionui_common::{AgentKillReason, AgentType, AppError, ConversationStatus, TimestampMs};
+use aionui_api_types::{
+    AgentModeResponse, ConversationStatus, GetModelInfoResponse, ModelInfoEntry, ModelInfoPayload, SideQuestionRequest,
+    SideQuestionResponse, SlashCommandItem,
+};
+use aionui_common::{AgentKillReason, AgentType, AppError, Confirmation, TimestampMs};
 use tokio::sync::broadcast;
 
 use crate::connector::{ChunkPayload, ConnectorError, ConnectorEvent, IAgentConnector, StopReason, TurnSummary};
@@ -101,6 +106,162 @@ impl IAgentConnector for AcpAgentManager {
     fn subscribe_legacy(&self) -> broadcast::Receiver<AgentStreamEvent> {
         self.runtime.subscribe()
     }
+
+    // ── Task-manager method surface (Phase 5 additive) ─────────────────
+    //
+    // Each method delegates to the existing `IAgentTask` impl on `Self`
+    // or to the inherent helpers on `AcpAgentManager` so the upcoming
+    // Task 5-7 swap (Arc<dyn IAgentConnector> in place of AgentInstance)
+    // is a pure type-flip — every call site keeps compiling.
+
+    fn status(&self) -> Option<ConversationStatus> {
+        crate::agent_task::IAgentTask::status(self)
+    }
+
+    async fn send_message(&self, data: SendMessageData) -> Result<(), AppError> {
+        crate::agent_task::IAgentTask::send_message(self, data).await
+    }
+
+    async fn cancel(&self) -> Result<(), AppError> {
+        crate::agent_task::IAgentTask::cancel(self).await
+    }
+
+    fn kill(&self, reason: Option<AgentKillReason>) -> Result<(), AppError> {
+        crate::agent_task::IAgentTask::kill(self, reason)
+    }
+
+    fn kill_and_wait(&self, reason: Option<AgentKillReason>) -> Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        AcpAgentManager::kill_and_wait(self, reason)
+    }
+
+    /// ACP currently tracks permission prompts inline through the
+    /// permission router (not surfaced here), so returns empty —
+    /// matches the existing `AgentInstance::Acp(_)` arm.
+    fn get_confirmations(&self) -> Vec<Confirmation> {
+        Vec::new()
+    }
+
+    fn confirm(
+        &self,
+        msg_id: &str,
+        call_id: &str,
+        data: serde_json::Value,
+        always_allow: bool,
+    ) -> Result<(), AppError> {
+        AcpAgentManager::confirm(self, msg_id, call_id, data, always_allow)
+    }
+
+    /// Mirrors the existing `AgentInstance::Acp(_)` arm, which always
+    /// returns `false` (auto-approval lives outside the ACP session).
+    fn check_approval(&self, _action: &str, _command_type: Option<&str>) -> bool {
+        false
+    }
+
+    /// ACP does not expose an externally visible session key; keys are
+    /// negotiated internally by the SDK.
+    fn get_session_key(&self) -> Option<String> {
+        None
+    }
+
+    async fn get_mode(&self) -> Result<AgentModeResponse, AppError> {
+        AcpAgentManager::mode(self).await
+    }
+
+    async fn set_mode(&self, mode: &str) -> Result<(), AppError> {
+        AcpAgentManager::set_mode(self, mode).await
+    }
+
+    async fn get_model(&self) -> Result<GetModelInfoResponse, AppError> {
+        let sdk_model = AcpAgentManager::model(self).await;
+        let sdk_info = sdk_model.map(map_sdk_model_to_payload);
+        let cc_switch_info = if AcpAgentManager::is_claude_backend(self) {
+            crate::cc_switch::read_claude_model_info()
+        } else {
+            None
+        };
+        let model_info = merge_model_info(sdk_info, cc_switch_info);
+        Ok(GetModelInfoResponse { model_info })
+    }
+
+    async fn set_model(&self, model_id: &str) -> Result<(), AppError> {
+        if model_id.trim().is_empty() {
+            return Err(AppError::BadRequest("model_id must not be empty".into()));
+        }
+        AcpAgentManager::set_model(self, model_id).await
+    }
+
+    async fn get_usage(&self) -> Result<Option<serde_json::Value>, AppError> {
+        let Some(usage) = AcpAgentManager::usage(self).await else {
+            return Ok(None);
+        };
+        let mut value =
+            serde_json::to_value(usage).map_err(|e| AppError::Internal(format!("Failed to serialize usage: {e}")))?;
+        aionui_common::normalize_keys_to_snake_case(&mut value);
+        Ok(Some(value))
+    }
+
+    async fn get_slash_commands(&self) -> Result<Vec<SlashCommandItem>, AppError> {
+        AcpAgentManager::load_slash_commands(self).await
+    }
+
+    async fn handle_side_question(&self, req: SideQuestionRequest) -> Result<SideQuestionResponse, AppError> {
+        if req.question.trim().is_empty() {
+            return Err(AppError::BadRequest("question must not be empty".into()));
+        }
+        if !AcpAgentManager::supports_side_question(self) {
+            return Ok(SideQuestionResponse {
+                status: "unsupported".into(),
+                answer: None,
+            });
+        }
+        // Mirrors the placeholder behaviour in `AgentInstance::handle_side_question`
+        // for the ACP arm. Full wiring lands in the app integration phase.
+        Ok(SideQuestionResponse {
+            status: "ok".into(),
+            answer: Some("Side question support will be fully wired in app integration phase.".into()),
+        })
+    }
+
+    async fn get_openclaw_runtime(&self) -> Result<serde_json::Value, AppError> {
+        Ok(serde_json::Value::Null)
+    }
+}
+
+/// Map the raw ACP SDK model state into the public API payload.
+///
+/// Reused inside `IAgentConnector::get_model` above; if the shape of
+/// `ModelInfoPayload` changes, update it here. Module-private —
+/// previously lived in `agent_task.rs`, relocated when the legacy
+/// `IAgentTask` / `AgentInstance` types were deleted.
+pub(super) fn map_sdk_model_to_payload(m: agent_client_protocol::schema::SessionModelState) -> ModelInfoPayload {
+    let available: Vec<ModelInfoEntry> = m
+        .available_models
+        .iter()
+        .map(|am| ModelInfoEntry {
+            id: am.model_id.to_string(),
+            label: am.name.clone(),
+        })
+        .collect();
+    let current_id = m.current_model_id.to_string();
+    let current_label = available
+        .iter()
+        .find(|e| e.id == current_id)
+        .map(|e| e.label.clone())
+        .unwrap_or_else(|| current_id.clone());
+    ModelInfoPayload {
+        current_model_id: Some(current_id),
+        current_model_label: Some(current_label),
+        available_models: available,
+    }
+}
+
+/// Merge ACP-SDK and CC-Switch model info, preferring the SDK payload
+/// when both are present.
+pub(super) fn merge_model_info(
+    sdk_info: Option<ModelInfoPayload>,
+    cc_switch_info: Option<ModelInfoPayload>,
+) -> Option<ModelInfoPayload> {
+    sdk_info.or(cc_switch_info)
 }
 
 #[cfg(test)]
@@ -151,5 +312,54 @@ mod connector_tests {
         cancel_ack.notify_waiters();
         waiter.await.unwrap();
         assert!(acked.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    // ── merge_model_info: SDK payload preferred, CC-Switch fallback ──
+
+    #[test]
+    fn merge_prefers_sdk_model_over_cc_switch() {
+        let sdk_payload = ModelInfoPayload {
+            current_model_id: Some("default".into()),
+            current_model_label: Some("Claude Sonnet 4.6".into()),
+            available_models: vec![ModelInfoEntry {
+                id: "default".into(),
+                label: "Claude Sonnet 4.6".into(),
+            }],
+        };
+        let cc_switch_payload = ModelInfoPayload {
+            current_model_id: Some("default".into()),
+            current_model_label: Some("DeepSeek V4".into()),
+            available_models: vec![ModelInfoEntry {
+                id: "default".into(),
+                label: "DeepSeek V4".into(),
+            }],
+        };
+
+        let result = merge_model_info(Some(sdk_payload), Some(cc_switch_payload));
+        assert_eq!(
+            result.unwrap().current_model_label.as_deref(),
+            Some("Claude Sonnet 4.6")
+        );
+    }
+
+    #[test]
+    fn merge_falls_back_to_cc_switch_when_sdk_none() {
+        let cc_switch_payload = ModelInfoPayload {
+            current_model_id: Some("default".into()),
+            current_model_label: Some("DeepSeek V4".into()),
+            available_models: vec![ModelInfoEntry {
+                id: "default".into(),
+                label: "DeepSeek V4".into(),
+            }],
+        };
+
+        let result = merge_model_info(None, Some(cc_switch_payload));
+        assert_eq!(result.unwrap().current_model_label.as_deref(), Some("DeepSeek V4"));
+    }
+
+    #[test]
+    fn merge_returns_none_when_both_none() {
+        let result = merge_model_info(None, None);
+        assert!(result.is_none());
     }
 }

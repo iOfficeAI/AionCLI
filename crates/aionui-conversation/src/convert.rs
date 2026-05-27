@@ -1,10 +1,11 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use aionui_api_types::{ConversationArtifactResponse, ConversationResponse, MessageResponse, MessageSearchItem};
+use aionui_api_types::{
+    ConversationArtifactResponse, ConversationResponse, ConversationStatus, MessageResponse, MessageSearchItem,
+};
 use aionui_common::{
-    AgentType, AppError, ConversationSource, ConversationStatus, MessagePosition, MessageStatus, MessageType,
-    ProviderWithModel,
+    AgentType, AppError, ConversationSource, MessagePosition, MessageStatus, MessageType, ProviderWithModel,
 };
 use aionui_db::MessageSearchRow;
 use aionui_db::models::{ConversationArtifactRow, ConversationRow, MessageRow};
@@ -293,7 +294,8 @@ pub fn search_row_to_item(
 // (Phase 2) but remains the DB column shape.
 mod tests {
     use super::*;
-    use aionui_common::{AgentType, ConversationSource, ConversationStatus};
+    use aionui_api_types::ConversationStatus;
+    use aionui_common::{AgentType, ConversationSource};
     use serde_json::json;
 
     fn empty_actors() -> DashMap<String, Arc<ConvActor>> {

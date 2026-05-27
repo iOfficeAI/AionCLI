@@ -87,7 +87,10 @@ async fn update(
     body: Result<Json<UpdateConversationRequest>, JsonRejection>,
 ) -> Result<Json<ApiResponse<ConversationResponse>>, AppError> {
     let Json(req) = body.map_err(|e| AppError::BadRequest(e.to_string()))?;
-    let conversation = state.service.update(&user.id, &id, req, &state.task_manager).await?;
+    let conversation = state
+        .service
+        .update(&user.id, &id, req, &state.connector_factory)
+        .await?;
     Ok(Json(ApiResponse::ok(conversation)))
 }
 
@@ -137,7 +140,7 @@ async fn send_msg(
     let Json(req) = body.map_err(|e| AppError::BadRequest(e.to_string()))?;
     let msg_id = state
         .service
-        .send_message(&user.id, &id, req, &state.task_manager)
+        .send_message(&user.id, &id, req, &state.connector_factory)
         .await?;
     Ok((
         StatusCode::ACCEPTED,
@@ -180,7 +183,7 @@ async fn cancel(
     Extension(user): Extension<CurrentUser>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<()>>, AppError> {
-    state.service.cancel(&user.id, &id, &state.task_manager).await?;
+    state.service.cancel(&user.id, &id, &state.connector_factory).await?;
     Ok(Json(ApiResponse::success()))
 }
 
@@ -189,7 +192,7 @@ async fn warmup(
     Extension(user): Extension<CurrentUser>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<()>>, AppError> {
-    state.service.warmup(&user.id, &id, &state.task_manager).await?;
+    state.service.warmup(&user.id, &id, &state.connector_factory).await?;
     Ok(Json(ApiResponse::success()))
 }
 
@@ -211,7 +214,7 @@ async fn list_confirmations(
 ) -> Result<Json<ApiResponse<ConfirmationListResponse>>, AppError> {
     let items = state
         .service
-        .list_confirmations(&user.id, &id, &state.task_manager)
+        .list_confirmations(&user.id, &id, &state.connector_factory)
         .await?;
     Ok(Json(ApiResponse::ok(items)))
 }
@@ -232,7 +235,7 @@ async fn confirm(
     let Json(req) = body.map_err(|e| AppError::BadRequest(e.to_string()))?;
     state
         .service
-        .confirm(&user.id, &params.id, &params.call_id, req, &state.task_manager)
+        .confirm(&user.id, &params.id, &params.call_id, req, &state.connector_factory)
         .await?;
     Ok(Json(ApiResponse::success()))
 }
@@ -254,7 +257,7 @@ async fn check_approval(
             &id,
             &query.action,
             query.command_type.as_deref(),
-            &state.task_manager,
+            &state.connector_factory,
         )
         .await?;
     Ok(Json(ApiResponse::ok(result)))
@@ -264,6 +267,6 @@ async fn active_count(
     State(state): State<ConversationRouterState>,
     Extension(_user): Extension<CurrentUser>,
 ) -> Result<Json<ApiResponse<ActiveCountResponse>>, AppError> {
-    let count = state.task_manager.active_count();
+    let count = state.connector_factory.active_count();
     Ok(Json(ApiResponse::ok(ActiveCountResponse { count })))
 }

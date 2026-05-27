@@ -223,12 +223,12 @@ impl TeamSessionService {
     /// conversation row, then kill any pre-existing connector and warm
     /// up the new one.
     ///
-    /// This wraps the connect-layer `task_manager.kill` + conv-layer
-    /// `warmup` pair behind a single biz-layer entry point. It lives on
-    /// `TeamSessionService` (Phase 3) because the upstream session
-    /// shed its connect-layer dependency, but the team service still
-    /// owns `task_manager` until Phase 5 introduces a process-rebuild
-    /// trait method on `IConversationService`.
+    /// This wraps the connect-layer `connector_factory.drop_connector` +
+    /// conv-layer `warmup` pair behind a single biz-layer entry point. It
+    /// lives on `TeamSessionService` (Phase 3) because the upstream
+    /// session shed its connect-layer dependency, but the team service
+    /// still owns `connector_factory` so it can rebuild a connector after
+    /// the conversation row's extra has changed.
     pub(crate) async fn attach_spawned_agent_process_bg(
         &self,
         agent: &crate::types::TeamAgent,
@@ -250,13 +250,13 @@ impl TeamSessionService {
                 ))
             })?;
 
-        let _ = self.task_manager.kill(
+        self.connector_factory.drop_connector(
             &agent.conversation_id,
             Some(aionui_common::AgentKillReason::TeamMcpRebuild),
         );
 
         self.conversation_service
-            .warmup(user_id, &agent.conversation_id, &self.task_manager)
+            .warmup(user_id, &agent.conversation_id, &self.connector_factory)
             .await
             .map_err(|e| {
                 TeamError::InvalidRequest(format!(
