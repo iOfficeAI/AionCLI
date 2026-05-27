@@ -1,29 +1,18 @@
 //! Internal lifecycle trait shared by every concrete agent manager.
 //!
-//! Phase 5 reshaped the public surface: external crates now consume agents
-//! through `Arc<dyn IAgentConnector>` (see `connector::trait_def`) rather
-//! than the `AgentInstance` enum + `IAgentTask` trait pair this file used
-//! to expose. The remaining `IAgentTask` trait stays as a **crate-private
-//! shared base** so each `XxxAgentManager`'s `IAgentConnector` impl can
-//! delegate the four lifecycle operations whose body is identical across
-//! variants (`status` / `send_message` / `cancel` / `kill`) without
-//! copy-pasting the implementation into each manager.
+//! External crates consume agents through `Arc<dyn IAgentConnector>`
+//! (see `connector::trait_def`). `IAgentTask` is a **crate-private
+//! shared base** that each `XxxAgentManager`'s `IAgentConnector` impl
+//! delegates to for the four lifecycle operations whose body is
+//! identical across variants (`status` / `send_message` / `cancel` /
+//! `kill`), avoiding copy-pasted bodies.
 //!
-//! Production callers must not reach this trait — `lib.rs` no longer
-//! re-exports it. The `AgentInstance` enum, `IMockAgent` trait, and
-//! `WorkerTaskManagerImpl` were deleted in the same phase; their tests
-//! and helpers either moved to the new test fixtures
-//! (`crate::test_support`) or to the connector impls
-//! (`crate::manager::acp::agent_connector` for the ACP-specific
-//! `map_sdk_model_to_payload` / `merge_model_info`).
-//!
-//! The trait's surface is intentionally minimal — we only keep methods
-//! that are actually dispatched through `IAgentTask` from another
-//! module. The five "trivial getters" (`agent_type` / `conversation_id`
-//! / `workspace` / `last_activity_at` / `subscribe`) used to live here
-//! too, but every `IAgentConnector` impl now reads those values directly
-//! from the manager's fields, so keeping them on the trait would be
-//! dead code.
+//! Production callers must not reach this trait — `lib.rs` does not
+//! re-export it. The trait's surface is intentionally minimal: the
+//! "trivial getters" (`agent_type` / `conversation_id` / `workspace` /
+//! `last_activity_at` / `subscribe`) live directly on each manager
+//! rather than on this trait so they don't become dead code on the
+//! shared base.
 
 use aionui_api_types::ConversationStatus;
 use aionui_common::{AgentKillReason, AppError};

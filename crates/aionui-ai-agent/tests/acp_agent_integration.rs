@@ -310,8 +310,8 @@ async fn acp_agent_model_info_captured() {
     wait_for_event(&mut rx, |e| matches!(e, AgentStreamEvent::AcpModelInfo(_))).await;
 
     // Route through the `IAgentConnector` trait surface rather than
-    // reaching into private `AcpAgentManager::model()`: the ai-agent crate
-    // exposes `Arc<dyn IAgentConnector>` to downstream callers (Phase 5),
+    // reaching into private `AcpAgentManager::model()`: the ai-agent
+    // crate exposes `Arc<dyn IAgentConnector>` to downstream callers,
     // so tests should exercise the same surface.
     let resp = IAgentConnector::get_model(agent.as_ref())
         .await

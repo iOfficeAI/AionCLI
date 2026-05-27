@@ -305,8 +305,8 @@ impl ConversationService {
             );
         }
 
-        // Phase 2: `status` is `#[deprecated]` (ConvActor is the runtime
-        // source of truth) but the column is preserved for backwards
+        // `status` is `#[deprecated]` (ConvActor is the runtime source
+        // of truth) but the column is preserved for backwards
         // compatibility with external observers. We still seed it to
         // "pending" on create so legacy export/import flows behave
         // identically. New runtime code MUST NOT consult this field.
@@ -690,8 +690,8 @@ impl ConversationService {
             hook.on_conversation_deleted(id).await;
         }
 
-        // Phase 2: tear down the per-conversation actor. Done last so
-        // hooks above can still observe the actor while they cancel.
+        // Tear down the per-conversation actor. Done last so hooks
+        // above can still observe the actor while they cancel.
         self.drop_actor(id);
 
         info!("Conversation deleted");
@@ -1045,12 +1045,13 @@ impl ConversationService {
             ));
         }
 
-        // Phase 2: structural turn-in-flight guard. The ConvActor mutex is the
-        // single serializer for concurrent send/cancel — its `begin_turn`
-        // returns `AppError::Conflict` if a turn is already running and gives
-        // us a `TurnHandle` whose Drop transitions state back to Idle.
-        // The legacy DB.status read is gone: it could not see in-memory turn
-        // state and contributed to the cancel→send race (ELECTRON-1KB).
+        // Structural turn-in-flight guard. The ConvActor mutex is the
+        // single serializer for concurrent send/cancel — its
+        // `begin_turn` returns `AppError::Conflict` if a turn is
+        // already running and gives us a `TurnHandle` whose Drop
+        // transitions state back to Idle. We deliberately do not
+        // consult DB.status here: it cannot see in-memory turn state
+        // and contributed to the cancel→send race (ELECTRON-1KB).
         let user_msg_id = Self::mint_msg_id();
         let actor = self.get_or_create_actor(conversation_id);
         let turn_handle = actor.begin_turn(user_msg_id.clone()).await?;
@@ -1097,11 +1098,9 @@ impl ConversationService {
 
         info!(agent_type = ?agent.agent_type(), "Agent task ready");
 
-        // Phase 2: DB.status is no longer the source of truth — ConvActor is.
-        // The column is kept (now `#[deprecated]` from Task 8) until N stable
-        // releases have rolled out, so any external observer relying on it
-        // can be migrated. See
-        // docs/superpowers/specs/2026-05-26-conversation-layer-refactor-design.md.
+        // DB.status is not the source of truth — ConvActor is. The
+        // column is kept (`#[deprecated]`) until external observers
+        // relying on it have migrated.
         let conv_id = conversation_id.to_owned();
         let repo = Arc::clone(&self.conversation_repo);
         let broadcaster = Arc::clone(&self.broadcaster);
@@ -1117,12 +1116,12 @@ impl ConversationService {
         // agent-internal tracing all share one identifier per turn.
         let user_msg_id_ret = user_msg_id.clone();
         let event_tx = actor.event_tx.clone();
-        // Phase 4: `send` is single-turn. The cron-style continuation
-        // loop has moved out of the conv layer into the biz-layer
-        // `CronContinuationOrchestrator`, which observes the
-        // `TurnCompleted` event below and decides whether to issue a
-        // follow-up `send`. The conv layer no longer interprets
-        // `system_responses` — it just forwards them.
+        // `send` is single-turn. The cron-style continuation loop
+        // lives on the biz layer (`CronContinuationOrchestrator`),
+        // which observes the `TurnCompleted` event below and decides
+        // whether to issue a follow-up `send`. The conv layer no
+        // longer interprets `system_responses` — it just forwards
+        // them.
         //
         // `turn_handle` is moved into the spawned task so its `Drop` runs
         // when the turn task exits — that's what releases the actor's
@@ -1610,7 +1609,7 @@ fn log_conversation_created(response: &ConversationResponse, extra: &serde_json:
     }
 }
 
-// ── IConversationService trait impl (Phase 2 Task 7) ────────────────
+// ── IConversationService trait impl ─────────────────────────────────
 //
 // Trait surface bound to existing inherent methods so biz-layer crates
 // can depend on the trait rather than the concrete struct. Most methods
@@ -1622,10 +1621,8 @@ fn log_conversation_created(response: &ConversationResponse, extra: &serde_json:
 //   `send_message` exits — closing the cancel→send race that the
 //   legacy DB.status guard could not handle.
 // - `subscribe`: returns a fresh `broadcast::Receiver` for lifecycle
-//   events (`TurnStarted`, etc.) rather than the lower-level
-//   `AgentStreamEvent` stream. Only `TurnStarted` is published in
-//   Phase 2; the remaining variants are wired in Phase 3 alongside
-//   biz-layer consumers.
+//   events (`TurnStarted`, `TurnCompleted`, etc.) rather than the
+//   lower-level `AgentStreamEvent` stream consumed by `subscribe_legacy`.
 #[async_trait::async_trait]
 impl crate::conv_service_trait::IConversationService for ConversationService {
     async fn create(&self, user_id: &str, opts: CreateConversationRequest) -> Result<String, AppError> {

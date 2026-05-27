@@ -53,7 +53,6 @@ pub async fn create_router(services: &AppServices) -> (Router, Arc<dyn aionui_co
     let boot = Instant::now();
     tracing::info!("startup: router assembly started");
 
-
     // Bridge event bus → WebSocket manager: forward all broadcast events
     // to connected WebSocket clients.
     let mut event_rx = services.event_bus.subscribe();

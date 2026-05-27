@@ -1,17 +1,12 @@
 //! Connect-layer test fixtures shared across crates.
 //!
-//! Phase 5 replaced `IWorkerTaskManager` + `AgentInstance::Mock` with the
-//! pair `IAgentConnectorFactory` + `Arc<dyn IAgentConnector>`. Each
-//! consumer crate (`aionui-conversation`, `aionui-cron`, `aionui-team`,
-//! `aionui-app`) had its own duplicated mock; this module collapses them
-//! into one `MockConnector` + `MockConnectorFactory` pair so the next
-//! contract change to `IAgentConnector` only ripples through one file.
+//! Provides one `MockConnector` + `MockConnectorFactory` pair so any
+//! future contract change to `IAgentConnector` only ripples through one
+//! file. Consumed by `aionui-conversation`, `aionui-cron`,
+//! `aionui-team`, and `aionui-app`.
 //!
-//! Gated behind `#[cfg(any(test, feature = "test-support"))]`: production
-//! builds never see these types. The fixtures keep behaviour parity with
-//! the old `MockAgent` / `MockTaskManager` they replace — same default
-//! responses for `get_mode`, `set_mode`, `get_model`, etc. — so the
-//! existing test assertions stay meaningful.
+//! Gated behind `#[cfg(any(test, feature = "test-support"))]`:
+//! production builds never see these types.
 
 #![cfg(any(test, feature = "test-support"))]
 

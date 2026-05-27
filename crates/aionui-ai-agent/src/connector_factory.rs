@@ -1,11 +1,9 @@
 //! Factory for connect-layer agent connectors.
 //!
-//! Phase 5: replaces `IWorkerTaskManager`. The factory is purely
-//! connect-layer concerned: build options in, `Arc<dyn IAgentConnector>`
-//! out, cached per `conversation_id`. All runtime-state tracking
-//! (turn lifecycle, idle policy) now lives on the conv layer's
-//! `ConvActor`; this factory does only one job — single-flight build
-//! and cache.
+//! Build options in, `Arc<dyn IAgentConnector>` out, cached per
+//! `conversation_id`. All runtime-state tracking (turn lifecycle, idle
+//! policy) lives on the conv layer's `ConvActor`; this factory does only
+//! one job — single-flight build and cache.
 
 use std::sync::Arc;
 
@@ -194,8 +192,8 @@ mod tests {
             rx
         }
 
-        // Task-manager surface (Phase 5 additive): trivial stubs since
-        // the only callers under test are the slot-management tests.
+        // Lifecycle/control surface: trivial stubs since the only
+        // callers under test are the slot-management tests.
         fn status(&self) -> Option<ConversationStatus> {
             None
         }

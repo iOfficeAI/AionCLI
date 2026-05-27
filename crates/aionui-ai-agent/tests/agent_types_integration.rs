@@ -1,10 +1,9 @@
 //! Integration tests for residual cross-cutting agent helpers.
 //!
-//! Phase 5 deleted `IWorkerTaskManager` + `AgentInstance` + `IAgentTask`
-//! from the public surface; tests that exercised the legacy task-manager
-//! / mock-agent fan-out (`collect_idle_ignores_non_acp_agent_types`) are
-//! now covered by `aionui-team` and `aionui-cron` integration suites.
-//! What remains here is what is genuinely scoped to this crate:
+//! Tests that exercised the legacy task-manager / mock-agent fan-out
+//! (`collect_idle_ignores_non_acp_agent_types`) are covered by
+//! `aionui-team` and `aionui-cron` integration suites. What remains
+//! here is what is genuinely scoped to this crate:
 //! - Aionrs manager metadata via the new `IAgentConnector` surface
 //! - workspace browsing (filesystem, no agent involved)
 //! - `build_system_instructions_with_skills_index` text helper

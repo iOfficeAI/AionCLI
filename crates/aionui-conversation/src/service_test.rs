@@ -1,4 +1,4 @@
-// Tests construct and read `ConversationRow.status` (Phase 2 deprecated)
+// Tests construct and read `ConversationRow.status` (`#[deprecated]`)
 // to verify legacy fixtures and to ensure runtime hot paths do NOT
 // rely on it. Module-level allow keeps the deprecation lint active
 // everywhere outside this file.
@@ -1032,12 +1032,9 @@ async fn search_messages_whitespace_keyword_returns_bad_request() {
 
 // ── Mock connector helpers ───────────────────────────────────────
 //
-// Phase 5: previously this file defined `MockAgent` (impl `IAgentTask` +
-// `IMockAgent`), `MockTaskManager` / `MockTaskManagerWithWorkspace`
-// (impl `IWorkerTaskManager`), and `ScriptedAgent`. With the legacy
-// trait surface gone, those collapse into the shared `MockConnector`
-// fixture in `aionui_ai_agent::test_support`. The thin helper functions
-// below preserve the callsite ergonomics the existing tests rely on.
+// Thin wrappers over the shared `MockConnector` fixture in
+// `aionui_ai_agent::test_support`. They exist only to preserve the
+// callsite ergonomics the existing tests rely on.
 
 use aionui_ai_agent::test_support::MockConnectorBuilder;
 use std::sync::Arc as StdArc;
@@ -1267,11 +1264,12 @@ async fn send_message_wrong_user_returns_not_found() {
 
 #[tokio::test]
 async fn send_message_running_conversation_returns_conflict() {
-    // Phase 2: the in-flight guard is now ConvActor's mutex, not DB.status.
-    // We hold a TurnHandle for the conversation's actor and confirm that
-    // send_message refuses with 409. Crucially, we leave the DB row's
-    // status field untouched (and even set it to a corrupt value) to lock
-    // in that the runtime-state guard does not consult the DB column.
+    // The in-flight guard is ConvActor's mutex, not DB.status. We
+    // hold a TurnHandle for the conversation's actor and confirm
+    // that send_message refuses with 409. Crucially, we leave the
+    // DB row's status field untouched (and even set it to a corrupt
+    // value) to lock in that the runtime-state guard does not
+    // consult the DB column.
     let (svc, _broadcaster, repo, _task_mgr) = make_service();
     let task_mgr: Arc<dyn IAgentConnectorFactory> = MockConnectorFactory::builder().build();
 
@@ -1334,12 +1332,12 @@ async fn send_message_persists_factory_resolved_workspace() {
 
 #[tokio::test]
 async fn send_message_is_single_turn_with_system_responses() {
-    // Phase 4: conv layer no longer chains continuations. A single
+    // Conv layer does not chain continuations. A single
     // `send_message` dispatches exactly ONE turn. `system_responses`
-    // captured by the relay are forwarded via the `TurnCompleted` event
-    // for biz-layer subscribers (e.g. `CronContinuationOrchestrator`)
-    // to act on — the conv layer must NOT re-enter `send_message`
-    // itself.
+    // captured by the relay are forwarded via the `TurnCompleted`
+    // event for biz-layer subscribers (e.g.
+    // `CronContinuationOrchestrator`) to act on — the conv layer
+    // must NOT re-enter `send_message` itself.
     let (svc, broadcaster, _repo, _default_task_mgr) = make_service();
     let task_mgr = MockConnectorFactory::builder().build();
     let conv = svc.create("user_1", make_create_req()).await.unwrap();
@@ -1412,8 +1410,8 @@ async fn send_message_is_single_turn_with_system_responses() {
     );
 
     let finished = svc.get("user_1", &conv.id).await.unwrap();
-    // Phase 2 Task 6: response.status is derived from the runtime ConvActor.
-    // After the turn task exits, the actor is `Idle`, which the legacy
+    // response.status is derived from the runtime ConvActor. After
+    // the turn task exits, the actor is `Idle`, which the legacy
     // three-state mapping flattens to `Finished` for client compat.
     assert_eq!(finished.status, ConversationStatus::Finished);
 
@@ -2075,7 +2073,7 @@ async fn insert_raw_message_persists_row_and_broadcasts_stream() {
     assert_eq!(data["data"]["teammate_message"], true);
 }
 
-// ── IConversationService trait impl (Phase 2 Task 7) ───────────────
+// ── IConversationService trait impl ─────────────────────────────────
 
 #[test]
 fn conversation_service_implements_iconversation_service() {
@@ -2133,7 +2131,7 @@ async fn status_reports_running_when_actor_running() {
     }
 }
 
-// ── Response.status derived from runtime ConvActor (Phase 2 Task 6) ─
+// ── Response.status derived from runtime ConvActor ──────────────────
 
 #[tokio::test]
 async fn response_status_reflects_runtime_not_db() {
@@ -2156,7 +2154,7 @@ async fn response_status_reflects_runtime_not_db() {
     assert_eq!(
         resp.status,
         ConversationStatus::Finished,
-        "Phase 2: when an actor exists, its state wins over DB.status"
+        "when an actor exists, its state wins over DB.status"
     );
 
     // Now begin a turn on the actor and assert the response flips to Running.
@@ -2166,13 +2164,13 @@ async fn response_status_reflects_runtime_not_db() {
     assert_eq!(resp.status, ConversationStatus::Running);
 }
 
-// ── DB.status no longer written from runtime (Phase 2 Task 5) ───────
+// ── DB.status no longer written from runtime ────────────────────────
 
 #[tokio::test]
 async fn send_message_does_not_write_db_status_running() {
-    // Phase 2: send_message must not write DB.status = "running". The
-    // ConvActor mutex is the runtime source of truth; the column stays at
-    // whatever create() set it to (currently "pending").
+    // send_message must not write DB.status = "running". The
+    // ConvActor mutex is the runtime source of truth; the column
+    // stays at whatever create() set it to (currently "pending").
     let (svc, _broadcaster, repo, _task_mgr) = make_service();
     let task_mgr: Arc<dyn IAgentConnectorFactory> = MockConnectorFactory::builder().build();
     let conv = svc.create("user_1", make_create_req()).await.unwrap();
@@ -2185,16 +2183,17 @@ async fn send_message_does_not_write_db_status_running() {
     assert_ne!(
         row.status.as_deref(),
         Some("running"),
-        "send_message must not write DB.status='running' in Phase 2"
+        "send_message must not write DB.status='running'"
     );
 }
 
 #[tokio::test]
 async fn turn_completion_does_not_write_db_status_finished() {
-    // Phase 2: complete_conversation no longer writes DB.status="finished".
-    // We invoke it directly with a known-pending row and assert the column
-    // is unchanged. We exercise the function via its public path so a
-    // future refactor that re-introduces the write is caught here.
+    // complete_conversation must not write DB.status="finished". We
+    // invoke it directly with a known-pending row and assert the
+    // column is unchanged. We exercise the function via its public
+    // path so a future refactor that re-introduces the write is
+    // caught here.
     let (svc, _broadcaster, repo, _task_mgr) = make_service();
     let conv = svc.create("user_1", make_create_req()).await.unwrap();
 
@@ -2207,11 +2206,11 @@ async fn turn_completion_does_not_write_db_status_finished() {
     let after = repo.get(&conv.id).await.unwrap().unwrap();
     assert_eq!(
         after.status, initial_status,
-        "complete_conversation must not write DB.status='finished' in Phase 2"
+        "complete_conversation must not write DB.status='finished'"
     );
 }
 
-// ── ConvActor map (Phase 2 Task 3) ──────────────────────────────────
+// ── ConvActor map ────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn service_actor_is_idle_for_unknown_conversation() {
@@ -2251,7 +2250,7 @@ async fn service_actor_is_dropped_on_delete() {
     );
 }
 
-// ── collect_idle (Phase 5 Task 2) ───────────────────────────────────
+// ── collect_idle ─────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn collect_idle_returns_only_actors_idle_past_threshold() {

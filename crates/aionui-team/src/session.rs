@@ -59,12 +59,10 @@ pub struct TeamSession {
     task_board: Arc<TaskBoard>,
     mcp_server: TeamMcpServer,
     backend_binary_path: Arc<PathBuf>,
-    /// Conv-layer entry point used by the inline-wake fallback. The legacy
-    /// connect-layer task-manager field was removed in Phase 3 — the
+    /// Conv-layer entry point used by the inline-wake fallback. The
     /// connect layer is reachable only through this trait.
     /// Process-rebuild concerns (kill+warmup after MCP config change)
-    /// stay in `TeamSessionService` where the task-manager dep still
-    /// lives until Phase 5.
+    /// stay in `TeamSessionService`.
     conversation_service: Arc<dyn IConversationService>,
     /// Owner user_id for this team — needed when spawn_agent creates a
     /// new conversation (conversations are scoped per user).
@@ -423,11 +421,9 @@ impl TeamSession {
     /// Inline wake fallback used when no event loop is registered for the
     /// slot (unit tests, brief race window during spawn).
     ///
-    /// Phase 3 routes the dispatch through `IConversationService::send` so
-    /// the conv-layer `ConvActor` mutex is the single serializer; the
-    /// previous direct `task_manager.get_task` + `agent.send_message`
-    /// path is gone. Status is read via the trait's `status` fast path
-    /// instead of the connect-layer handle's `status()`.
+    /// Routes the dispatch through `IConversationService::send` so
+    /// the conv-layer `ConvActor` mutex is the single serializer.
+    /// Status is read via the trait's `status` fast path.
     async fn try_wake_inline(&self, slot_id: &str, files: Option<Vec<String>>) {
         if !self.scheduler.acquire_wake_lock(slot_id) {
             return;
@@ -606,15 +602,13 @@ impl TeamSession {
     pub async fn remove_agent(&self, slot_id: &str) -> Result<(), TeamError> {
         self.event_loops.remove(slot_id);
         let _conversation_id = self.scheduler.remove_agent(slot_id).await?;
-        // Process kill is intentionally not done here in Phase 3+: the
-        // upstream `TeamSessionService::remove_agent` calls
+        // Process kill is intentionally not done here: the upstream
+        // `TeamSessionService::remove_agent` calls
         // `IConversationService::delete` first, which fires the
-        // `task_manager_delete_hook` that tears the connector down. Doing
-        // an extra kill from the biz layer would either be redundant
+        // `task_manager_delete_hook` that tears the connector down. An
+        // extra kill from the biz layer would either be redundant
         // (no-op after delete) or reach into the connect-layer surface
-        // that Phase 3 forbids. Phase 5 surfaces a real
-        // `IConversationService::shutdown` if a stronger guarantee is
-        // needed.
+        // that the biz layer must not touch.
         Ok(())
     }
 
@@ -728,9 +722,9 @@ impl TeamSession {
         // the leader's connection loop.
         //
         // The MCP-rebuild step (kill+warmup against the connect-layer
-        // task manager) lives in `TeamSessionService::attach_spawned_agent_process_bg`
-        // — Phase 3 keeps the connect-layer dep there until Phase 5
-        // surfaces a process-rebuild trait method.
+        // task manager) lives in
+        // `TeamSessionService::attach_spawned_agent_process_bg`,
+        // which keeps the connect-layer dep contained.
         {
             let team_id = self.team.id.clone();
             let user_id = self.user_id.clone();
@@ -849,8 +843,7 @@ mod tests {
     }
 
     /// Captured fields of a single `IConversationService::send` call.
-    /// Phase 3 replaces the old `SendMessageData` capture with the same
-    /// shape the trait now exposes (`user_id`, `conversation_id`,
+    /// Mirrors the trait surface (`user_id`, `conversation_id`,
     /// `SendMessageRequest`).
     #[derive(Debug, Clone)]
     pub(super) struct SendCall {
@@ -1149,16 +1142,13 @@ mod tests {
         session.stop();
     }
 
-    // -- W5-D30d-1 was a connect-layer assertion (`task_manager.kill` after
-    //   `remove_agent`). Phase 3 moved that responsibility upstream:
-    //   `TeamSessionService::remove_agent` now calls
+    // -- Process-teardown coverage lives next to the conversation
+    //   service in `aionui-conversation`:
+    //   `TeamSessionService::remove_agent` calls
     //   `IConversationService::delete`, which fires the
-    //   `task_manager_delete_hook` that tears the connector down. Because
-    //   `TeamSession::remove_agent` no longer touches the connect layer,
-    //   the original tests (`remove_agent_calls_task_manager_kill` /
-    //   `remove_agent_is_non_fatal_when_kill_fails`) lose their target.
-    //   Process-teardown coverage now lives next to the conversation
-    //   service in `aionui-conversation`.
+    //   `task_manager_delete_hook` that tears the connector down, and
+    //   `TeamSession::remove_agent` itself does not touch the connect
+    //   layer.
 
     #[tokio::test]
     async fn rename_agent_in_session() {

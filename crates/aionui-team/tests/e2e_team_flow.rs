@@ -12,10 +12,8 @@
 //! - Real TCP MCP server (TeamMcpServer)
 //! - Real TeamSession with real Mailbox + TaskBoard
 //! - MockConvService: implements `IConversationService` and captures every
-//!   `send` call into a shared log. Phase 3 collapsed the previous
-//!   `RecordingAgent` + `StubTaskManager` scaffolding into a single
-//!   conv-layer mock so biz-layer tests stop reaching into the connect
-//!   layer.
+//!   `send` call into a shared log. Biz-layer tests do not reach into
+//!   the connect layer.
 //!
 //! Scenarios that cannot yet be wired without a live TeamSessionService DB path
 //! are marked #[ignore] with a clear explanation.

@@ -314,9 +314,9 @@ impl IAgentConnector for AionrsAgentManager {
     }
 
     fn subscribe(&self) -> broadcast::Receiver<ConnectorEvent> {
-        // Phase 1: bridge from the legacy AgentStreamEvent channel into
-        // ConnectorEvent::Chunk. A dedicated channel will replace this in
-        // Phase 5 once the legacy channel goes away.
+        // Bridge the token-level AgentStreamEvent channel into
+        // ConnectorEvent::Chunk so turn-level subscribers see chunks
+        // alongside lifecycle events.
         let (tx, rx) = broadcast::channel(64);
         let mut legacy = self.runtime.subscribe();
         tokio::spawn(async move {
@@ -331,11 +331,10 @@ impl IAgentConnector for AionrsAgentManager {
         self.runtime.subscribe()
     }
 
-    // ── Task-manager method surface (Phase 5 additive) ─────────────────
+    // ── Lifecycle / control surface ─────────────────────────────────────
     //
-    // Each method delegates to the existing `IAgentTask` impl on `Self`
-    // or to the inherent helpers below so the upcoming Task 5-7 swap is
-    // a pure type-flip.
+    // Delegates to the crate-private `IAgentTask` impl on `Self` or to
+    // the inherent helpers below.
 
     fn status(&self) -> Option<ConversationStatus> {
         self.runtime.status()

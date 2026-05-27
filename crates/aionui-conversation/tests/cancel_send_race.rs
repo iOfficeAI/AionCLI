@@ -1,21 +1,16 @@
-//! Phase 2 — integration test for ELECTRON-1KB at the conv-layer trait
-//! surface.
+//! Integration test for ELECTRON-1KB at the conv-layer trait surface.
 //!
-//! The structural fix being verified here: after `cancel()` returns, the
-//! per-conversation `ConvActor` is back to `Idle`, and the *very next*
-//! `send_message()` MUST NOT observe a `Conflict` (the legacy DB.status
-//! guard could not see in-memory turn state and produced the race).
+//! The structural fix being verified here: after `cancel()` returns,
+//! the per-conversation `ConvActor` is back to `Idle`, and the *very
+//! next* `send_message()` MUST NOT observe a `Conflict` (the legacy
+//! DB.status guard could not see in-memory turn state and produced
+//! the race).
 //!
-//! The plan suggested using a mock `IAgentConnector` that pauses inside
-//! `run_turn`. In practice the conv-layer trait surface (`send` /
-//! `cancel`) does not consume `IAgentConnector` directly — it goes
-//! through `IWorkerTaskManager::get_or_build_task` and `ConvActor`. We
-//! therefore exercise the same invariant by driving the actor directly
-//! from the test (it is the actor's mutex that closes the race), then
-//! invoking `IConversationService::cancel` and `::send` against the
-//! real `ConversationService`. This keeps the test trait-surface only
-//! and avoids depending on connector internals that are still being
-//! reshaped by Phase 1/Phase 3.
+//! We exercise the invariant by driving the actor directly from the
+//! test (it is the actor's mutex that closes the race), then invoking
+//! `IConversationService::cancel` and `::send` against the real
+//! `ConversationService`. This keeps the test trait-surface only and
+//! avoids depending on connector internals.
 //!
 //! Asserted invariants:
 //!   1. `cancel()` waits for the in-flight turn (does not return early).

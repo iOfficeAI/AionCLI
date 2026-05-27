@@ -6,13 +6,12 @@ use serde::{Deserialize, Serialize};
 
 /// Wire-format status of a conversation row.
 ///
-/// Historically backed by `aionui_common::ConversationStatus`. Phase 5
-/// relocates the type into `aionui-api-types` because it is purely a DTO:
-/// the real runtime status is `aionui_conversation::ConversationStatus`
-/// (an `Idle / Running { msg_id }` enum on `ConvActor`). The conv layer's
+/// Pure DTO: the real runtime status is
+/// `aionui_conversation::ConversationStatus` (an
+/// `Idle / Running { msg_id }` enum on `ConvActor`). The conv layer's
 /// `row_to_response` collapses runtime state into one of these three
-/// lowercase strings so the existing wire contract with the frontend is
-/// preserved unchanged.
+/// lowercase strings so the existing wire contract with the frontend
+/// is preserved unchanged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ConversationStatus {

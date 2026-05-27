@@ -230,12 +230,10 @@ impl NanobotAgentManager {
     }
 }
 
-// ── IAgentConnector impl (Phase 5 additive) ────────────────────────────
+// ── IAgentConnector impl ────────────────────────────────────────────────
 //
-// Phase 5: Nanobot is one of the two manager types that did not yet
-// implement the connect-layer trait. Each method delegates to the
-// existing `IAgentTask` impl on `Self` or the inherent helpers above
-// so the upcoming Task 5-7 swap is a pure type-flip.
+// Delegates to the crate-private `IAgentTask` impl on `Self` or to the
+// inherent helpers above.
 #[async_trait::async_trait]
 impl crate::connector::IAgentConnector for NanobotAgentManager {
     fn agent_type(&self) -> AgentType {

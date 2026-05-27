@@ -1,4 +1,4 @@
-// Test fixture builds `ConversationRow.status` (Phase 2 deprecated).
+// Test fixture builds `ConversationRow.status`, which is `#[deprecated]`.
 #![allow(deprecated)]
 
 use std::sync::Arc;
