@@ -90,6 +90,8 @@ fn parse_provider_with_model_loose(raw: &str) -> Option<ProviderWithModel> {
 }
 
 #[cfg(test)]
+#[allow(deprecated)] // Tests construct `ConversationRow.status` (Phase 2 deprecated)
+// to keep fixtures faithful to the DB column shape.
 mod tests {
     use super::*;
 

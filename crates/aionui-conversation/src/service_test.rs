@@ -1,3 +1,9 @@
+// Tests construct and read `ConversationRow.status` (Phase 2 deprecated)
+// to verify legacy fixtures and to ensure runtime hot paths do NOT
+// rely on it. Module-level allow keeps the deprecation lint active
+// everywhere outside this file.
+#![allow(deprecated)]
+
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
@@ -505,7 +511,11 @@ async fn create_returns_conversation_with_defaults() {
 
     assert!(!resp.id.is_empty());
     assert_eq!(resp.r#type, AgentType::Acp);
-    assert_eq!(resp.status, ConversationStatus::Pending);
+    // Phase 2: status is derived from the runtime ConvActor. A freshly
+    // created conversation has no actor entry → maps to legacy `Finished`.
+    // (The `Pending` variant will go away with `aionui_common::ConversationStatus`
+    // in Phase 5/6.)
+    assert_eq!(resp.status, ConversationStatus::Finished);
     assert_eq!(resp.source, Some(ConversationSource::Aionui));
     assert!(!resp.pinned);
     assert!(resp.pinned_at.is_none());
@@ -919,7 +929,13 @@ async fn reset_sets_status_to_pending() {
     svc.reset("user_1", &conv.id).await.unwrap();
 
     let fetched = svc.get("user_1", &conv.id).await.unwrap();
-    assert_eq!(fetched.status, ConversationStatus::Pending);
+    // Phase 2: response.status is derived from ConvActor (no actor → Finished).
+    // The historical reset-writes-status semantics still updates DB.status to
+    // "pending" on disk for legacy observers — but the public response shape
+    // now reflects the runtime state. The test name is preserved for git
+    // archeology; rename when `aionui_common::ConversationStatus` is dropped
+    // in Phase 5/6.
+    assert_eq!(fetched.status, ConversationStatus::Finished);
 }
 
 #[tokio::test]
@@ -1521,17 +1537,28 @@ async fn send_message_wrong_user_returns_not_found() {
 
 #[tokio::test]
 async fn send_message_running_conversation_returns_conflict() {
+    // Phase 2: the in-flight guard is now ConvActor's mutex, not DB.status.
+    // We hold a TurnHandle for the conversation's actor and confirm that
+    // send_message refuses with 409. Crucially, we leave the DB row's
+    // status field untouched (and even set it to a corrupt value) to lock
+    // in that the runtime-state guard does not consult the DB column.
     let (svc, _broadcaster, repo, _task_mgr) = make_service();
     let task_mgr: Arc<dyn IWorkerTaskManager> = Arc::new(MockTaskManager::new());
 
     let conv = svc.create("user_1", make_create_req()).await.unwrap();
 
-    // Manually set status to running
-    let update = ConversationRowUpdate {
-        status: Some("running".into()),
+    // Corrupt the DB.status column. If the legacy guard ever sneaks back
+    // in, this would either deserialize-fail or return a stale value.
+    let corrupt_update = ConversationRowUpdate {
+        status: Some("garbage-not-a-status".into()),
         ..Default::default()
     };
-    repo.update(&conv.id, &update).await.unwrap();
+    repo.update(&conv.id, &corrupt_update).await.unwrap();
+
+    // Hold the actor's turn slot so send_message must collide with us.
+    let actor = svc.get_or_create_actor(&conv.id);
+    actor.mark_idle().await;
+    let _held = actor.begin_turn("msg-already-running".into()).await.unwrap();
 
     let err = svc
         .send_message("user_1", &conv.id, make_send_req(), &task_mgr)
@@ -1632,6 +1659,9 @@ async fn send_message_continues_cron_system_responses() {
     assert_eq!(sends[2], "[System: Created cron job 'Daily Greeting']");
 
     let finished = svc.get("user_1", &conv.id).await.unwrap();
+    // Phase 2 Task 6: response.status is derived from the runtime ConvActor.
+    // After the turn loop exits, the actor is `Idle`, which the legacy
+    // three-state mapping flattens to `Finished` for client compat.
     assert_eq!(finished.status, ConversationStatus::Finished);
 
     let events = broadcaster.take_events();
@@ -2309,4 +2339,180 @@ async fn insert_raw_message_persists_row_and_broadcasts_stream() {
     assert_eq!(data["position"], "left");
     assert_eq!(data["data"]["content"], "from teammate");
     assert_eq!(data["data"]["teammate_message"], true);
+}
+
+// ── IConversationService trait impl (Phase 2 Task 7) ───────────────
+
+#[test]
+fn conversation_service_implements_iconversation_service() {
+    fn _assert<T: crate::conv_service_trait::IConversationService>() {}
+    _assert::<ConversationService>();
+}
+
+#[tokio::test]
+async fn cancel_idempotent_when_no_turn_in_flight() {
+    let (svc, _broadcaster, _repo, _task_mgr) = make_service();
+    let conv = svc.create("user_1", make_create_req()).await.unwrap();
+
+    // No turn running: cancel must return Ok without hanging.
+    tokio::time::timeout(
+        std::time::Duration::from_millis(200),
+        crate::conv_service_trait::IConversationService::cancel(&svc, "user_1", &conv.id),
+    )
+    .await
+    .expect("cancel must not hang when no turn is in flight")
+    .unwrap();
+}
+
+#[tokio::test]
+async fn cancel_rejects_unknown_conversation() {
+    let (svc, _broadcaster, _repo, _task_mgr) = make_service();
+    let err = crate::conv_service_trait::IConversationService::cancel(&svc, "user_1", "no-such-id")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AppError::NotFound(_)));
+}
+
+#[tokio::test]
+async fn cancel_rejects_wrong_user() {
+    let (svc, _broadcaster, _repo, _task_mgr) = make_service();
+    let conv = svc.create("user_1", make_create_req()).await.unwrap();
+    let err = crate::conv_service_trait::IConversationService::cancel(&svc, "user_2", &conv.id)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AppError::NotFound(_)));
+}
+
+#[tokio::test]
+async fn status_reports_running_when_actor_running() {
+    let (svc, _broadcaster, _repo, _task_mgr) = make_service();
+    let conv = svc.create("user_1", make_create_req()).await.unwrap();
+
+    let actor = svc.get_or_create_actor(&conv.id);
+    actor.mark_idle().await;
+    let _h = actor.begin_turn("msg-rt".into()).await.unwrap();
+
+    let status = crate::conv_service_trait::IConversationService::status(&svc, &conv.id);
+    match status {
+        crate::conv_service_trait::ConversationStatus::Running { msg_id } => assert_eq!(msg_id, "msg-rt"),
+        other => panic!("expected Running, got {other:?}"),
+    }
+}
+
+// ── Response.status derived from runtime ConvActor (Phase 2 Task 6) ─
+
+#[tokio::test]
+async fn response_status_reflects_runtime_not_db() {
+    let (svc, _broadcaster, repo, _task_mgr) = make_service();
+    let conv = svc.create("user_1", make_create_req()).await.unwrap();
+
+    // Corrupt the DB.status column to "running". Pre-Phase-2 code would
+    // surface that string as the response status. Phase 2 reads from the
+    // ConvActor, which has no entry for this conversation, so the
+    // response must say `Finished`.
+    let corrupt = ConversationRowUpdate {
+        status: Some("running".into()),
+        ..Default::default()
+    };
+    repo.update(&conv.id, &corrupt).await.unwrap();
+
+    let resp = svc.get("user_1", &conv.id).await.unwrap();
+    assert_eq!(
+        resp.status,
+        ConversationStatus::Finished,
+        "Phase 2: status comes from ConvActor (Idle → Finished), not DB.status"
+    );
+
+    // Now begin a turn on the actor and assert the response flips to Running.
+    let actor = svc.get_or_create_actor(&conv.id);
+    actor.mark_idle().await;
+    let _held = actor.begin_turn("msg-running".into()).await.unwrap();
+
+    let resp = svc.get("user_1", &conv.id).await.unwrap();
+    assert_eq!(resp.status, ConversationStatus::Running);
+}
+
+// ── DB.status no longer written from runtime (Phase 2 Task 5) ───────
+
+#[tokio::test]
+async fn send_message_does_not_write_db_status_running() {
+    // Phase 2: send_message must not write DB.status = "running". The
+    // ConvActor mutex is the runtime source of truth; the column stays at
+    // whatever create() set it to (currently "pending").
+    let (svc, _broadcaster, repo, _task_mgr) = make_service();
+    let task_mgr: Arc<dyn IWorkerTaskManager> = Arc::new(MockTaskManager::new());
+    let conv = svc.create("user_1", make_create_req()).await.unwrap();
+
+    svc.send_message("user_1", &conv.id, make_send_req(), &task_mgr)
+        .await
+        .unwrap();
+
+    let row = repo.get(&conv.id).await.unwrap().unwrap();
+    assert_ne!(
+        row.status.as_deref(),
+        Some("running"),
+        "send_message must not write DB.status='running' in Phase 2"
+    );
+}
+
+#[tokio::test]
+async fn turn_completion_does_not_write_db_status_finished() {
+    // Phase 2: complete_conversation no longer writes DB.status="finished".
+    // We invoke it directly with a known-pending row and assert the column
+    // is unchanged. We exercise the function via its public path so a
+    // future refactor that re-introduces the write is caught here.
+    let (svc, _broadcaster, repo, _task_mgr) = make_service();
+    let conv = svc.create("user_1", make_create_req()).await.unwrap();
+
+    let before = repo.get(&conv.id).await.unwrap().unwrap();
+    let initial_status = before.status.clone();
+
+    let broadcaster_dyn: Arc<dyn EventBroadcaster> = _broadcaster.clone();
+    crate::stream_relay::StreamRelay::complete_conversation(svc.conversation_repo(), &broadcaster_dyn, &conv.id).await;
+
+    let after = repo.get(&conv.id).await.unwrap().unwrap();
+    assert_eq!(
+        after.status, initial_status,
+        "complete_conversation must not write DB.status='finished' in Phase 2"
+    );
+}
+
+// ── ConvActor map (Phase 2 Task 3) ──────────────────────────────────
+
+#[tokio::test]
+async fn service_actor_is_idle_for_unknown_conversation() {
+    let (svc, _broadcaster, _repo, _task_mgr) = make_service();
+    assert_eq!(
+        svc.actor_status("nonexistent"),
+        crate::conv_service_trait::ConversationStatus::Idle
+    );
+}
+
+#[tokio::test]
+async fn service_actor_is_created_on_first_access() {
+    let (svc, _broadcaster, _repo, _task_mgr) = make_service();
+    let actor = svc.get_or_create_actor("conv-1");
+    assert_eq!(
+        actor.public_status(),
+        crate::conv_service_trait::ConversationStatus::Idle
+    );
+    let again = svc.get_or_create_actor("conv-1");
+    assert!(Arc::ptr_eq(&actor, &again));
+}
+
+#[tokio::test]
+async fn service_actor_is_dropped_on_delete() {
+    let (svc, _broadcaster, _repo, _task_mgr) = make_service();
+    // Create a conversation through the public API so delete() finds the row.
+    let resp = svc.create("user_1", make_create_req()).await.unwrap();
+    let actor1 = svc.get_or_create_actor(&resp.id);
+
+    svc.delete("user_1", &resp.id).await.unwrap();
+
+    // After delete, asking for the actor again must produce a fresh one.
+    let actor2 = svc.get_or_create_actor(&resp.id);
+    assert!(
+        !Arc::ptr_eq(&actor1, &actor2),
+        "delete() must drop the actor entry so a subsequent lookup returns a fresh actor"
+    );
 }
