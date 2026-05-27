@@ -10,7 +10,7 @@ use aionui_api_types::{
     TeamMcpStatusPayload, TeamResponse, WebSocketMessage,
 };
 use aionui_common::{AgentKillReason, AgentType, ProviderWithModel, generate_id, now_ms};
-use aionui_conversation::ConversationService;
+use aionui_conversation::{ConversationService, IConversationService};
 use aionui_db::models::TeamRow;
 use aionui_db::{IAgentMetadataRepository, IProviderRepository, ITeamRepository, UpdateTeamParams};
 use aionui_realtime::EventBroadcaster;
@@ -631,7 +631,7 @@ impl TeamSessionService {
             self.repo.clone(),
             self.broadcaster.clone(),
             self.backend_binary_path.clone(),
-            self.task_manager.clone(),
+            self.conversation_service_dyn(),
             user_id.clone(),
             self.self_ref.clone(),
         )
@@ -789,13 +789,21 @@ impl TeamSessionService {
                 session: session.clone(),
                 scheduler: session.scheduler().clone(),
                 mailbox: session.mailbox().clone(),
-                task_manager: self.task_manager.clone(),
-                conversation_service: self.conversation_service.clone(),
+                conversation_service: self.conversation_service_dyn(),
                 broadcaster: self.broadcaster.clone(),
                 registry: registry.clone(),
             };
             registry.spawn(&agent.slot_id, ctx);
         }
+    }
+
+    /// Wrap the inherent `ConversationService` as a trait object so the
+    /// biz-layer event-loop and session paths can depend on
+    /// `IConversationService` without coupling to the concrete struct.
+    /// Each call returns a fresh `Arc` over a shallow clone of the
+    /// service (its internal state is already `Arc`-shared).
+    fn conversation_service_dyn(&self) -> Arc<dyn IConversationService> {
+        Arc::new(self.conversation_service.clone())
     }
 
     /// Register an event loop for a dynamically spawned agent.
@@ -817,8 +825,7 @@ impl TeamSessionService {
             session: session.clone(),
             scheduler: session.scheduler().clone(),
             mailbox: session.mailbox().clone(),
-            task_manager: self.task_manager.clone(),
-            conversation_service: self.conversation_service.clone(),
+            conversation_service: self.conversation_service_dyn(),
             broadcaster: self.broadcaster.clone(),
             registry: registry.clone(),
         };

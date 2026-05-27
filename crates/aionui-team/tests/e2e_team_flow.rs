@@ -11,31 +11,34 @@
 //! - Real in-memory mock repo (same pattern as existing tests)
 //! - Real TCP MCP server (TeamMcpServer)
 //! - Real TeamSession with real Mailbox + TaskBoard
-//! - RecordingAgent: captures send_message calls (mock `IAgentTask` / `IMockAgent`)
-//! - StubTaskManager: pre-populated with RecordingAgent instances
+//! - MockConvService: implements `IConversationService` and captures every
+//!   `send` call into a shared log. Phase 3 collapsed the previous
+//!   `RecordingAgent` + `StubTaskManager` scaffolding into a single
+//!   conv-layer mock so biz-layer tests stop reaching into the connect
+//!   layer.
 //!
 //! Scenarios that cannot yet be wired without a live TeamSessionService DB path
 //! are marked #[ignore] with a clear explanation.
 
 mod common;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
 
-use aionui_ai_agent::agent_task::{AgentInstance, IAgentTask, IMockAgent};
-use aionui_ai_agent::protocol::events::{AgentStreamEvent, FinishEventData};
-use aionui_ai_agent::shared_kernel::approval_key;
-use aionui_ai_agent::types::{BuildTaskOptions, SendMessageData};
-use aionui_api_types::AgentModeResponse;
 use aionui_api_types::WebSocketMessage;
-use aionui_common::{AgentKillReason, AgentType, AppError, Confirmation, ConversationStatus, TimestampMs, now_ms};
+use aionui_api_types::{
+    ConversationListResponse, ConversationResponse, CreateConversationRequest, ListConversationsQuery,
+    SendMessageRequest,
+};
+use aionui_common::AppError;
+use aionui_conversation::IConversationService;
+use aionui_conversation::conv_service_trait::{ConversationEvent, ConversationStatus as ConvServiceStatus};
 use aionui_db::ITeamRepository;
 use aionui_realtime::EventBroadcaster;
 use aionui_team::mcp::protocol::{read_frame, write_frame};
 use aionui_team::service::TeamSessionService;
 use aionui_team::{TeamAgent, TeamSession, TeammateRole};
-use async_trait::async_trait;
 use common::MockTeamRepo;
 use serde_json::{Value, json};
 use tokio::net::TcpStream;
@@ -81,166 +84,88 @@ impl EventBroadcaster for RecordingBroadcaster {
     }
 }
 
-/// RecordingAgent: captures every send_message call. The broadcast channel
-/// lets tests simulate Finish events by sending AgentStreamEvent::Finish.
-struct RecordingAgent {
-    conversation_id: String,
-    sent: Arc<Mutex<Vec<SendMessageData>>>,
-    event_tx: broadcast::Sender<AgentStreamEvent>,
-    fail_with: Option<String>,
+/// One captured `IConversationService::send` call. Mirrors the old
+/// `SendMessageData` shape so call-site assertions on `content` /
+/// `files` keep working post-Phase-3.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) struct SendCall {
+    pub user_id: String,
+    pub conversation_id: String,
+    pub content: String,
+    pub files: Vec<String>,
 }
 
-impl RecordingAgent {
-    fn new(conversation_id: &str, sent: Arc<Mutex<Vec<SendMessageData>>>) -> Self {
-        let (event_tx, _) = broadcast::channel(16);
-        Self {
-            conversation_id: conversation_id.to_owned(),
-            sent,
-            event_tx,
-            fail_with: None,
-        }
-    }
-
-    /// Create a variant whose send_message always errors.
-    /// Reserved for future error-path scenario tests.
-    #[allow(dead_code)]
-    fn failing(conversation_id: &str, sent: Arc<Mutex<Vec<SendMessageData>>>, error: &str) -> Self {
-        let (event_tx, _) = broadcast::channel(16);
-        Self {
-            conversation_id: conversation_id.to_owned(),
-            sent,
-            event_tx,
-            fail_with: Some(error.to_owned()),
-        }
-    }
-
-    /// Subscribe to the agent's event stream so the test can fire Finish/Error.
-    #[allow(dead_code)]
-    fn subscribe(&self) -> broadcast::Receiver<AgentStreamEvent> {
-        self.event_tx.subscribe()
-    }
-
-    /// Fire a Finish event on the agent's stream (simulates agent completing a turn).
-    #[allow(dead_code)]
-    fn fire_finish(&self) {
-        let _ = self
-            .event_tx
-            .send(AgentStreamEvent::Finish(FinishEventData { session_id: None }));
-    }
+/// In-memory mock for `IConversationService` used by every e2e setup
+/// helper. Records every `send` into a shared log; other trait methods
+/// are either stubbed Ok (warmup, cancel, delete) or `unimplemented!()`
+/// for paths these tests don't exercise.
+struct MockConvService {
+    sent: Arc<Mutex<Vec<SendCall>>>,
+    statuses: Mutex<HashMap<String, ConvServiceStatus>>,
+    known_convs: Mutex<HashSet<String>>,
+    event_tx: broadcast::Sender<ConversationEvent>,
 }
 
-#[async_trait::async_trait]
-impl IAgentTask for RecordingAgent {
-    fn agent_type(&self) -> AgentType {
-        AgentType::Acp
-    }
-    fn conversation_id(&self) -> &str {
-        &self.conversation_id
-    }
-    fn workspace(&self) -> &str {
-        "/tmp/ws"
-    }
-    fn status(&self) -> Option<ConversationStatus> {
-        None
-    }
-    fn last_activity_at(&self) -> TimestampMs {
-        now_ms()
-    }
-    fn subscribe(&self) -> broadcast::Receiver<AgentStreamEvent> {
-        self.event_tx.subscribe()
-    }
-    async fn send_message(&self, data: SendMessageData) -> Result<(), AppError> {
-        self.sent.lock().unwrap().push(data);
-        match &self.fail_with {
-            Some(msg) => Err(AppError::Internal(msg.clone())),
-            None => Ok(()),
-        }
-    }
-    async fn cancel(&self) -> Result<(), AppError> {
-        Ok(())
-    }
-    fn kill(&self, _reason: Option<AgentKillReason>) -> Result<(), AppError> {
-        Ok(())
-    }
-}
-
-#[async_trait::async_trait]
-impl IMockAgent for RecordingAgent {
-    fn get_confirmations(&self) -> Vec<Confirmation> {
-        Vec::new()
-    }
-    fn check_approval(&self, action: &str, command_type: Option<&str>) -> bool {
-        let _ = approval_key(Some(action), command_type);
-        false
-    }
-    fn confirm(&self, _: &str, _: &str, _: Value, _: bool) -> Result<(), AppError> {
-        Ok(())
-    }
-    async fn mode(&self) -> Result<AgentModeResponse, AppError> {
-        Ok(AgentModeResponse {
-            mode: "default".to_owned(),
-            initialized: false,
-        })
-    }
-}
-
-/// StubTaskManager: allows pre-inserting RecordingAgent handles by conv_id.
-/// Also records kill calls.
-struct StubTaskManager {
-    tasks: Mutex<HashMap<String, AgentInstance>>,
-    kill_calls: Mutex<Vec<(String, Option<AgentKillReason>)>>,
-}
-
-impl StubTaskManager {
+impl MockConvService {
     fn new() -> Self {
+        let (event_tx, _) = broadcast::channel(16);
         Self {
-            tasks: Mutex::new(HashMap::new()),
-            kill_calls: Mutex::new(Vec::new()),
+            sent: Arc::new(Mutex::new(Vec::new())),
+            statuses: Mutex::new(HashMap::new()),
+            known_convs: Mutex::new(HashSet::new()),
+            event_tx,
         }
     }
 
-    fn insert(&self, conv_id: &str, handle: AgentInstance) {
-        self.tasks.lock().unwrap().insert(conv_id.to_owned(), handle);
+    fn register_conv(&self, conv_id: &str) {
+        self.known_convs.lock().unwrap().insert(conv_id.to_owned());
     }
 
-    #[allow(dead_code)]
-    fn kill_calls(&self) -> Vec<(String, Option<AgentKillReason>)> {
-        self.kill_calls.lock().unwrap().clone()
+    fn sent_log(&self) -> Arc<Mutex<Vec<SendCall>>> {
+        self.sent.clone()
     }
 }
 
-#[async_trait]
-impl aionui_ai_agent::IWorkerTaskManager for StubTaskManager {
-    fn get_task(&self, conversation_id: &str) -> Option<AgentInstance> {
-        self.tasks.lock().unwrap().get(conversation_id).cloned()
+#[async_trait::async_trait]
+impl IConversationService for MockConvService {
+    async fn create(&self, _user_id: &str, _opts: CreateConversationRequest) -> Result<String, AppError> {
+        unimplemented!("MockConvService::create is not used by e2e tests")
     }
-
-    async fn get_or_build_task(&self, _: &str, _: BuildTaskOptions) -> Result<AgentInstance, AppError> {
-        Err(AppError::Internal(
-            "StubTaskManager does not support get_or_build_task".into(),
-        ))
+    async fn delete(&self, _user_id: &str, _id: &str) -> Result<(), AppError> {
+        Ok(())
     }
-    fn kill(&self, conversation_id: &str, reason: Option<AgentKillReason>) -> Result<(), AppError> {
-        self.kill_calls
+    async fn get(&self, _user_id: &str, _id: &str) -> Result<ConversationResponse, AppError> {
+        unimplemented!("MockConvService::get is not used by e2e tests")
+    }
+    async fn list(&self, _user_id: &str, _q: ListConversationsQuery) -> Result<ConversationListResponse, AppError> {
+        unimplemented!("MockConvService::list is not used by e2e tests")
+    }
+    async fn warmup(&self, _user_id: &str, _id: &str) -> Result<(), AppError> {
+        Ok(())
+    }
+    async fn send(&self, user_id: &str, id: &str, req: SendMessageRequest) -> Result<String, AppError> {
+        self.sent.lock().unwrap().push(SendCall {
+            user_id: user_id.to_owned(),
+            conversation_id: id.to_owned(),
+            content: req.content,
+            files: req.files,
+        });
+        Ok(format!("msg-{id}"))
+    }
+    async fn cancel(&self, _user_id: &str, _id: &str) -> Result<(), AppError> {
+        Ok(())
+    }
+    fn status(&self, id: &str) -> ConvServiceStatus {
+        self.statuses
             .lock()
             .unwrap()
-            .push((conversation_id.to_owned(), reason));
-        Ok(())
+            .get(id)
+            .cloned()
+            .unwrap_or(ConvServiceStatus::Idle)
     }
-    fn kill_and_wait(
-        &self,
-        conversation_id: &str,
-        reason: Option<AgentKillReason>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
-        let _ = self.kill(conversation_id, reason);
-        Box::pin(std::future::ready(()))
-    }
-    fn clear(&self) {}
-    fn active_count(&self) -> usize {
-        self.tasks.lock().unwrap().len()
-    }
-    fn collect_idle(&self, _: TimestampMs) -> Vec<String> {
-        Vec::new()
+    fn subscribe(&self, _id: &str) -> broadcast::Receiver<ConversationEvent> {
+        self.event_tx.subscribe()
     }
 }
 
@@ -357,32 +282,29 @@ fn two_agents() -> Vec<TeamAgent> {
     ]
 }
 
-/// Build a TeamSession + shared task manager pre-populated with RecordingAgents.
+/// Build a TeamSession + shared `MockConvService`.
 ///
 /// Returns:
 /// - Arc<TeamSession>
-/// - Arc<StubTaskManager>
+/// - Arc<MockConvService>  (so tests can register more conv ids on the fly)
 /// - Arc<MockTeamRepo>  (for low-level mailbox inspection)
-/// - Arc<Mutex<Vec<SendMessageData>>>  (shared sent-messages log)
+/// - Arc<Mutex<Vec<SendCall>>>  (shared sent-messages log)
 async fn setup_session() -> (
     Arc<TeamSession>,
-    Arc<StubTaskManager>,
+    Arc<MockConvService>,
     Arc<MockTeamRepo>,
-    Arc<Mutex<Vec<SendMessageData>>>,
+    Arc<Mutex<Vec<SendCall>>>,
 ) {
     let repo = Arc::new(MockTeamRepo::new());
     let repo_dyn: Arc<dyn ITeamRepository> = repo.clone();
     let broadcaster: Arc<dyn EventBroadcaster> = Arc::new(NullBroadcaster);
 
-    let sent: Arc<Mutex<Vec<SendMessageData>>> = Arc::new(Mutex::new(Vec::new()));
-    let task_manager = Arc::new(StubTaskManager::new());
-
+    let conv_service = Arc::new(MockConvService::new());
     for agent in two_agents() {
-        let handle = AgentInstance::Mock(Arc::new(RecordingAgent::new(&agent.conversation_id, sent.clone())));
-        task_manager.insert(&agent.conversation_id, handle);
+        conv_service.register_conv(&agent.conversation_id);
     }
-
-    let task_manager_dyn: Arc<dyn aionui_ai_agent::IWorkerTaskManager> = task_manager.clone();
+    let sent = conv_service.sent_log();
+    let conv_service_dyn: Arc<dyn IConversationService> = conv_service.clone();
 
     let team = aionui_team::types::Team {
         id: "e2e-team".into(),
@@ -398,14 +320,14 @@ async fn setup_session() -> (
         repo_dyn,
         broadcaster,
         backend_path(),
-        task_manager_dyn,
+        conv_service_dyn,
         "user-e2e".into(),
         Weak::<TeamSessionService>::new(),
     )
     .await
     .expect("TeamSession::start failed");
 
-    (Arc::new(session), task_manager, repo, sent)
+    (Arc::new(session), conv_service, repo, sent)
 }
 
 // ===========================================================================
@@ -736,7 +658,7 @@ async fn s3c_finish_triggers_lead_wake_with_idle_notification() {
 /// then verifying the new agent receives messages and can finish.
 #[tokio::test]
 async fn s4_dynamic_agent_added_then_finish_propagates() {
-    let (session, task_manager, repo, sent) = setup_session().await;
+    let (session, conv_service, repo, sent) = setup_session().await;
 
     // Add a new agent at runtime
     let new_agent = TeamAgent {
@@ -752,9 +674,9 @@ async fn s4_dynamic_agent_added_then_finish_propagates() {
         cli_path: None,
     };
 
-    // Insert a recording agent for the new conversation
-    let handle = AgentInstance::Mock(Arc::new(RecordingAgent::new("conv-helper", sent.clone())));
-    task_manager.insert("conv-helper", handle);
+    // Register the new conversation with the mock conv-service so its
+    // `send` calls are accepted and recorded into the shared log.
+    conv_service.register_conv("conv-helper");
 
     // Add the agent to the session's scheduler
     session.add_agent(&new_agent).await;
