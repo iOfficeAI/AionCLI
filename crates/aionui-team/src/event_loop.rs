@@ -205,6 +205,14 @@ async fn execute_turn(ctx: &AgentLoopContext, input: &crate::session::WakeInput)
         return None;
     }
     let repo = ctx.conversation_service.conversation_repo();
+    // Phase 2 transitional: aionui-team still consults DB.status as a
+    // belt-and-braces guard against duplicate dispatch. The conv layer's
+    // ConvActor is the source of truth (`handle.status()` above), but
+    // teammate scheduling still writes DB.status until Phase 4/5 finishes
+    // routing it through `IConversationService`. The `#[allow(deprecated)]`
+    // is scoped to this single read so unrelated reintroductions of
+    // `row.status` keep firing the lint.
+    #[allow(deprecated)]
     if let Ok(Some(row)) = repo.get(&input.conversation_id).await
         && row.status.as_deref() == Some("running")
     {

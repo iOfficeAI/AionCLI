@@ -1,4 +1,6 @@
 //! Conversation and message CRUD with streaming relay and event emission.
+pub mod conv_actor;
+pub mod conv_service_trait;
 mod convert;
 pub mod response_middleware;
 pub mod routes;
@@ -11,6 +13,8 @@ pub mod state;
 pub mod stream_relay;
 pub mod task_options;
 
+pub use conv_actor::{ConvActor, ConvState, TurnHandle};
+pub use conv_service_trait::{ConversationEvent, ConversationStatus as ConvConversationStatus, IConversationService};
 pub use response_middleware::{
     CronCommand, CronCommandResult, CronCreateParams, CronUpdateParams, ICronService, MessageMiddleware,
     MiddlewareResult, detect_cron_commands, has_cron_commands, strip_cron_commands, strip_think_tags,

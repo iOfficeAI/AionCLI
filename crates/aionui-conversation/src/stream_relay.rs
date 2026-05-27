@@ -758,19 +758,17 @@ impl StreamRelay {
 
     #[tracing::instrument(skip_all, fields(conversation_id = %conversation_id))]
     pub async fn complete_conversation(
-        repo: &Arc<dyn IConversationRepository>,
+        _repo: &Arc<dyn IConversationRepository>,
         broadcaster: &Arc<dyn EventBroadcaster>,
         conversation_id: &str,
     ) {
-        let update = aionui_db::ConversationRowUpdate {
-            status: Some("finished".to_owned()),
-            updated_at: Some(now_ms()),
-            ..Default::default()
-        };
-        if let Err(e) = repo.update(conversation_id, &update).await {
-            error!(error = %ErrorChain(&e), "Failed to update conversation status");
-        }
-
+        // Phase 2: DB.status is no longer the runtime source of truth —
+        // `ConvActor` is. The runtime transition back to `Idle` is handled
+        // by `TurnHandle::Drop` in the `send_message` spawn. Here we only
+        // need to broadcast turn.completed so live subscribers re-enable
+        // the input. The `_repo` parameter is preserved to keep the
+        // signature stable for callers across the Phase 2 series; it will
+        // be removed once all callers no longer pass it (Phase 5/6).
         let payload = json!({
             "conversation_id": conversation_id,
             "session_id": conversation_id,

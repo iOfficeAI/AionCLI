@@ -1,0 +1,101 @@
+# AGENTS — `aionui-conversation` (conv layer)
+
+Conv layer in the four-layer architecture. Owns conversation runtime
+state via `ConvActor`. Composes connect-layer connectors. Used by
+biz-layer crates exclusively through `IConversationService`.
+
+## Hard rules
+
+### 1. ConvActor is the single source of truth for runtime state
+
+Runtime status (Idle / Running) lives in `ConvActor::state`. Do NOT:
+
+- Read `DB.conversations.status` to decide if a conversation is running.
+- Write `DB.conversations.status` from runtime hot paths (`send` /
+  `cancel` / `complete_conversation`).
+- Cache the runtime status in any other structure.
+
+CI grep:
+
+```bash
+rg "status: Some\\(.*ConversationStatus::Running" crates/aionui-conversation/src
+```
+
+MUST return zero matches.
+
+### 2. Turn serialization happens inside ConvActor's mutex
+
+If you find yourself wanting to add another mutex / `OnceCell` /
+`AtomicBool` to track turn state, stop. The
+`ConvState::Running { msg_id, turn_done }` mutex is the single
+serializer. Multi-turn chaining (cron continuations etc.) is a
+biz-layer concern — see `aionui-cron` (Phase 4).
+
+### 3. `cancel()` MUST wait for `wait_for_idle()`
+
+`IConversationService::cancel` returns only after
+`actor.wait_for_idle()` has settled. This depends on Phase 1's
+`connector.cancel_current_turn()` contract being honoured by the
+underlying `IAgentConnector` (i.e. the connector must release its
+slot when cancelled). Returning early reintroduces the cancel→send
+race that produced ELECTRON-1KB.
+
+Regression test: `tests/cancel_send_race.rs::cancel_then_send_does_not_return_conflict`.
+
+### 4. No biz-layer types in conv-layer surface
+
+`IConversationService` MUST NOT mention team / cron / assistant types.
+Biz-layer orchestration lives outside this crate. If a new conv-layer
+method needs biz context, expose a hook instead and let the biz layer
+register a callback.
+
+## Module layout
+
+| Module | Responsibility |
+|---|---|
+| `conv_service_trait.rs` | `IConversationService`, `ConversationStatus`, `ConversationEvent` |
+| `conv_actor.rs` | `ConvActor`, `ConvState`, `TurnHandle` |
+| `service.rs` | `ConversationService` impl (orchestration, repo, hooks) |
+| `stream_relay.rs` | Event fan-out from connector → DB → WebSocket |
+| `convert.rs` | DB row ↔ API response mapping |
+| `routes.rs` / `routes_aux.rs` | HTTP handlers — request/response only |
+| `state.rs` | `ConversationRouterState` |
+| `response_middleware.rs` | Cron + `<think>` post-processing |
+| `skill_resolver.rs` / `skill_snapshot.rs` | Extension/skill plumbing |
+| `task_options.rs` | Build options for the connect-layer task manager |
+
+## Allowed dependencies
+
+- `aionui-common`, `aionui-db`, `aionui-realtime`, `aionui-api-types`
+- `aionui-ai-agent` (connect layer) — through `IAgentConnector` ONLY.
+  Do not import `IAgentTask`, `IWorkerTaskManager`, `AgentInstance`
+  in new code; existing legacy uses are scheduled for removal in
+  Phase 5.
+
+## Forbidden dependencies
+
+- `aionui-team`, `aionui-cron`, `aionui-assistant` (biz layer)
+- Any HTTP framework type in trait surfaces (axum types belong to
+  routes only)
+
+## Testing
+
+- New trait surface methods (`IConversationService::*`) require
+  trait-surface tests in `tests/`.
+- Cancel/send race regressions live in `tests/cancel_send_race.rs`.
+  Add a new case there for any change that touches the actor mutex,
+  `TurnHandle::Drop`, or `cancel()`'s wait sequencing.
+- Database tests use `init_database_memory()`; do not introduce
+  on-disk SQLite paths in the test setup.
+
+## Logging
+
+- `info` for lifecycle boundaries (conversation created / turn
+  started / cancel issued).
+- `warn` for malformed data, repository errors that are
+  individually recoverable (e.g. failed message persistence inside a
+  spawned turn).
+- `error` for contract violations (e.g. actor reaching `Running`
+  without a `msg_id`).
+- NEVER log raw user content, tool input/output, agent prompt
+  payloads, or secrets at any level visible in production builds.
