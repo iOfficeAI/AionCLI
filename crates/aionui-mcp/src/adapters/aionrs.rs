@@ -19,7 +19,7 @@ const CLI_NAME: &str = "aionrs";
 ///
 /// ```toml
 /// [mcp.servers.server-name]
-/// type = "stdio"
+/// transport = "stdio"
 /// command = "npx"
 /// args = ["-y", "@test/server"]
 ///
@@ -27,7 +27,7 @@ const CLI_NAME: &str = "aionrs";
 /// KEY = "VALUE"
 ///
 /// [mcp.servers.remote-server]
-/// type = "http"
+/// transport = "http"
 /// url = "https://example.com/mcp"
 ///
 /// [mcp.servers.remote-server.headers]
@@ -214,7 +214,11 @@ fn parse_toml_servers(content: &str) -> Result<Vec<DetectedServer>, McpError> {
 fn parse_toml_server_entry(name: &str, config: &toml::Value) -> Option<DetectedServer> {
     let table = config.as_table()?;
 
-    let transport_type = table.get("type").and_then(|v| v.as_str()).unwrap_or("stdio");
+    let transport_type = table
+        .get("transport")
+        .or_else(|| table.get("type"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("stdio");
 
     let transport = match transport_type {
         "stdio" => {
@@ -273,7 +277,7 @@ fn transport_to_toml(transport: &McpServerTransport) -> toml::Value {
 
     match transport {
         McpServerTransport::Stdio { command, args, env } => {
-            table.insert("type".into(), toml::Value::String("stdio".into()));
+            table.insert("transport".into(), toml::Value::String("stdio".into()));
             table.insert("command".into(), toml::Value::String(command.clone()));
             if !args.is_empty() {
                 table.insert(
@@ -290,12 +294,12 @@ fn transport_to_toml(transport: &McpServerTransport) -> toml::Value {
             }
         }
         McpServerTransport::Sse { url, headers } => {
-            table.insert("type".into(), toml::Value::String("sse".into()));
+            table.insert("transport".into(), toml::Value::String("sse".into()));
             table.insert("url".into(), toml::Value::String(url.clone()));
             insert_toml_headers(&mut table, headers);
         }
         McpServerTransport::Http { url, headers } => {
-            table.insert("type".into(), toml::Value::String("http".into()));
+            table.insert("transport".into(), toml::Value::String("http".into()));
             table.insert("url".into(), toml::Value::String(url.clone()));
             insert_toml_headers(&mut table, headers);
         }
@@ -377,6 +381,29 @@ NODE_ENV = "production"
                 assert_eq!(args, &["-y", "@test/server"]);
                 assert_eq!(env.get("KEY").unwrap(), "VALUE");
                 assert_eq!(env.get("NODE_ENV").unwrap(), "production");
+            }
+            _ => panic!("expected Stdio"),
+        }
+    }
+
+    #[test]
+    fn parse_stdio_server_with_transport_key() {
+        let toml = r#"
+[mcp.servers.test-mcp]
+transport = "stdio"
+command = "npx"
+args = ["-y", "@test/server"]
+
+[mcp.servers.test-mcp.env]
+KEY = "VALUE"
+"#;
+        let servers = parse_toml_servers(toml).unwrap();
+        assert_eq!(servers.len(), 1);
+        match &servers[0].transport {
+            McpServerTransport::Stdio { command, args, env } => {
+                assert_eq!(command, "npx");
+                assert_eq!(args, &["-y", "@test/server"]);
+                assert_eq!(env.get("KEY").unwrap(), "VALUE");
             }
             _ => panic!("expected Stdio"),
         }
@@ -496,6 +523,18 @@ args = ["srv.js"]
             env: HashMap::from([("K".into(), "V".into())]),
         };
         let toml_val = transport_to_toml(&transport);
+        let table = toml_val.as_table().unwrap();
+        assert_eq!(table.get("transport").unwrap().as_str().unwrap(), "stdio");
+        assert!(table.get("type").is_none());
+        assert_eq!(
+            table
+                .get("env")
+                .and_then(|v| v.as_table())
+                .and_then(|env| env.get("K"))
+                .and_then(|v| v.as_str())
+                .unwrap(),
+            "V"
+        );
         let server = parse_toml_server_entry("test", &toml_val).unwrap();
         assert_eq!(server.transport, transport);
     }
