@@ -50,10 +50,11 @@ existing state).
 | Module | Responsibility |
 |---|---|
 | `src/connector/` | `IAgentConnector` trait, `ConnectorEvent` types, errors |
-| `src/manager/{acp,aionrs,remote,...}` | Per-protocol implementations |
-| `src/agent_task.rs` | Legacy `IAgentTask` trait — **deleted in Phase 5** |
-| `src/task_manager.rs` | Legacy `IWorkerTaskManager` — **deleted in Phase 5** |
-| `src/idle_scanner.rs` | Idle scanner — **relocated to conv layer in Phase 5** |
+| `src/connector_factory.rs` | `IAgentConnectorFactory` + default `ConnectorFactory` cache (Phase 5) |
+| `src/manager/{acp,aionrs,remote,nanobot,openclaw}` | Per-protocol implementations of `IAgentConnector` |
+| `src/agent_task.rs` | Crate-private `IAgentTask` shared base — **no longer re-exported from `lib.rs` (Phase 5)**; production callers use `IAgentConnector` |
+| `src/task_manager.rs` | **Deleted in Phase 5.** Legacy `IWorkerTaskManager` and `WorkerTaskManagerImpl` — replaced by `IAgentConnectorFactory` |
+| `src/idle_scanner.rs` | **Relocated to conv layer in Phase 5.** See `crates/aionui-conversation/src/idle_scanner.rs` |
 
 ## Test obligations for new connector implementations
 
@@ -76,4 +77,7 @@ Forbidden:
 - Any biz-layer crate (`aionui-team`, `aionui-cron`, `aionui-assistant`)
 - The conv-layer crate (`aionui-conversation`)
 
-These will be enforced by `scripts/check_layer_deps.sh` (Phase 3).
+Phase 3 wired `scripts/check_layer_deps.sh` into the `just push` gate;
+it greps for forbidden cross-layer imports and the Phase-5-deleted
+symbols (`IWorkerTaskManager`, `WorkerTaskManagerImpl`, `AgentInstance`,
+`IMockAgent`).
