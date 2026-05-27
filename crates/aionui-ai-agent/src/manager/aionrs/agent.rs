@@ -14,12 +14,13 @@ use aionui_common::{
     AgentKillReason, AgentType, AppError, Confirmation, ConversationStatus, ErrorChain, TimestampMs, now_ms,
 };
 use serde_json::Value;
-use tokio::sync::{Mutex, Notify, broadcast};
+use tokio::sync::{Mutex, Notify, broadcast, oneshot};
 use tracing::{debug, error, info};
 
 use crate::agent_runtime::AgentRuntime;
 use crate::capability::backend_output_sink::BackendOutputSink;
 use crate::capability::backend_protocol_sink::BackendProtocolSink;
+use crate::connector::{ChunkPayload, ConnectorError, ConnectorEvent, IAgentConnector, StopReason, TurnSummary};
 use crate::protocol::events::AgentStreamEvent;
 use crate::types::{AionrsResolvedConfig, SendMessageData};
 
@@ -38,6 +39,13 @@ pub struct AionrsAgentManager {
     /// Signalled by `cancel()` to abort an in-flight `engine.run()` via
     /// `tokio::select!` in `send_message()`.
     cancel_notify: Arc<Notify>,
+    /// Receiver-side of the current turn's done-signal. Held in a
+    /// `Mutex<Option<..>>` so `cancel_current_turn` can take ownership and
+    /// await it. `None` means no turn is in flight. Writers: `begin_turn`
+    /// (sets) and `take_turn_done_rx` (clears). Readers: `cancel_current_turn`
+    /// awaits the receiver side; the sender is held inside a `TurnGuard` so
+    /// drop on the turn's exit path signals completion.
+    turn_done_rx: Mutex<Option<oneshot::Receiver<()>>>,
 }
 
 impl Drop for AionrsAgentManager {
@@ -146,7 +154,183 @@ impl AionrsAgentManager {
             approval_manager,
             confirmations,
             cancel_notify: Arc::new(Notify::new()),
+            turn_done_rx: Mutex::new(None),
         })
+    }
+}
+
+/// RAII guard that signals turn completion via a oneshot when dropped.
+///
+/// `_done_tx` is intentionally `Option<oneshot::Sender<()>>` so the field
+/// can be moved out of `Some(..)` into `None` on drop without unsafe code.
+/// The actual signalling happens through Drop on `oneshot::Sender`.
+pub struct TurnGuard {
+    _done_tx: Option<oneshot::Sender<()>>,
+}
+
+impl AionrsAgentManager {
+    /// Register a new turn-done pair. Returns a guard that signals on drop.
+    /// Returns `None` if a turn is already in flight (single-flight defence).
+    pub(crate) fn begin_turn(&self) -> Option<TurnGuard> {
+        let (done_tx, done_rx) = oneshot::channel();
+        let mut slot = self.turn_done_rx.try_lock().ok()?;
+        if slot.is_some() {
+            return None;
+        }
+        *slot = Some(done_rx);
+        Some(TurnGuard {
+            _done_tx: Some(done_tx),
+        })
+    }
+
+    /// Take the current turn's done-receiver, if any.
+    pub(crate) async fn take_turn_done_rx(&self) -> Option<oneshot::Receiver<()>> {
+        self.turn_done_rx.lock().await.take()
+    }
+
+    /// Begin a turn slot exposed for integration tests under the same
+    /// `cfg(any(test, feature = "test-support"))` gate used by other test
+    /// hooks in this crate. Allows downstream tests to simulate an
+    /// in-flight turn without a real LLM provider.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn begin_turn_for_test(&self) -> Option<TurnGuard> {
+        self.begin_turn()
+    }
+
+    /// Issue a connector-style cancel from integration tests. Mirrors
+    /// `IAgentConnector::cancel_current_turn` semantics: signals
+    /// `cancel_notify` then awaits the in-flight turn's done-receiver.
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn cancel_for_test(&self) -> Result<(), AppError> {
+        // Mirrors connector cancel_current_turn semantics.
+        self.cancel_notify.notify_waiters();
+        if let Some(rx) = self.take_turn_done_rx().await {
+            let _ = rx.await;
+        }
+        Ok(())
+    }
+
+    /// Drives one turn through the engine. Caller MUST already hold a
+    /// `TurnGuard` (acquired via `begin_turn`). Used by both
+    /// `IAgentTask::send_message` and `IAgentConnector::run_turn` so the
+    /// engine drive logic stays in one place.
+    async fn run_turn_inner(&self, data: SendMessageData) -> Result<TurnSummary, ConnectorError> {
+        let started_at = now_ms();
+        self.runtime.bump_activity();
+        self.runtime.reset_for_new_turn(ConversationStatus::Running);
+
+        let mut engine = self.engine.lock().await;
+
+        let result = tokio::select! {
+            res = engine.run(&data.content, &data.msg_id) => Some(res),
+            _ = self.cancel_notify.notified() => {
+                info!(
+                    conversation_id = %self.runtime.conversation_id(),
+                    "Aionrs engine.run() cancelled by user"
+                );
+                engine.abort_current_turn("Tool execution canceled by user");
+                None
+            }
+        };
+
+        let elapsed_ms = now_ms() - started_at;
+        self.runtime.bump_activity();
+
+        match result {
+            Some(Ok(_)) => {
+                info!(
+                    conversation_id = %self.runtime.conversation_id(),
+                    elapsed_ms,
+                    "Aionrs engine.run() completed, emitting Finish"
+                );
+                self.runtime.emit_finish(None);
+                Ok(TurnSummary {
+                    session_id: None,
+                    stop_reason: Some(StopReason::EndTurn),
+                })
+            }
+            Some(Err(e)) => {
+                let error_msg = format!("Aionrs agent error: {e}");
+                error!(
+                    conversation_id = %self.runtime.conversation_id(),
+                    elapsed_ms,
+                    error = %ErrorChain(&e),
+                    "Aionrs engine.run() failed, emitting Error+Finish"
+                );
+                self.runtime.emit_error(error_msg.clone());
+                self.runtime.emit_finish(None);
+                Err(ConnectorError::Protocol(error_msg))
+            }
+            None => {
+                self.runtime.emit_error("Stopped by user");
+                self.runtime.emit_finish(None);
+                Ok(TurnSummary {
+                    session_id: None,
+                    stop_reason: Some(StopReason::Cancelled),
+                })
+            }
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl IAgentConnector for AionrsAgentManager {
+    fn agent_type(&self) -> AgentType {
+        AgentType::Aionrs
+    }
+    fn conversation_id(&self) -> &str {
+        self.runtime.conversation_id()
+    }
+    fn workspace(&self) -> &str {
+        self.runtime.workspace()
+    }
+    fn last_activity_at(&self) -> TimestampMs {
+        self.runtime.last_activity_at()
+    }
+    fn is_open(&self) -> bool {
+        true
+    }
+
+    async fn open(&self) -> Result<(), ConnectorError> {
+        Ok(())
+    }
+
+    fn close(&self, reason: Option<AgentKillReason>) {
+        let _ = crate::agent_task::IAgentTask::kill(self, reason);
+    }
+
+    async fn run_turn(&self, msg: SendMessageData) -> Result<TurnSummary, ConnectorError> {
+        let _turn_guard = self.begin_turn().ok_or(ConnectorError::Busy)?;
+        self.run_turn_inner(msg).await
+    }
+
+    async fn cancel_current_turn(&self) -> Result<(), ConnectorError> {
+        if let Ok(mut confs) = self.confirmations.write() {
+            confs.clear();
+        }
+        self.cancel_notify.notify_waiters();
+        if let Some(rx) = self.take_turn_done_rx().await {
+            let _ = rx.await;
+        }
+        Ok(())
+    }
+
+    fn subscribe(&self) -> broadcast::Receiver<ConnectorEvent> {
+        // Phase 1: bridge from the legacy AgentStreamEvent channel into
+        // ConnectorEvent::Chunk. A dedicated channel will replace this in
+        // Phase 5 once the legacy channel goes away.
+        let (tx, rx) = broadcast::channel(64);
+        let mut legacy = self.runtime.subscribe();
+        tokio::spawn(async move {
+            while let Ok(ev) = legacy.recv().await {
+                let _ = tx.send(ConnectorEvent::Chunk(ChunkPayload { event: ev }));
+            }
+        });
+        rx
+    }
+
+    fn subscribe_legacy(&self) -> broadcast::Receiver<AgentStreamEvent> {
+        self.runtime.subscribe()
     }
 }
 
@@ -177,60 +361,30 @@ impl crate::agent_task::IAgentTask for AionrsAgentManager {
     }
 
     async fn send_message(&self, data: SendMessageData) -> Result<(), AppError> {
-        let started_at = now_ms();
+        let _turn_guard = match self.begin_turn() {
+            Some(g) => g,
+            None => return Err(AppError::Conflict("Aionrs turn already in flight".into())),
+        };
         info!(
             conversation_id = %self.runtime.conversation_id(),
             msg_id = %data.msg_id,
             "Aionrs send_message started"
         );
-        self.runtime.bump_activity();
-        self.runtime.reset_for_new_turn(ConversationStatus::Running);
 
-        let mut engine = self.engine.lock().await;
+        let outcome = self.run_turn_inner(data).await;
 
-        let result = tokio::select! {
-            res = engine.run(&data.content, &data.msg_id) => Some(res),
-            _ = self.cancel_notify.notified() => {
-                info!(
-                    conversation_id = %self.runtime.conversation_id(),
-                    "Aionrs engine.run() cancelled by user"
-                );
-                engine.abort_current_turn("Tool execution canceled by user");
-                None
+        // Map TurnSummary → Ok(()), ConnectorError::Protocol → AppError::Internal.
+        let mapped = match outcome {
+            Ok(_) => Ok(()),
+            Err(crate::connector::ConnectorError::Protocol(msg)) => Err(AppError::Internal(msg)),
+            Err(crate::connector::ConnectorError::Busy) => {
+                Err(AppError::Conflict("Aionrs turn already in flight".into()))
             }
+            Err(e) => Err(AppError::Internal(format!("{e}"))),
         };
 
-        let elapsed_ms = now_ms() - started_at;
-        self.runtime.bump_activity();
-
-        match result {
-            Some(Ok(_)) => {
-                info!(
-                    conversation_id = %self.runtime.conversation_id(),
-                    elapsed_ms,
-                    "Aionrs engine.run() completed, emitting Finish"
-                );
-                self.runtime.emit_finish(None);
-                Ok(())
-            }
-            Some(Err(e)) => {
-                let error_msg = format!("Aionrs agent error: {e}");
-                error!(
-                    conversation_id = %self.runtime.conversation_id(),
-                    elapsed_ms,
-                    error = %ErrorChain(&e),
-                    "Aionrs engine.run() failed, emitting Error+Finish"
-                );
-                self.runtime.emit_error(error_msg.clone());
-                self.runtime.emit_finish(None);
-                Err(AppError::Internal(error_msg))
-            }
-            None => {
-                self.runtime.emit_error("Stopped by user");
-                self.runtime.emit_finish(None);
-                Ok(())
-            }
-        }
+        drop(_turn_guard);
+        mapped
     }
 
     async fn cancel(&self) -> Result<(), AppError> {
@@ -376,9 +530,9 @@ mod tests {
         let agent = AionrsAgentManager::new("conv-1".into(), "/project".into(), make_test_config(), None)
             .await
             .unwrap();
-        assert_eq!(agent.agent_type(), AgentType::Aionrs);
-        assert_eq!(agent.workspace(), "/project");
-        assert_eq!(agent.conversation_id(), "conv-1");
+        assert_eq!(IAgentTask::agent_type(&agent), AgentType::Aionrs);
+        assert_eq!(IAgentTask::workspace(&agent), "/project");
+        assert_eq!(IAgentTask::conversation_id(&agent), "conv-1");
     }
 
     #[tokio::test]
@@ -394,7 +548,7 @@ mod tests {
         let agent = AionrsAgentManager::new("conv-1".into(), "/project".into(), make_test_config(), None)
             .await
             .unwrap();
-        let _rx = agent.subscribe();
+        let _rx = IAgentTask::subscribe(&agent);
     }
 
     #[tokio::test]
@@ -436,7 +590,7 @@ mod tests {
         let agent = AionrsAgentManager::new("conv-stop".into(), "/project".into(), make_test_config(), None)
             .await
             .unwrap();
-        let mut rx = agent.subscribe();
+        let mut rx = IAgentTask::subscribe(&agent);
 
         agent.cancel().await.unwrap();
 
@@ -445,11 +599,103 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn iagent_connector_basics() {
+        use crate::connector::IAgentConnector;
+
+        let agent = AionrsAgentManager::new("conv-c".into(), "/project".into(), make_test_config(), None)
+            .await
+            .unwrap();
+        let connector: &dyn IAgentConnector = &agent;
+        assert_eq!(connector.agent_type(), AgentType::Aionrs);
+        assert_eq!(connector.conversation_id(), "conv-c");
+        assert_eq!(connector.workspace(), "/project");
+        // open() is idempotent on aionrs (no separate handshake).
+        assert!(connector.is_open());
+        connector.open().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn iagent_connector_concurrent_run_turn_serializes() {
+        use crate::connector::{ConnectorError, IAgentConnector};
+        use std::sync::Arc;
+
+        let agent = Arc::new(
+            AionrsAgentManager::new("conv-s".into(), "/project".into(), make_test_config(), None)
+                .await
+                .unwrap(),
+        );
+
+        // Hold a turn slot so the next run_turn observes Busy.
+        let _guard = agent.begin_turn_for_test().unwrap();
+
+        let connector: Arc<dyn IAgentConnector> = agent.clone();
+        let result = connector
+            .run_turn(SendMessageData {
+                content: "hi".into(),
+                msg_id: "m1".into(),
+                files: vec![],
+                inject_skills: vec![],
+            })
+            .await;
+        assert!(matches!(result, Err(ConnectorError::Busy)));
+    }
+
+    #[tokio::test]
+    async fn cancel_waits_for_in_flight_run_to_drop() {
+        use std::sync::Arc;
+        use std::time::Duration;
+        use tokio::sync::Notify;
+
+        let agent = Arc::new(
+            AionrsAgentManager::new("conv-cancel".into(), "/project".into(), make_test_config(), None)
+                .await
+                .unwrap(),
+        );
+
+        // Spawn a fake turn: register a turn_done pair manually, then sleep.
+        // We can't drive a real engine.run() in unit tests (no provider), so we
+        // exercise the lifecycle hook directly.
+        let release = Arc::new(Notify::new());
+        let release_for_task = release.clone();
+        let agent_for_task = agent.clone();
+        let turn = tokio::spawn(async move {
+            let _guard = agent_for_task.begin_turn_for_test().expect("turn slot free");
+            release_for_task.notified().await;
+            // _guard is dropped here, signalling done_tx.
+        });
+
+        // Give the turn a moment to register.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        // cancel must NOT return until the spawned turn completes.
+        let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cancelled_flag = cancelled.clone();
+        let agent_for_cancel = agent.clone();
+        let cancel_task = tokio::spawn(async move {
+            agent_for_cancel.cancel_for_test().await.unwrap();
+            cancelled_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+
+        // After 50ms, cancel should still be waiting.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            !cancelled.load(std::sync::atomic::Ordering::SeqCst),
+            "cancel returned before the in-flight turn dropped"
+        );
+
+        // Release the fake turn.
+        release.notify_one();
+        turn.await.unwrap();
+        cancel_task.await.unwrap();
+        assert!(cancelled.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[tokio::test]
     async fn runtime_can_emit_error_and_finish() {
         let agent = AionrsAgentManager::new("conv-err".into(), "/project".into(), make_test_config(), None)
             .await
             .unwrap();
-        let mut rx = agent.subscribe();
+        let mut rx = IAgentTask::subscribe(&agent);
 
         agent.runtime.emit_error("test error");
         // emit_error sets status to Finished, so emit_finish is a no-op here.

@@ -131,9 +131,9 @@ async fn aionrs_agent_metadata() {
     let agent = AionrsAgentManager::new("conv-abc".into(), "/work".into(), make_aionrs_config(), None)
         .await
         .unwrap();
-    assert_eq!(agent.agent_type(), AgentType::Aionrs);
-    assert_eq!(agent.workspace(), "/work");
-    assert_eq!(agent.conversation_id(), "conv-abc");
+    assert_eq!(IAgentTask::agent_type(&agent), AgentType::Aionrs);
+    assert_eq!(IAgentTask::workspace(&agent), "/work");
+    assert_eq!(IAgentTask::conversation_id(&agent), "conv-abc");
     assert_eq!(agent.status(), Some(ConversationStatus::Pending));
     assert!(agent.get_confirmations().is_empty());
     assert!(!agent.check_approval("any", None));

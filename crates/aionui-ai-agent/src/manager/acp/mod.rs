@@ -1,5 +1,6 @@
 pub mod agent;
 mod agent_close;
+mod agent_connector;
 pub mod agent_event_tracker;
 pub mod agent_reconcile;
 mod agent_session_flow;

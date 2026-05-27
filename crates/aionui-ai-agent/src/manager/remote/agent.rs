@@ -11,6 +11,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, error, info, warn};
 
 use crate::agent_runtime::AgentRuntime;
+use crate::connector::{ChunkPayload, ConnectorError, ConnectorEvent, IAgentConnector, StopReason, TurnSummary};
 use crate::protocol::events::AgentStreamEvent;
 use crate::types::SendMessageData;
 
@@ -392,6 +393,94 @@ impl RemoteAgentManager {
                 g.approval_memory.get(&key).copied().unwrap_or(false)
             })
             .unwrap_or(false)
+    }
+}
+
+#[async_trait::async_trait]
+impl IAgentConnector for RemoteAgentManager {
+    fn agent_type(&self) -> AgentType {
+        AgentType::Remote
+    }
+    fn conversation_id(&self) -> &str {
+        self.runtime.conversation_id()
+    }
+    fn workspace(&self) -> &str {
+        self.runtime.workspace()
+    }
+    fn last_activity_at(&self) -> TimestampMs {
+        self.runtime.last_activity_at()
+    }
+    fn is_open(&self) -> bool {
+        // ws_sink presence indicates an open WS connection.
+        self.ws_sink.try_lock().map(|g| g.is_some()).unwrap_or(false)
+    }
+
+    async fn open(&self) -> Result<(), ConnectorError> {
+        // RemoteAgentManager opens lazily via the existing connect path
+        // owned outside this trait. Phase 1: treat open() as a no-op so
+        // the conv-layer mutex serialization can still call it.
+        Ok(())
+    }
+
+    fn close(&self, reason: Option<AgentKillReason>) {
+        let _ = crate::agent_task::IAgentTask::kill(self, reason);
+    }
+
+    async fn run_turn(&self, msg: SendMessageData) -> Result<TurnSummary, ConnectorError> {
+        match crate::agent_task::IAgentTask::send_message(self, msg).await {
+            Ok(()) => Ok(TurnSummary {
+                session_id: self.state.read().await.session_key.clone(),
+                stop_reason: Some(StopReason::EndTurn),
+            }),
+            Err(AppError::Conflict(_)) => Err(ConnectorError::Busy),
+            Err(e) => Err(ConnectorError::Protocol(format!("{e}"))),
+        }
+    }
+
+    async fn cancel_current_turn(&self) -> Result<(), ConnectorError> {
+        // Subscribe BEFORE issuing cancel so we don't miss the Finish event.
+        let mut rx = self.runtime.subscribe();
+        match crate::agent_task::IAgentTask::cancel(self).await {
+            Ok(()) => {}
+            Err(AppError::Conflict(_)) => return Ok(()), // Nothing in flight.
+            Err(e) => return Err(ConnectorError::Protocol(format!("{e}"))),
+        }
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while let Ok(ev) = rx.recv().await {
+                if matches!(ev, AgentStreamEvent::Finish(_) | AgentStreamEvent::Error(_)) {
+                    break;
+                }
+            }
+        })
+        .await;
+        Ok(())
+    }
+
+    fn subscribe(&self) -> broadcast::Receiver<ConnectorEvent> {
+        let (tx, rx) = broadcast::channel(64);
+        let mut legacy = self.runtime.subscribe();
+        tokio::spawn(async move {
+            while let Ok(ev) = legacy.recv().await {
+                let _ = tx.send(ConnectorEvent::Chunk(ChunkPayload { event: ev }));
+            }
+        });
+        rx
+    }
+
+    fn subscribe_legacy(&self) -> broadcast::Receiver<AgentStreamEvent> {
+        self.runtime.subscribe()
+    }
+}
+
+#[cfg(test)]
+mod connector_tests {
+    use super::*;
+    use crate::connector::IAgentConnector;
+
+    #[test]
+    fn remote_manager_implements_iagent_connector() {
+        fn _assert<T: IAgentConnector>() {}
+        _assert::<RemoteAgentManager>();
     }
 }
 

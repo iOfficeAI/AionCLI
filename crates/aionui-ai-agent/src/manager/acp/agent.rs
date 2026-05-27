@@ -23,7 +23,7 @@ use aionui_common::{
 use serde_json::Value;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{Mutex, RwLock, broadcast, mpsc};
+use tokio::sync::{Mutex, Notify, RwLock, broadcast, mpsc};
 use tracing::{debug, error, info, warn};
 
 /// The user-visible body inside an [`AppError`].
@@ -150,6 +150,16 @@ pub struct AcpAgentManager {
 
     /// Mutex for serializing session operations (new/load/send).
     session_lock: Mutex<()>,
+
+    /// Fires when the in-flight `prompt()` future resolves (success, error,
+    /// or cancellation). `IAgentConnector::cancel_current_turn` awaits this
+    /// notify so the call returns only after the protocol has acked the
+    /// stop — closing the cancel→send race documented in ELECTRON-1KB.
+    /// Lifecycle: written by `ensure_session_and_send` on every prompt
+    /// completion (any result path), read by `cancel_current_turn`. Held
+    /// in an `Arc` so future Phase 2 conv-actor tasks can clone it without
+    /// extending the manager's lifetime.
+    pub(super) cancel_ack: Arc<Notify>,
 }
 
 impl AcpAgentManager {
@@ -282,6 +292,7 @@ impl AcpAgentManager {
             skill_manager,
             domain_event_tx,
             pipeline,
+            cancel_ack: Arc::new(Notify::new()),
         };
         Ok((manager, domain_event_rx, notification_rx))
     }
@@ -533,7 +544,13 @@ impl AcpAgentManager {
             content,
             ..data.clone()
         };
-        self.prompt_existing_session(&data, Some(&sid)).await
+        // Fire `cancel_ack` regardless of result so any waiter blocked in
+        // `IAgentConnector::cancel_current_turn` is released as soon as
+        // the protocol-level `prompt()` future resolves (success, error,
+        // or cancelled).
+        let res = self.prompt_existing_session(&data, Some(&sid)).await;
+        self.cancel_ack.notify_waiters();
+        res
     }
 
     /// Pre-open the ACP session without sending a prompt. Called by the
@@ -720,12 +737,6 @@ impl AcpAgentManager {
         })
     }
 
-    /// Pending ACP permission prompts recoverable through the conversation
-    /// confirmation API.
-    pub fn get_confirmations(&self) -> Vec<aionui_common::Confirmation> {
-        self.permission_router.get_confirmations()
-    }
-
     /// Submit a permission response for a pending tool call. ACP confirms
     /// always carry an `option_id`; `always_allow` is consumed by the CLI
     /// and is not reflected in the local approval memory (the ACP CLI
@@ -747,6 +758,7 @@ impl AcpAgentManager {
 
 // `augment_with_stderr` and `build_close_reason_from_error` live in
 // `agent_close.rs` to keep this file under the 1000-line budget.
+// The `IAgentConnector` impl lives in `agent_connector.rs` for the same reason.
 
 #[cfg(test)]
 mod tests {
