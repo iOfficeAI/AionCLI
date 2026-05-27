@@ -1123,11 +1123,12 @@ impl ConversationService {
         // longer interprets `system_responses` — it just forwards
         // them.
         //
-        // `turn_handle` is moved into the spawned task so its `Drop` runs
-        // when the turn task exits — that's what releases the actor's
-        // running slot back to Idle and unblocks any waiting `cancel()`.
+        // `turn_handle` is moved into the relay's release hook so the
+        // `ConvActor` running slot is freed *before* the client sees
+        // the terminal event. If we instead held the handle until the
+        // spawn task scope ended, the queue's next dequeue would race
+        // the slot release and the backend would return Conflict.
         tokio::spawn(async move {
-            let _turn_guard = turn_handle;
             let turn_msg_id = Self::mint_msg_id();
             let send_data = SendMessageData {
                 content: req.content,
@@ -1143,7 +1144,12 @@ impl ConversationService {
                 Arc::clone(&repo),
                 Arc::clone(&broadcaster),
                 cron_service.clone(),
-            );
+            )
+            .with_turn_release_hook(move || {
+                // `TurnHandle::Drop` transitions `ConvActor` back to
+                // `Idle` and notifies any `wait_for_idle` waiter.
+                drop(turn_handle);
+            });
 
             let rx = agent.subscribe_legacy();
             let send_agent = agent.clone();
@@ -1156,6 +1162,12 @@ impl ConversationService {
             });
             // 2. Wait for the agent to process the message and complete the turn, while the relay streams events in real time.
             let outcome = relay.consume(rx).await;
+            // The relay invoked the release hook before broadcasting
+            // the terminal event, so the actor slot is already free
+            // here. If the relay future were dropped without
+            // observing a terminal event, `TurnHandle` would drop
+            // with the closure and still release the slot — but the
+            // relay's `Closed` arm covers that path explicitly.
 
             if let Some(session_key) = agent.get_session_key() {
                 persist_session_key(&repo, &conv_id, &session_key).await;
@@ -1167,7 +1179,6 @@ impl ConversationService {
                 msg_id: turn_msg_id,
                 system_responses: outcome.system_responses,
             });
-            // TurnHandle drops at scope end → ConvActor transitions to Idle.
         });
 
         info!(msg_id = %user_msg_id_ret, "Message dispatched, single-turn relay started");
