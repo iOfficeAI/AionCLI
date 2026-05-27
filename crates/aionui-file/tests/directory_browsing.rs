@@ -4,22 +4,12 @@
 //! including path validation, .gitignore handling, and caching behavior.
 
 use std::fs;
-use std::sync::Arc;
 
-use aionui_api_types::WebSocketMessage;
 use aionui_file::{FileService, IFileService};
-use aionui_realtime::EventBroadcaster;
-
-/// A no-op broadcaster for testing (events are silently discarded).
-struct NoopBroadcaster;
-
-impl EventBroadcaster for NoopBroadcaster {
-    fn broadcast(&self, _event: WebSocketMessage<serde_json::Value>) {}
-}
 
 /// Create a `FileService` whose sandbox is rooted at the given temp directory.
 fn make_service(root: &std::path::Path) -> FileService {
-    FileService::new(Arc::new(NoopBroadcaster), vec![root.to_path_buf()])
+    FileService::new(vec![root.to_path_buf()])
 }
 
 // -----------------------------------------------------------------------

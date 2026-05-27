@@ -3,6 +3,7 @@ mod convert;
 pub mod response_middleware;
 pub mod routes;
 pub mod routes_aux;
+pub mod routes_static_file;
 pub mod service;
 mod service_ops;
 pub mod skill_resolver;
@@ -17,6 +18,7 @@ pub use response_middleware::{
 };
 pub use routes::conversation_routes;
 pub use routes_aux::conversation_ops_routes;
+pub use routes_static_file::{StaticFileRouterState, conversation_static_file_routes};
 pub use service::ConversationService;
 pub use state::ConversationRouterState;
 

@@ -78,7 +78,7 @@ pub async fn build_app_with_file_roots(allowed_roots: Vec<std::path::PathBuf>) -
     let db = aionui_db::init_database_memory().await.unwrap();
     let services = AppServices::from_config(db, &AppConfig::default()).await.unwrap();
     let (mut states, _) = build_module_states(&services).await;
-    states.file.file_service = std::sync::Arc::new(FileService::new(services.event_bus.clone(), allowed_roots));
+    states.file.file_service = std::sync::Arc::new(FileService::new(allowed_roots));
     let router = create_router_with_states(&services, states);
     (router, services)
 }

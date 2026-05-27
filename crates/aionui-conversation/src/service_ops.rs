@@ -75,6 +75,32 @@ impl ConversationService {
         self.task(conversation_id)?.get_openclaw_runtime().await
     }
 
+    // ── Workspace resolution ───────────────────────────────────────
+
+    /// Get the workspace path for a conversation owned by `user_id`.
+    ///
+    /// Verifies user ownership and returns the resolved workspace path.
+    pub async fn get_workspace(&self, user_id: &str, conversation_id: &str) -> Result<std::path::PathBuf, AppError> {
+        let row = self
+            .conversation_repo()
+            .get(conversation_id)
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to load conversation: {e}")))?
+            .filter(|r| r.user_id == user_id)
+            .ok_or_else(|| AppError::NotFound(format!("Conversation '{conversation_id}' not found")))?;
+
+        let extra: serde_json::Value =
+            serde_json::from_str(&row.extra).map_err(|e| AppError::Internal(format!("Invalid extra JSON: {e}")))?;
+
+        let workspace = extra
+            .get("workspace")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| AppError::BadRequest("Conversation has no workspace assigned".into()))?;
+
+        Ok(std::path::PathBuf::from(workspace))
+    }
+
     // ── Workspace browsing ──────────────────────────────────────────
 
     /// Enumerate entries under `query.path` inside the conversation's

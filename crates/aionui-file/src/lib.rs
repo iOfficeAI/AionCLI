@@ -7,6 +7,9 @@ pub mod snapshot_service;
 pub mod traits;
 pub mod types;
 pub mod watch_service;
+pub mod workspace_watcher;
+pub mod workspace_watcher_registry;
+pub mod workspace_watcher_router;
 
 pub use path_safety::{has_traversal, validate_path, validate_path_for_write};
 pub use routes::{FileRouterState, file_routes};
@@ -16,7 +19,10 @@ pub use traits::{
     FileServiceRef, FileWatchServiceRef, IFileService, IFileWatchService, ISnapshotService, SnapshotServiceRef,
 };
 pub use types::{
-    CompareResult, ContentUpdateEvent, ContentUpdateOperation, CopyResult, DirOrFile, FileChangeInfo, FileMetadata,
-    FileWatchEvent, OfficeFileAddedEvent, SnapshotInfo, SnapshotMode, WorkspaceFlatFile, ZipEntry,
+    CompareResult, CopyResult, DirOrFile, FileChangeInfo, FileMetadata, FileWatchEvent, OfficeFileAddedEvent,
+    SnapshotInfo, SnapshotMode, WorkspaceFlatFile, ZipEntry,
 };
 pub use watch_service::FileWatchService;
+pub use workspace_watcher::{EventDispatcher, GitignoreFilter, SharedWorkspaceWatcher, WorkspaceWatchManager};
+pub use workspace_watcher_registry::SubscriptionRegistry;
+pub use workspace_watcher_router::{WatcherLifecycle, WorkspaceWatchRouter};

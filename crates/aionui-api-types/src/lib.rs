@@ -25,6 +25,7 @@ mod system;
 mod team;
 mod team_mcp;
 mod websocket;
+mod workspace_watcher;
 
 pub use acp::{
     AcpEnvResponse, AcpHealthCheckRequest, AcpHealthCheckResponse, AgentModeResponse, DetectCliRequest,
@@ -134,3 +135,4 @@ pub use team::{
 };
 pub use team_mcp::{GuideMcpConfig, TEAM_MCP_SERVER_NAME, TeamMcpStdioConfig};
 pub use websocket::WebSocketMessage;
+pub use workspace_watcher::{WatchBatchEvent, WatchChange, WatchChangeKind, WatchOverflowEvent};

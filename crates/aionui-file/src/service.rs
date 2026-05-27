@@ -9,14 +9,10 @@ use dashmap::DashMap;
 use ignore::WalkBuilder;
 use tracing::warn;
 
-use aionui_api_types::WebSocketMessage;
 use aionui_common::AppError;
-use aionui_realtime::EventBroadcaster;
 
 use crate::path_safety::{has_traversal, validate_path, validate_path_for_write, validate_path_with_extra_root};
-use crate::types::{
-    ContentUpdateEvent, ContentUpdateOperation, CopyResult, DirOrFile, FileMetadata, WorkspaceFlatFile, ZipEntry,
-};
+use crate::types::{CopyResult, DirOrFile, FileMetadata, WorkspaceFlatFile, ZipEntry};
 
 /// Maximum number of files returned by `list_workspace_files`.
 const MAX_WORKSPACE_FILES: usize = 20_000;
@@ -58,7 +54,6 @@ const PLACEHOLDER_SVG: &str = concat!(
 
 /// A concrete implementation of [`crate::traits::IFileService`].
 pub struct FileService {
-    broadcaster: Arc<dyn EventBroadcaster>,
     /// Allowed root directories for path safety validation.
     allowed_roots: Vec<std::path::PathBuf>,
     /// In-memory cache for `list_workspace_files`, keyed by canonical root.
@@ -68,9 +63,8 @@ pub struct FileService {
 }
 
 impl FileService {
-    pub fn new(broadcaster: Arc<dyn EventBroadcaster>, allowed_roots: Vec<std::path::PathBuf>) -> Self {
+    pub fn new(allowed_roots: Vec<std::path::PathBuf>) -> Self {
         Self {
-            broadcaster,
             allowed_roots,
             workspace_files_cache: DashMap::new(),
             zip_cancellations: DashMap::new(),
@@ -698,29 +692,9 @@ impl crate::traits::IFileService for FileService {
             .await
             .map_err(|e| AppError::Internal(format!("write file task failed: {e}")))??;
 
-        // Compute relative path from workspace
-        let workspace_path = Path::new(workspace);
-        let relative_path = canonical
-            .strip_prefix(std::fs::canonicalize(workspace_path).unwrap_or_else(|_| workspace_path.to_path_buf()))
-            .unwrap_or(&canonical)
-            .to_string_lossy()
-            .into_owned();
-
-        // Build and broadcast contentUpdate event
-        let content = String::from_utf8(data.to_vec()).ok();
-        let event = ContentUpdateEvent {
-            file_path: canonical.to_string_lossy().into_owned(),
-            content,
-            workspace: workspace.to_owned(),
-            relative_path,
-            operation: ContentUpdateOperation::Write,
-        };
-        let payload = serde_json::to_value(&event).unwrap_or_default();
-        let msg = WebSocketMessage::new("fileStream.contentUpdate", payload);
-        self.broadcaster.broadcast(msg);
-
         // Invalidate workspace files cache since a file may have been
         // created or its content changed
+        let workspace_path = Path::new(workspace);
         if let Ok(canonical_ws) = std::fs::canonicalize(workspace_path) {
             self.invalidate_cache(&canonical_ws.to_string_lossy());
         }
@@ -799,27 +773,8 @@ impl crate::traits::IFileService for FileService {
             .await
             .map_err(|e| AppError::Internal(format!("remove entry task failed: {e}")))??;
 
-        // Compute relative path from workspace
-        let workspace_path = Path::new(workspace);
-        let relative_path = canonical
-            .strip_prefix(std::fs::canonicalize(workspace_path).unwrap_or_else(|_| workspace_path.to_path_buf()))
-            .unwrap_or(&canonical)
-            .to_string_lossy()
-            .into_owned();
-
-        // Broadcast contentUpdate delete event
-        let event = ContentUpdateEvent {
-            file_path: canonical.to_string_lossy().into_owned(),
-            content: None,
-            workspace: workspace.to_owned(),
-            relative_path,
-            operation: ContentUpdateOperation::Delete,
-        };
-        let payload = serde_json::to_value(&event).unwrap_or_default();
-        let msg = WebSocketMessage::new("fileStream.contentUpdate", payload);
-        self.broadcaster.broadcast(msg);
-
         // Invalidate workspace files cache
+        let workspace_path = Path::new(workspace);
         if let Ok(canonical_ws) = std::fs::canonicalize(workspace_path) {
             self.invalidate_cache(&canonical_ws.to_string_lossy());
         }
@@ -1848,13 +1803,8 @@ mod tests {
 
     // ---- create_upload_file -------------------------------------------------
 
-    struct NullBroadcaster;
-    impl aionui_realtime::EventBroadcaster for NullBroadcaster {
-        fn broadcast(&self, _msg: aionui_api_types::WebSocketMessage<serde_json::Value>) {}
-    }
-
     fn make_service() -> crate::service::FileService {
-        crate::service::FileService::new(Arc::new(NullBroadcaster), vec![])
+        crate::service::FileService::new(vec![])
     }
 
     #[tokio::test]

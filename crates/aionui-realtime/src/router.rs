@@ -11,6 +11,12 @@ pub trait MessageRouter: Send + Sync {
     /// Called for any message whose `name` is not handled internally
     /// by the WebSocket layer (i.e. not `pong` or `subscribe-show-open`).
     fn route(&self, conn_id: ConnectionId, name: &str, data: serde_json::Value);
+
+    /// Called when a WebSocket connection is closed.
+    ///
+    /// Implementations can use this to clean up per-connection state
+    /// (e.g. subscription registries). Default is a no-op.
+    fn on_disconnect(&self, _conn_id: ConnectionId) {}
 }
 
 /// A no-op message router that silently discards all messages.

@@ -35,8 +35,7 @@ pub trait IFileService: Send + Sync {
     /// Files larger than 256 MB are rejected.
     async fn read_file_buffer(&self, path: &str, extra_root: Option<&Path>) -> Result<Option<Vec<u8>>, AppError>;
 
-    /// Write `data` to `path`. On success, emits a
-    /// `fileStream.contentUpdate` event with `operation = write`.
+    /// Write `data` to `path`.
     async fn write_file(&self, path: &str, data: &[u8], workspace: &str) -> Result<bool, AppError>;
 
     // -- File management --
@@ -50,8 +49,7 @@ pub trait IFileService: Send + Sync {
         source_root: Option<&str>,
     ) -> Result<CopyResult, AppError>;
 
-    /// Remove a file or directory (recursively). On success, emits a
-    /// `fileStream.contentUpdate` event with `operation = delete`.
+    /// Remove a file or directory (recursively).
     async fn remove_entry(&self, path: &str, workspace: &str) -> Result<(), AppError>;
 
     /// Rename a file or directory. Returns the new absolute path.

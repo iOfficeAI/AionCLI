@@ -47,9 +47,7 @@ pub struct ReadFileBufferRequest {
 pub struct WriteFileRequest {
     pub path: String,
     pub data: String,
-    /// Workspace root, used to compute `relativePath` in the
-    /// `fileStream.contentUpdate` event.  Falls back to the file's
-    /// parent directory when absent.
+    /// Workspace root.  Falls back to the file's parent directory when absent.
     #[serde(default)]
     pub workspace: Option<String>,
 }
@@ -67,9 +65,7 @@ pub struct CopyFilesRequest {
 #[derive(Debug, Deserialize)]
 pub struct RemoveEntryRequest {
     pub path: String,
-    /// Workspace root, used to compute `relativePath` in the
-    /// `fileStream.contentUpdate` event.  Falls back to the file's
-    /// parent directory when absent.
+    /// Workspace root.  Falls back to the file's parent directory when absent.
     #[serde(default)]
     pub workspace: Option<String>,
 }

@@ -19,7 +19,7 @@ use aionui_auth::{
 use aionui_channel::channel_routes;
 #[cfg(feature = "weixin")]
 use aionui_channel::weixin_login_route;
-use aionui_conversation::{conversation_ops_routes, conversation_routes};
+use aionui_conversation::{conversation_ops_routes, conversation_routes, conversation_static_file_routes};
 use aionui_cron::cron_routes;
 use aionui_extension::{extension_routes, hub_routes, skill_routes};
 use aionui_file::file_routes;
@@ -199,6 +199,10 @@ pub fn create_router_with_all_state(services: &AppServices, states: ModuleStates
     let assistant_authenticated =
         assistant_routes(states.assistant).route_layer(from_fn_with_state(auth_mw_state.clone(), auth_middleware));
 
+    // Static file serving for conversation workspaces, protected by auth
+    let static_file_authenticated = conversation_static_file_routes(states.static_file)
+        .route_layer(from_fn_with_state(auth_mw_state.clone(), auth_middleware));
+
     // Guide MCP diagnostic endpoint protected by auth middleware
     let guide_mcp_authenticated = Router::new()
         .route("/api/system/guide-mcp", get(guide_mcp_status))
@@ -233,6 +237,7 @@ pub fn create_router_with_all_state(services: &AppServices, states: ModuleStates
         .merge(office_authenticated)
         .merge(shell_authenticated)
         .merge(assistant_authenticated)
+        .merge(static_file_authenticated)
         .merge(guide_mcp_authenticated);
 
     // Conditionally merge WeChat login SSE route (feature-gated)

@@ -6,23 +6,13 @@
 //! and placeholder SVG fallback behavior.
 
 use std::fs;
-use std::sync::Arc;
 
 use base64::Engine;
 
-use aionui_api_types::WebSocketMessage;
 use aionui_file::{FileService, IFileService};
-use aionui_realtime::EventBroadcaster;
-
-/// No-op broadcaster for tests that don't need event verification.
-struct NoopBroadcaster;
-
-impl EventBroadcaster for NoopBroadcaster {
-    fn broadcast(&self, _event: WebSocketMessage<serde_json::Value>) {}
-}
 
 fn make_service(root: &std::path::Path) -> FileService {
-    FileService::new(Arc::new(NoopBroadcaster), vec![root.to_path_buf()])
+    FileService::new(vec![root.to_path_buf()])
 }
 
 // -----------------------------------------------------------------------

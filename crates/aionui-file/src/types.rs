@@ -2,22 +2,6 @@ use aionui_common::FileChangeOperation;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
-// contentUpdate operation (distinct from snapshot FileChangeOperation)
-// ---------------------------------------------------------------------------
-
-/// Operation type for `fileStream.contentUpdate` events.
-///
-/// API Spec mandates exactly two values: `write` and `delete`.
-/// This is intentionally separate from [`FileChangeOperation`] which tracks
-/// git-style changes (Create/Modify/Delete) in the snapshot system.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ContentUpdateOperation {
-    Write,
-    Delete,
-}
-
-// ---------------------------------------------------------------------------
 // File tree / directory browsing
 // ---------------------------------------------------------------------------
 
@@ -62,20 +46,6 @@ pub struct FileMetadata {
 // ---------------------------------------------------------------------------
 // Events
 // ---------------------------------------------------------------------------
-
-/// Payload for the `fileStream.contentUpdate` WebSocket event.
-///
-/// Emitted after `write_file` (operation = Write) or `remove_entry`
-/// (operation = Delete).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ContentUpdateEvent {
-    pub file_path: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
-    pub workspace: String,
-    pub relative_path: String,
-    pub operation: ContentUpdateOperation,
-}
 
 /// Payload for the `fileWatch.fileChanged` WebSocket event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -149,38 +119,6 @@ pub struct CopyResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn content_update_event_serialization() {
-        let event = ContentUpdateEvent {
-            file_path: "/ws/src/main.rs".into(),
-            content: Some("fn main() {}".into()),
-            workspace: "/ws".into(),
-            relative_path: "src/main.rs".into(),
-            operation: ContentUpdateOperation::Write,
-        };
-        let json = serde_json::to_value(&event).unwrap();
-        assert_eq!(json["file_path"], "/ws/src/main.rs");
-        assert_eq!(json["content"], "fn main() {}");
-        assert_eq!(json["workspace"], "/ws");
-        assert_eq!(json["relative_path"], "src/main.rs");
-        assert_eq!(json["operation"], "write");
-    }
-
-    #[test]
-    fn content_update_event_delete_omits_content() {
-        let event = ContentUpdateEvent {
-            file_path: "/ws/old.txt".into(),
-            content: None,
-            workspace: "/ws".into(),
-            relative_path: "old.txt".into(),
-            operation: ContentUpdateOperation::Delete,
-        };
-        let json = serde_json::to_value(&event).unwrap();
-        assert!(json.get("content").is_none());
-        assert_eq!(json["operation"], "delete");
-    }
 
     #[test]
     fn file_watch_event_serialization() {
@@ -202,21 +140,6 @@ mod tests {
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["file_path"], "/ws/report.docx");
         assert_eq!(json["workspace"], "/ws");
-    }
-
-    #[test]
-    fn content_update_event_deserialization() {
-        let raw = json!({
-            "file_path": "/ws/a.txt",
-            "content": "hello",
-            "workspace": "/ws",
-            "relative_path": "a.txt",
-            "operation": "write"
-        });
-        let event: ContentUpdateEvent = serde_json::from_value(raw).unwrap();
-        assert_eq!(event.file_path, "/ws/a.txt");
-        assert_eq!(event.content.as_deref(), Some("hello"));
-        assert_eq!(event.operation, ContentUpdateOperation::Write);
     }
 
     #[test]

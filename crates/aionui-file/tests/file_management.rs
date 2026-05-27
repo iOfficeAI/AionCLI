@@ -5,53 +5,11 @@
 //! validation, event broadcast, and cache invalidation.
 
 use std::fs;
-use std::sync::{Arc, Mutex};
 
-use aionui_api_types::WebSocketMessage;
 use aionui_file::{FileService, IFileService};
-use aionui_realtime::EventBroadcaster;
-
-// -----------------------------------------------------------------------
-// Test helpers (shared with file_read_write.rs pattern)
-// -----------------------------------------------------------------------
-
-struct RecordingBroadcaster {
-    events: Mutex<Vec<WebSocketMessage<serde_json::Value>>>,
-}
-
-impl RecordingBroadcaster {
-    fn new() -> Self {
-        Self {
-            events: Mutex::new(Vec::new()),
-        }
-    }
-
-    fn take_events(&self) -> Vec<WebSocketMessage<serde_json::Value>> {
-        let mut guard = self.events.lock().unwrap();
-        std::mem::take(&mut *guard)
-    }
-}
-
-impl EventBroadcaster for RecordingBroadcaster {
-    fn broadcast(&self, event: WebSocketMessage<serde_json::Value>) {
-        self.events.lock().unwrap().push(event);
-    }
-}
-
-struct NoopBroadcaster;
-
-impl EventBroadcaster for NoopBroadcaster {
-    fn broadcast(&self, _event: WebSocketMessage<serde_json::Value>) {}
-}
 
 fn make_service(root: &std::path::Path) -> FileService {
-    FileService::new(Arc::new(NoopBroadcaster), vec![root.to_path_buf()])
-}
-
-fn make_service_with_recorder(root: &std::path::Path) -> (FileService, Arc<RecordingBroadcaster>) {
-    let recorder = Arc::new(RecordingBroadcaster::new());
-    let svc = FileService::new(recorder.clone(), vec![root.to_path_buf()]);
-    (svc, recorder)
+    FileService::new(vec![root.to_path_buf()])
 }
 
 // -----------------------------------------------------------------------
@@ -231,27 +189,6 @@ async fn remove_entry_nonexistent_errors() {
     let result = svc.remove_entry(fake.to_str().unwrap(), ws).await;
 
     assert!(result.is_err());
-}
-
-#[tokio::test]
-async fn remove_entry_emits_delete_event() {
-    let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("event_del.txt");
-    fs::write(&file, "data").unwrap();
-
-    let (svc, recorder) = make_service_with_recorder(dir.path());
-    let ws = dir.path().to_str().unwrap();
-    svc.remove_entry(file.to_str().unwrap(), ws).await.unwrap();
-
-    let events = recorder.take_events();
-    assert_eq!(events.len(), 1);
-
-    let event = &events[0];
-    assert_eq!(event.name, "fileStream.contentUpdate");
-    assert_eq!(event.data["operation"], "delete");
-    assert!(event.data.get("content").is_none());
-    assert_eq!(event.data["relative_path"], "event_del.txt");
-    assert!(event.data["file_path"].as_str().unwrap().contains("event_del.txt"));
 }
 
 #[tokio::test]

@@ -5,51 +5,11 @@
 //! limit, non-existent file handling, and contentUpdate event broadcast.
 
 use std::fs;
-use std::sync::{Arc, Mutex};
 
-use aionui_api_types::WebSocketMessage;
 use aionui_file::{FileService, IFileService};
-use aionui_realtime::EventBroadcaster;
-
-/// A broadcaster that records every event for later assertion.
-struct RecordingBroadcaster {
-    events: Mutex<Vec<WebSocketMessage<serde_json::Value>>>,
-}
-
-impl RecordingBroadcaster {
-    fn new() -> Self {
-        Self {
-            events: Mutex::new(Vec::new()),
-        }
-    }
-
-    fn take_events(&self) -> Vec<WebSocketMessage<serde_json::Value>> {
-        let mut guard = self.events.lock().unwrap();
-        std::mem::take(&mut *guard)
-    }
-}
-
-impl EventBroadcaster for RecordingBroadcaster {
-    fn broadcast(&self, event: WebSocketMessage<serde_json::Value>) {
-        self.events.lock().unwrap().push(event);
-    }
-}
-
-/// No-op broadcaster for tests that don't need event verification.
-struct NoopBroadcaster;
-
-impl EventBroadcaster for NoopBroadcaster {
-    fn broadcast(&self, _event: WebSocketMessage<serde_json::Value>) {}
-}
 
 fn make_service(root: &std::path::Path) -> FileService {
-    FileService::new(Arc::new(NoopBroadcaster), vec![root.to_path_buf()])
-}
-
-fn make_service_with_recorder(root: &std::path::Path) -> (FileService, Arc<RecordingBroadcaster>) {
-    let recorder = Arc::new(RecordingBroadcaster::new());
-    let svc = FileService::new(recorder.clone(), vec![root.to_path_buf()]);
-    (svc, recorder)
+    FileService::new(vec![root.to_path_buf()])
 }
 
 // -----------------------------------------------------------------------
@@ -319,78 +279,6 @@ async fn write_file_outside_sandbox_rejected() {
     let result = svc.write_file(target.to_str().unwrap(), b"bad", ws).await;
 
     assert!(result.is_err());
-}
-
-// -----------------------------------------------------------------------
-// contentUpdate event
-// -----------------------------------------------------------------------
-
-#[tokio::test]
-async fn write_file_emits_content_update_event() {
-    let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("event_test.txt");
-
-    let (svc, recorder) = make_service_with_recorder(dir.path());
-    let ws = dir.path().to_str().unwrap();
-
-    svc.write_file(file.to_str().unwrap(), b"event content", ws)
-        .await
-        .unwrap();
-
-    let events = recorder.take_events();
-    assert_eq!(events.len(), 1);
-
-    let event = &events[0];
-    assert_eq!(event.name, "fileStream.contentUpdate");
-    assert_eq!(event.data["content"], "event content");
-    assert_eq!(event.data["workspace"], ws);
-    assert_eq!(event.data["operation"], "write");
-    // file_path should be the canonical path
-    assert!(
-        event.data["file_path"].as_str().unwrap().contains("event_test.txt"),
-        "file_path should contain the file name"
-    );
-    // relative_path should be relative to workspace
-    assert_eq!(event.data["relative_path"], "event_test.txt");
-}
-
-#[tokio::test]
-async fn write_file_binary_omits_content_in_event() {
-    let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("binary.bin");
-    // Invalid UTF-8 sequence
-    let data: Vec<u8> = vec![0xFF, 0xFE, 0x00, 0x01];
-
-    let (svc, recorder) = make_service_with_recorder(dir.path());
-    let ws = dir.path().to_str().unwrap();
-
-    svc.write_file(file.to_str().unwrap(), &data, ws).await.unwrap();
-
-    let events = recorder.take_events();
-    assert_eq!(events.len(), 1);
-
-    let event = &events[0];
-    // content should be absent for binary data (not valid UTF-8)
-    assert!(
-        event.data.get("content").is_none(),
-        "binary write should omit content in event"
-    );
-}
-
-#[tokio::test]
-async fn write_file_nested_relative_path() {
-    let dir = tempfile::tempdir().unwrap();
-    fs::create_dir_all(dir.path().join("src/utils")).unwrap();
-    let file = dir.path().join("src/utils/helper.ts");
-
-    let (svc, recorder) = make_service_with_recorder(dir.path());
-    let ws = dir.path().to_str().unwrap();
-
-    svc.write_file(file.to_str().unwrap(), b"export {}", ws).await.unwrap();
-
-    let events = recorder.take_events();
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].data["relative_path"], "src/utils/helper.ts");
 }
 
 // -----------------------------------------------------------------------

@@ -10,7 +10,7 @@ use aionui_ai_agent::{AgentRouterState, AgentService, RemoteAgentRouterState, Re
 use aionui_assistant::{AssistantRouterState, AssistantService, BuiltinAssistantRegistry};
 use aionui_auth::extract_token_from_ws_headers;
 use aionui_channel::ChannelRouterState;
-use aionui_conversation::{ConversationRouterState, ConversationService};
+use aionui_conversation::{ConversationRouterState, ConversationService, StaticFileRouterState};
 use aionui_cron::{CronEventEmitter, CronRouterState};
 use aionui_db::{
     IAcpSessionRepository, IAgentMetadataRepository, IAssistantOverrideRepository, IAssistantRepository,
@@ -23,7 +23,10 @@ use aionui_extension::{
     HubIndexManager, HubInstaller, HubRouterState, SkillRouterState, resolve_install_target_dir_for_data_dir,
     resolve_scan_paths_for_data_dir, resolve_state_file_path,
 };
-use aionui_file::{FileRouterState, FileService, FileWatchService, SnapshotService};
+use aionui_file::{
+    EventDispatcher, FileRouterState, FileService, FileWatchService, GitignoreFilter, SnapshotService,
+    SubscriptionRegistry, WorkspaceWatchManager, WorkspaceWatchRouter,
+};
 use aionui_mcp::{
     AionrsAdapter, AionuiAdapter, ClaudeAdapter, CodeBuddyAdapter, CodexAdapter, GeminiAdapter, McpAgentAdapter,
     McpConfigService, McpConnectionTestService, McpRouterState, McpSyncService, OpencodeAdapter, QwenAdapter,
@@ -32,8 +35,9 @@ use aionui_office::{
     ConversionService, OfficeRouterState, OfficecliWatchManager, ProxyService,
     SnapshotService as OfficeSnapshotService, StarOfficeDetector,
 };
-use aionui_realtime::{NoopMessageRouter, WsHandlerState};
+use aionui_realtime::WsHandlerState;
 use aionui_shell::ShellRouterState;
+use aionui_static_file::StaticFileService;
 use aionui_system::{
     ClientPrefService, ConnectionTestRouterState, ConnectionTestService, ModelFetchService, ProtocolDetectionService,
     ProviderService, SettingsService, SystemRouterState, VersionCheckService,
@@ -64,6 +68,7 @@ pub struct ModuleStates {
     pub cron: CronRouterState,
     pub office: OfficeRouterState,
     pub shell: ShellRouterState,
+    pub static_file: StaticFileRouterState,
     pub assistant: AssistantRouterState,
 }
 
@@ -147,9 +152,15 @@ pub async fn build_module_states(services: &AppServices) -> (ModuleStates, Chann
 
     let agent_service = AgentService::new(services.agent_registry.clone(), services.data_dir.clone());
 
+    let conversation_state = build_conversation_state(services, Some(cron.cron_service.clone()));
+    let static_file = StaticFileRouterState {
+        conversation_service: conversation_state.service.clone(),
+        static_file_service: Arc::new(StaticFileService::permissive()),
+    };
+
     let states = ModuleStates {
         system: build_system_state(services),
-        conversation: build_conversation_state(services, Some(cron.cron_service.clone())),
+        conversation: conversation_state,
         remote_agent: build_remote_agent_state(services),
         agent: AgentRouterState {
             agent_registry: services.agent_registry.clone(),
@@ -172,6 +183,7 @@ pub async fn build_module_states(services: &AppServices) -> (ModuleStates, Chann
         office: build_office_state(services),
         shell: build_shell_state(services),
         assistant,
+        static_file,
     };
     tracing::info!(
         elapsed_ms = boot.elapsed().as_millis(),
@@ -282,7 +294,7 @@ pub fn build_file_state(services: &AppServices) -> FileRouterState {
     let broadcaster = services.event_bus.clone();
     let allowed_roots = default_allowed_roots(Some(services.work_dir.as_path()));
     let browse_roots = aionui_file::browse::default_browse_roots();
-    let file_service = Arc::new(FileService::new(broadcaster.clone(), allowed_roots.clone()));
+    let file_service = Arc::new(FileService::new(allowed_roots.clone()));
     let watch_service = Arc::new(FileWatchService::new(broadcaster).expect("file watch service initialization"));
     let snapshot_service = Arc::new(SnapshotService::new());
     FileRouterState {
@@ -637,10 +649,22 @@ pub async fn build_extension_states(
 
 /// Build the default `WsHandlerState` from application services.
 pub fn build_ws_state(services: &AppServices) -> WsHandlerState {
+    let registry = Arc::new(SubscriptionRegistry::new());
+    let gitignore = Arc::new(GitignoreFilter::new());
+
+    let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
+    let watch_manager: Arc<WorkspaceWatchManager> = Arc::new(WorkspaceWatchManager::new(event_tx));
+    let router = Arc::new(WorkspaceWatchRouter::new(registry.clone(), watch_manager));
+
+    // Spawn the event dispatch loop (debouncer-full handles aggregation)
+    let dispatcher = EventDispatcher::new(registry, services.ws_manager.clone(), gitignore)
+        .with_office_broadcaster(services.event_bus.clone());
+    tokio::spawn(dispatcher.run(event_rx));
+
     if services.local {
         return WsHandlerState {
             manager: services.ws_manager.clone(),
-            router: Arc::new(NoopMessageRouter),
+            router,
             token_validator: Arc::new(|_| true),
             token_extractor: Arc::new(|_| Some("local".into())),
         };
@@ -653,7 +677,7 @@ pub fn build_ws_state(services: &AppServices) -> WsHandlerState {
 
     WsHandlerState {
         manager: services.ws_manager.clone(),
-        router: Arc::new(NoopMessageRouter),
+        router,
         token_validator,
         token_extractor,
     }
