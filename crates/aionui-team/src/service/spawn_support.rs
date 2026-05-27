@@ -224,7 +224,7 @@ impl TeamSessionService {
     /// up the new one.
     ///
     /// This wraps the connect-layer `connector_factory.drop_connector`
-    /// + conv-layer `warmup` pair behind a single biz-layer entry
+    /// and conv-layer `warmup` pair behind a single biz-layer entry
     /// point. It lives on `TeamSessionService` because the upstream
     /// session has no connect-layer dependency, while the team
     /// service still owns `connector_factory` and can rebuild a
