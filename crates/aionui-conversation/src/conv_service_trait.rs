@@ -3,10 +3,12 @@
 //!
 //! See `docs/superpowers/specs/2026-05-26-conversation-layer-refactor-design.md`.
 //!
-//! NOTE: this Phase 2 trait introduces a NEW `aionui_conversation::ConversationStatus`
-//! (Idle / Running { msg_id }), which is distinct from the legacy
-//! `aionui_common::ConversationStatus` (Pending / Running / Finished). Both
-//! coexist for one cycle — the legacy enum is removed in Phase 5.
+//! NOTE: this trait introduces a `aionui_conversation::ConversationStatus`
+//! (Idle / Running { msg_id }) which is the runtime source of truth on
+//! `ConvActor`. The wire-format DTO `aionui_api_types::ConversationStatus`
+//! (Pending / Running / Finished) is a separate, lower-fidelity view that
+//! `convert.rs` derives from this enum plus `ConversationRow.status` for
+//! never-opened rows.
 
 use aionui_api_types::{
     ConversationListResponse, ConversationResponse, CreateConversationRequest, ListConversationsQuery,
@@ -77,10 +79,22 @@ pub trait IConversationService: Send + Sync {
     /// Returns only after the in-flight turn has stopped. Idempotent.
     async fn cancel(&self, user_id: &str, id: &str) -> Result<(), AppError>;
 
+    /// System-scoped cancel for background tasks (idle scanner, etc.)
+    /// where there is no authenticated user to attribute the action to.
+    /// Owner is resolved internally from the conversation row.
+    /// Idempotent: returns Ok if the conversation no longer exists.
+    async fn cancel_idle(&self, id: &str) -> Result<(), AppError>;
+
     /// Lock-free runtime status read.
     fn status(&self, id: &str) -> ConversationStatus;
 
     fn subscribe(&self, id: &str) -> broadcast::Receiver<ConversationEvent>;
+
+    /// Returns ids of conversations whose actor is `Idle` AND whose
+    /// last activity is older than `threshold_ms`. The conv-layer idle
+    /// scanner uses this to pick stale conversations to cancel without
+    /// peeking inside the connect layer.
+    fn collect_idle(&self, threshold_ms: i64) -> Vec<String>;
 }
 
 #[cfg(test)]

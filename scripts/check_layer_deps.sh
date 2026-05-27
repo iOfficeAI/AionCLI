@@ -73,6 +73,68 @@ for path in "${gated_files[@]}"; do
 done
 rm -f /tmp/.layer_check_filtered
 
+# Rule (Phase 5): legacy task-manager / agent-task types must not return.
+#
+# `IWorkerTaskManager`, `WorkerTaskManagerImpl`, and `AgentInstance` were
+# deleted outright; any non-comment occurrence in any crate is a regression.
+#
+# `IAgentTask` was retained as a `pub(crate)` 4-method internal lifecycle
+# trait inside `aionui-ai-agent` (it forwards `status / send_message /
+# cancel / kill` from each concrete manager into the manager's
+# `IAgentConnector` impl without copy-pasting ~100-line bodies). Outside
+# `aionui-ai-agent` no caller may name it; doc-comment / `//` line
+# references inside the crate are explicitly tolerated so the historical
+# narrative remains readable.
+#
+# Matching rules:
+#   - Source file scope: `*.rs` only; `target/` and `node_modules/`
+#     directories are skipped.
+#   - Comment-only lines (after leading whitespace, beginning with `//`
+#     including `//!` and `///`) are NOT considered violations. This
+#     covers every legitimate residual mention, e.g. `connector_factory.rs`
+#     header notes that the factory `replaces IWorkerTaskManager`.
+#   - Anywhere a token appears as a real code identifier (`use`, type
+#     position, trait bound, etc.) the line will not start with `//` and
+#     therefore the rule fires.
+
+global_forbidden=("IWorkerTaskManager" "WorkerTaskManagerImpl" "AgentInstance")
+ai_agent_internal_forbidden=("IAgentTask")
+
+# Strip comment-only lines (but keep the line numbers in the report) by
+# matching the negation pattern with grep -nP. We use the lookahead-free
+# alternative: `grep -nE '\\bTOKEN\\b'` then post-filter with awk.
+check_token() {
+    local token="$1"
+    local exclude_path_prefix="${2:-}"
+    while IFS=: read -r file lineno content; do
+        # Skip the configured exclusion (used for IAgentTask inside ai-agent).
+        if [[ -n "$exclude_path_prefix" && "$file" == "$exclude_path_prefix"* ]]; then
+            continue
+        fi
+        # Skip comment-only lines (`//`, `///`, `//!`, with optional leading
+        # whitespace).
+        if [[ "$content" =~ ^[[:space:]]*// ]]; then
+            continue
+        fi
+        violations+=("$file:$lineno: forbidden Phase-5 legacy token '$token'")
+    done < <(
+        grep -RInE \
+            --include='*.rs' \
+            --exclude-dir=target \
+            --exclude-dir=node_modules \
+            "\\b${token}\\b" \
+            crates/ 2>/dev/null || true
+    )
+}
+
+for token in "${global_forbidden[@]}"; do
+    check_token "$token"
+done
+
+for token in "${ai_agent_internal_forbidden[@]}"; do
+    check_token "$token" "crates/aionui-ai-agent/"
+done
+
 if (( ${#violations[@]} > 0 )); then
     echo "Layer-dep violations:" >&2
     for v in "${violations[@]}"; do

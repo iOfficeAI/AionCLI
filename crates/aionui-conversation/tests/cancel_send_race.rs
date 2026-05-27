@@ -22,15 +22,17 @@
 //!   2. After `cancel()` returns, the actor is `Idle`.
 //!   3. The follow-up `send()` does NOT return `AppError::Conflict`.
 //!      It may fail for unrelated infrastructure reasons (the test
-//!      uses a `NoopTaskManager`), but `Conflict` specifically means
-//!      the cancel→send race re-emerged.
+//!      uses a default `MockConnectorFactory` whose default build
+//!      closure produces no skill-aware ACP runtime), but `Conflict`
+//!      specifically means the cancel→send race re-emerged.
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use aionui_ai_agent::IWorkerTaskManager;
+use aionui_ai_agent::IAgentConnectorFactory;
+use aionui_ai_agent::test_support::MockConnectorFactory;
 use aionui_api_types::{CreateConversationRequest, SendMessageRequest, WebSocketMessage};
-use aionui_common::{AgentKillReason, AppError, TimestampMs};
+use aionui_common::AppError;
 use aionui_conversation::ConversationService;
 use aionui_conversation::conv_service_trait::{ConversationStatus, IConversationService};
 use aionui_conversation::skill_resolver::SkillResolver;
@@ -56,46 +58,6 @@ impl NullBroadcaster {
 impl EventBroadcaster for NullBroadcaster {
     fn broadcast(&self, event: WebSocketMessage<serde_json::Value>) {
         self.events.lock().unwrap().push(event);
-    }
-}
-
-/// Task manager that never has an active task.
-///
-/// `cancel()` therefore takes the `wait_for_idle()` branch and the
-/// follow-up `send()` exercises the actor's `begin_turn()` path. The
-/// `Internal("noop")` returned by `get_or_build_task` is acceptable
-/// for this test — the assertion is on error _kind_ (not Conflict),
-/// not on success.
-struct NoopTaskManager;
-
-#[async_trait::async_trait]
-impl IWorkerTaskManager for NoopTaskManager {
-    fn get_task(&self, _: &str) -> Option<aionui_ai_agent::AgentInstance> {
-        None
-    }
-    async fn get_or_build_task(
-        &self,
-        _: &str,
-        _: aionui_ai_agent::types::BuildTaskOptions,
-    ) -> Result<aionui_ai_agent::AgentInstance, AppError> {
-        Err(AppError::Internal("noop".into()))
-    }
-    fn kill(&self, _: &str, _: Option<AgentKillReason>) -> Result<(), AppError> {
-        Ok(())
-    }
-    fn kill_and_wait(
-        &self,
-        _: &str,
-        _: Option<AgentKillReason>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
-        Box::pin(std::future::ready(()))
-    }
-    fn clear(&self) {}
-    fn active_count(&self) -> usize {
-        0
-    }
-    fn collect_idle(&self, _: TimestampMs) -> Vec<String> {
-        vec![]
     }
 }
 
@@ -126,7 +88,7 @@ async fn build_service() -> Arc<ConversationService> {
         Arc::new(aionui_db::SqliteAgentMetadataRepository::new(db.pool().clone()));
     let acp_session_repo: Arc<dyn aionui_db::IAcpSessionRepository> =
         Arc::new(aionui_db::SqliteAcpSessionRepository::new(db.pool().clone()));
-    let task_mgr: Arc<dyn IWorkerTaskManager> = Arc::new(NoopTaskManager);
+    let task_mgr: Arc<dyn IAgentConnectorFactory> = MockConnectorFactory::builder().build();
     Arc::new(ConversationService::new(
         std::env::temp_dir(),
         Arc::new(NullBroadcaster::new()),
@@ -195,22 +157,13 @@ async fn cancel_then_send_does_not_return_conflict() {
         "actor still Running after cancel returned",
     );
 
-    // The next send MUST NOT return Conflict. With NoopTaskManager the
-    // call will fail later (Internal: "noop") because there is no
-    // connector to build a task — that's fine. The race-regression
+    // The next send MUST NOT return Conflict. With the default
+    // MockConnectorFactory the call may succeed (the mock connector
+    // accepts send_message) — that's fine. The race-regression
     // assertion is specifically that we do not see Conflict.
     let result = trait_svc.send(USER, &conv_id, send_req("hello again")).await;
-    match result {
-        Err(AppError::Conflict(msg)) => {
-            panic!("regression: send after cancel returned Conflict ({msg}); the cancel→send race is back")
-        }
-        Err(AppError::Internal(_)) => {
-            // Expected with NoopTaskManager — connector path is unreachable.
-        }
-        Err(other) => panic!("unexpected error after cancel: {other:?}"),
-        Ok(_) => {
-            // If a real task manager were wired this would also be acceptable.
-        }
+    if let Err(AppError::Conflict(msg)) = result {
+        panic!("regression: send after cancel returned Conflict ({msg}); the cancel→send race is back");
     }
 }
 

@@ -1,20 +1,20 @@
 use std::sync::Arc;
 
 use aionui_ai_agent::types::{BuildTaskOptions, SendMessageData};
-use aionui_ai_agent::{AgentInstance, IWorkerTaskManager};
+use aionui_ai_agent::{IAgentConnector, IAgentConnectorFactory};
 
 use crate::response_middleware::ICronService;
 use aionui_api_types::{
     ApprovalCheckResponse, CloneConversationRequest, ConfirmRequest, ConfirmationListResponse,
     ConversationArtifactKind, ConversationArtifactListResponse, ConversationArtifactResponse,
-    ConversationArtifactStatus, ConversationListResponse, ConversationResponse, CreateConversationRequest,
-    ListConversationsQuery, ListMessagesQuery, MessageListResponse, MessageResponse, MessageSearchResponse,
-    SearchMessagesQuery, SendMessageRequest, UpdateConversationArtifactRequest, UpdateConversationRequest,
-    WebSocketMessage,
+    ConversationArtifactStatus, ConversationListResponse, ConversationResponse, ConversationStatus,
+    CreateConversationRequest, ListConversationsQuery, ListMessagesQuery, MessageListResponse, MessageResponse,
+    MessageSearchResponse, SearchMessagesQuery, SendMessageRequest, UpdateConversationArtifactRequest,
+    UpdateConversationRequest, WebSocketMessage,
 };
 use aionui_common::{
-    AgentType, AppError, ConversationSource, ConversationStatus, ErrorChain, OnConversationDelete, PaginatedResult,
-    generate_short_id, now_ms,
+    AgentType, AppError, ConversationSource, ErrorChain, OnConversationDelete, PaginatedResult, generate_short_id,
+    now_ms,
 };
 use aionui_db::models::MessageRow;
 use aionui_db::{
@@ -41,9 +41,9 @@ pub struct ConversationService {
     workspace_root: std::path::PathBuf,
     broadcaster: Arc<dyn EventBroadcaster>,
     skill_resolver: Arc<dyn SkillResolver>,
-    task_manager: Arc<dyn IWorkerTaskManager>,
+    connector_factory: Arc<dyn IAgentConnectorFactory>,
     /// Hooks invoked at the end of `delete()` so other services
-    /// (`WorkerTaskManagerImpl`, `CronService`, …) can clean up their
+    /// (`ConnectorFactory`, `CronService`, …) can clean up their
     /// per-conversation state. Wrapped in `Arc<RwLock<…>>` so registration
     /// can happen post-construction without breaking the `Clone` impl —
     /// mirrors the `cron_service` slot pattern below.
@@ -69,7 +69,7 @@ impl ConversationService {
         workspace_root: std::path::PathBuf,
         broadcaster: Arc<dyn EventBroadcaster>,
         skill_resolver: Arc<dyn SkillResolver>,
-        task_manager: Arc<dyn IWorkerTaskManager>,
+        connector_factory: Arc<dyn IAgentConnectorFactory>,
 
         conversation_repo: Arc<dyn IConversationRepository>,
         agent_metadata_repo: Arc<dyn IAgentMetadataRepository>,
@@ -79,7 +79,7 @@ impl ConversationService {
             workspace_root,
             broadcaster,
             skill_resolver,
-            task_manager,
+            connector_factory,
             delete_hooks: Arc::new(RwLock::new(Vec::new())),
             cron_service: Arc::new(RwLock::new(None)),
 
@@ -99,8 +99,9 @@ impl ConversationService {
     /// Register a hook to be notified when a conversation is deleted.
     ///
     /// Hooks are dispatched sequentially in registration order from
-    /// `delete()`. Used by `aionui-app` to wire up `WorkerTaskManagerImpl`
-    /// (kill the agent process) and `CronService` (cascade-delete cron jobs).
+    /// `delete()`. Used by `aionui-app` to wire up `ConnectorFactory`
+    /// (drop the agent connector slot) and `CronService` (cascade-delete
+    /// cron jobs).
     pub fn with_delete_hook(&self, hook: Arc<dyn OnConversationDelete>) {
         if let Ok(mut guard) = self.delete_hooks.write() {
             guard.push(hook);
@@ -125,9 +126,9 @@ impl ConversationService {
         &self.conversation_repo
     }
 
-    pub(crate) fn task(&self, conversation_id: &str) -> Result<AgentInstance, AppError> {
-        self.task_manager
-            .get_task(conversation_id)
+    pub(crate) fn connector(&self, conversation_id: &str) -> Result<Arc<dyn IAgentConnector>, AppError> {
+        self.connector_factory
+            .get(conversation_id)
             .ok_or_else(|| AppError::NotFound(format!("No active agent for conversation '{conversation_id}'")))
     }
 
@@ -502,7 +503,7 @@ impl ConversationService {
         user_id: &str,
         id: &str,
         req: UpdateConversationRequest,
-        task_manager: &Arc<dyn IWorkerTaskManager>,
+        connector_factory: &Arc<dyn IAgentConnectorFactory>,
     ) -> Result<ConversationResponse, AppError> {
         let existing = self
             .conversation_repo
@@ -586,11 +587,12 @@ impl ConversationService {
         if model_changed {
             info!(
                 model_changed = true,
-                "Conversation updated, killing agent task due to model change"
+                "Conversation updated, dropping connector slot due to model change"
             );
-            if let Err(e) = task_manager.kill(id, None) {
-                warn!(error = %ErrorChain(&e), "Failed to kill agent after model change");
-            }
+            // The next send_message will rebuild the connector with the
+            // new model. Kept best-effort: if the agent is mid-turn the
+            // close() inside drop_connector will still be invoked.
+            connector_factory.drop_connector(id, None);
         }
 
         // Re-fetch to return the updated version
@@ -917,7 +919,7 @@ impl ConversationService {
         &self,
         user_id: &str,
         conversation_id: &str,
-        task_manager: &Arc<dyn IWorkerTaskManager>,
+        connector_factory: &Arc<dyn IAgentConnectorFactory>,
     ) -> Result<ConfirmationListResponse, AppError> {
         self.conversation_repo
             .get(conversation_id)
@@ -925,7 +927,7 @@ impl ConversationService {
             .filter(|r| r.user_id == user_id)
             .ok_or_else(|| AppError::NotFound(format!("Conversation {conversation_id} not found")))?;
 
-        let agent = match task_manager.get_task(conversation_id) {
+        let agent = match connector_factory.get(conversation_id) {
             Some(a) => a,
             None => return Ok(Vec::new()),
         };
@@ -943,7 +945,7 @@ impl ConversationService {
         conversation_id: &str,
         call_id: &str,
         req: ConfirmRequest,
-        task_manager: &Arc<dyn IWorkerTaskManager>,
+        connector_factory: &Arc<dyn IAgentConnectorFactory>,
     ) -> Result<(), AppError> {
         self.conversation_repo
             .get(conversation_id)
@@ -951,8 +953,8 @@ impl ConversationService {
             .filter(|r| r.user_id == user_id)
             .ok_or_else(|| AppError::NotFound(format!("Conversation {conversation_id} not found")))?;
 
-        let agent = task_manager
-            .get_task(conversation_id)
+        let agent = connector_factory
+            .get(conversation_id)
             .ok_or_else(|| AppError::NotFound("No active agent for this conversation".into()))?;
 
         let confirmations = agent.get_confirmations();
@@ -982,7 +984,7 @@ impl ConversationService {
         conversation_id: &str,
         action: &str,
         command_type: Option<&str>,
-        task_manager: &Arc<dyn IWorkerTaskManager>,
+        connector_factory: &Arc<dyn IAgentConnectorFactory>,
     ) -> Result<ApprovalCheckResponse, AppError> {
         self.conversation_repo
             .get(conversation_id)
@@ -990,8 +992,8 @@ impl ConversationService {
             .filter(|r| r.user_id == user_id)
             .ok_or_else(|| AppError::NotFound(format!("Conversation {conversation_id} not found")))?;
 
-        let approved = task_manager
-            .get_task(conversation_id)
+        let approved = connector_factory
+            .get(conversation_id)
             .is_some_and(|agent| agent.check_approval(action, command_type));
 
         Ok(ApprovalCheckResponse { approved })
@@ -1015,7 +1017,7 @@ impl ConversationService {
         user_id: &str,
         conversation_id: &str,
         req: SendMessageRequest,
-        task_manager: &Arc<dyn IWorkerTaskManager>,
+        connector_factory: &Arc<dyn IAgentConnectorFactory>,
     ) -> Result<String, AppError> {
         if req.content.trim().is_empty() {
             return Err(AppError::BadRequest("Message content must not be empty".into()));
@@ -1086,7 +1088,7 @@ impl ConversationService {
         // Build task options from conversation row
         let build_opts = self.build_task_options(&row)?;
         let stored_workspace = build_opts.workspace.clone();
-        let agent = task_manager.get_or_build_task(conversation_id, build_opts).await?;
+        let agent = connector_factory.build_or_get(build_opts).await?;
 
         // If the factory resolved a different workspace (e.g. auto-created temp
         // dir for a legacy conversation with empty workspace), persist it back.
@@ -1144,7 +1146,7 @@ impl ConversationService {
                 cron_service.clone(),
             );
 
-            let rx = agent.subscribe();
+            let rx = agent.subscribe_legacy();
             let send_agent = agent.clone();
             let conv_id_send = conv_id.clone();
             // 1. Send the message to the agent and concurrently run the relay to stream events.
@@ -1207,7 +1209,7 @@ impl ConversationService {
         &self,
         user_id: &str,
         conversation_id: &str,
-        task_manager: &Arc<dyn IWorkerTaskManager>,
+        connector_factory: &Arc<dyn IAgentConnectorFactory>,
     ) -> Result<(), AppError> {
         // Verify conversation exists and belongs to user
         self.conversation_repo
@@ -1216,7 +1218,7 @@ impl ConversationService {
             .filter(|r| r.user_id == user_id)
             .ok_or_else(|| AppError::NotFound(format!("Conversation {conversation_id} not found")))?;
 
-        let Some(agent) = task_manager.get_task(conversation_id) else {
+        let Some(agent) = connector_factory.get(conversation_id) else {
             info!("No active agent to cancel; treating as idempotent success");
             return Ok(());
         };
@@ -1239,7 +1241,7 @@ impl ConversationService {
         &self,
         user_id: &str,
         conversation_id: &str,
-        task_manager: &Arc<dyn IWorkerTaskManager>,
+        connector_factory: &Arc<dyn IAgentConnectorFactory>,
     ) -> Result<(), AppError> {
         let row = self
             .conversation_repo
@@ -1250,7 +1252,7 @@ impl ConversationService {
 
         let build_opts = self.build_task_options(&row)?;
         let stored_workspace = build_opts.workspace.clone();
-        let agent = task_manager.get_or_build_task(conversation_id, build_opts).await?;
+        let agent = connector_factory.build_or_get(build_opts).await?;
 
         // Persist auto-resolved workspace if factory picked a different path.
         self.maybe_persist_workspace(conversation_id, &stored_workspace, agent.workspace())
@@ -1647,11 +1649,11 @@ impl crate::conv_service_trait::IConversationService for ConversationService {
     }
 
     async fn warmup(&self, user_id: &str, id: &str) -> Result<(), AppError> {
-        ConversationService::warmup(self, user_id, id, &self.task_manager).await
+        ConversationService::warmup(self, user_id, id, &self.connector_factory).await
     }
 
     async fn send(&self, user_id: &str, id: &str, req: SendMessageRequest) -> Result<String, AppError> {
-        ConversationService::send_message(self, user_id, id, req, &self.task_manager).await
+        ConversationService::send_message(self, user_id, id, req, &self.connector_factory).await
     }
 
     async fn cancel(&self, user_id: &str, id: &str) -> Result<(), AppError> {
@@ -1664,10 +1666,8 @@ impl crate::conv_service_trait::IConversationService for ConversationService {
             .filter(|r| r.user_id == user_id)
             .ok_or_else(|| AppError::NotFound(format!("Conversation {id} not found")))?;
 
-        // 1. Best-effort: tell the underlying agent to stop. The legacy
-        //    task-manager path is still in place for Phase 2; Phase 3
-        //    swaps in `IAgentConnector::cancel_current_turn`.
-        if let Some(agent) = self.task_manager.get_task(id)
+        // 1. Best-effort: tell the underlying agent to stop.
+        if let Some(agent) = self.connector_factory.get(id)
             && let Err(e) = agent.cancel().await
         {
             warn!(error = %ErrorChain(&e), "Agent cancel failed; proceeding to wait for actor idle");
@@ -1682,12 +1682,39 @@ impl crate::conv_service_trait::IConversationService for ConversationService {
         Ok(())
     }
 
+    async fn cancel_idle(&self, id: &str) -> Result<(), AppError> {
+        // Resolve the owner from the row so the system-scoped cancel
+        // can reuse the regular `cancel` codepath (auth check + agent
+        // ack + actor wait). Missing rows are treated as "already
+        // cancelled" — the scanner could race with a manual delete.
+        let Some(row) = self.conversation_repo.get(id).await? else {
+            return Ok(());
+        };
+        let user_id = row.user_id;
+        <Self as crate::conv_service_trait::IConversationService>::cancel(self, &user_id, id).await
+    }
+
     fn status(&self, id: &str) -> crate::conv_service_trait::ConversationStatus {
         self.actor_status(id)
     }
 
     fn subscribe(&self, id: &str) -> tokio::sync::broadcast::Receiver<crate::conv_service_trait::ConversationEvent> {
         self.get_or_create_actor(id).subscribe()
+    }
+
+    fn collect_idle(&self, threshold_ms: i64) -> Vec<String> {
+        let cutoff = aionui_common::now_ms() - threshold_ms;
+        self.actors
+            .iter()
+            .filter_map(|entry| {
+                let actor = entry.value();
+                let is_idle = matches!(
+                    actor.public_status(),
+                    crate::conv_service_trait::ConversationStatus::Idle
+                );
+                (is_idle && actor.last_activity_ms() < cutoff).then(|| entry.key().clone())
+            })
+            .collect()
     }
 }
 

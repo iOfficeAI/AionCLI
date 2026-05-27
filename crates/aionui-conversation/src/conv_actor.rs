@@ -23,8 +23,9 @@
 
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::{AtomicI64, Ordering};
 
-use aionui_common::AppError;
+use aionui_common::{AppError, TimestampMs, now_ms};
 use tokio::sync::{Mutex, Notify, broadcast};
 
 use crate::conv_service_trait::{ConversationEvent, ConversationStatus};
@@ -72,6 +73,17 @@ pub struct ConvActor {
     /// primitive: re-entry / multiple waiters / no-op when nothing
     /// waiting are all handled correctly.
     idle_notify: Notify,
+    /// Wall-clock ms of the last meaningful runtime activity for this
+    /// conversation. Used by the conv-layer idle scanner (Phase 5) to
+    /// pick stale conversations. Updated on:
+    /// - `ConvActor::new`         — initial creation timestamp
+    /// - `mark_idle()`            — warmup completion / explicit settle
+    /// - `begin_turn()`           — turn dispatch
+    /// - `TurnHandle::drop`       — turn completion (best-effort)
+    ///
+    /// `AtomicI64` keeps reads lock-free and writes cheap so the
+    /// scanner's `iter().filter()` stays cheap on large actor maps.
+    last_activity_ms: AtomicI64,
 }
 
 /// RAII guard returned by [`ConvActor::begin_turn`]. Holding it keeps
@@ -110,6 +122,9 @@ impl Drop for TurnHandle {
             // itself (only `wait_for_idle` ever holds it during turn
             // end, and it already settles to Idle on its own path).
         }
+        // Refresh activity timestamp so the conv-layer idle scanner
+        // observes turn-end as a fresh activity boundary.
+        self.actor.touch_activity();
         self.actor.idle_notify.notify_waiters();
     }
 }
@@ -123,7 +138,28 @@ impl ConvActor {
             event_tx,
             public_status: StdMutex::new(ConversationStatus::Idle),
             idle_notify: Notify::new(),
+            last_activity_ms: AtomicI64::new(now_ms()),
         })
+    }
+
+    /// Wall-clock ms of the last meaningful runtime activity. Lock-free
+    /// and cheap so the conv-layer idle scanner can sweep all actors in
+    /// constant time per entry.
+    pub fn last_activity_ms(&self) -> TimestampMs {
+        self.last_activity_ms.load(Ordering::Relaxed)
+    }
+
+    /// Test-only override so unit tests can backdate an actor and
+    /// exercise the idle-scan threshold without sleeping.
+    #[cfg(test)]
+    pub(crate) fn set_last_activity_ms_for_test(&self, ms: TimestampMs) {
+        self.last_activity_ms.store(ms, Ordering::Relaxed);
+    }
+
+    /// Refresh the activity timestamp to "now". Internal helper called
+    /// from the public state-mutating methods and from `TurnHandle::drop`.
+    fn touch_activity(&self) {
+        self.last_activity_ms.store(now_ms(), Ordering::Relaxed);
     }
 
     /// Lock-free read of the public status projection.
@@ -146,6 +182,7 @@ impl ConvActor {
         let mut guard = self.state.lock().await;
         *guard = ConvState::Idle;
         self.write_public(ConversationStatus::Idle);
+        self.touch_activity();
     }
 
     /// Acquire the running slot. Returns a `TurnHandle` whose `Drop`
@@ -163,6 +200,7 @@ impl ConvActor {
             ConvState::Idle | ConvState::NeverOpened => {
                 *guard = ConvState::Running { msg_id: msg_id.clone() };
                 self.write_public(ConversationStatus::Running { msg_id: msg_id.clone() });
+                self.touch_activity();
                 // Best-effort: subscribers may have dropped — that is
                 // fine, we still want the slot reserved.
                 let _ = self.event_tx.send(ConversationEvent::TurnStarted { msg_id });
@@ -345,5 +383,42 @@ mod tests {
         actor.wait_for_idle().await;
         let _h2 = actor.begin_turn("msg-2".into()).await.unwrap();
         assert!(matches!(actor.public_status(), ConversationStatus::Running { .. }));
+    }
+
+    #[tokio::test]
+    async fn last_activity_is_updated_on_lifecycle_transitions() {
+        let actor = fresh_actor();
+        // `new()` seeded a value already; `mark_idle` refreshes it.
+        actor.mark_idle().await;
+        let after_mark_idle = actor.last_activity_ms();
+        assert!(after_mark_idle > 0);
+
+        // begin_turn must move the timestamp strictly forward.
+        tokio::time::sleep(Duration::from_millis(2)).await;
+        let h = actor.begin_turn("m1".into()).await.unwrap();
+        let after_begin = actor.last_activity_ms();
+        assert!(
+            after_begin >= after_mark_idle,
+            "begin_turn should not regress the timestamp"
+        );
+
+        // Drop must move the timestamp forward again.
+        tokio::time::sleep(Duration::from_millis(2)).await;
+        drop(h);
+        // The drop runs synchronously; await idle to ensure state has fully settled.
+        actor.wait_for_idle().await;
+        let after_drop = actor.last_activity_ms();
+        assert!(
+            after_drop >= after_begin,
+            "TurnHandle::drop should refresh activity (after_begin={after_begin}, after_drop={after_drop})"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_last_activity_for_test_backdates_actor() {
+        let actor = fresh_actor();
+        actor.mark_idle().await;
+        actor.set_last_activity_ms_for_test(0);
+        assert_eq!(actor.last_activity_ms(), 0);
     }
 }

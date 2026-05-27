@@ -4,7 +4,7 @@ use aionui_api_types::RemoteBuildExtra;
 use aionui_common::AppError;
 use tracing::warn;
 
-use crate::agent_task::AgentInstance;
+use crate::connector::IAgentConnector;
 use crate::factory::AgentFactoryDeps;
 use crate::factory::context::FactoryContext;
 use crate::manager::remote::{RemoteAgentConfig, RemoteAgentManager};
@@ -14,7 +14,7 @@ pub(super) async fn build(
     deps: Arc<AgentFactoryDeps>,
     options: BuildTaskOptions,
     ctx: FactoryContext,
-) -> Result<AgentInstance, AppError> {
+) -> Result<Arc<dyn IAgentConnector>, AppError> {
     let extra: RemoteBuildExtra = serde_json::from_value(options.extra)
         .map_err(|e| AppError::BadRequest(format!("Invalid Remote build options: {e}")))?;
     let row = deps
@@ -42,5 +42,5 @@ pub(super) async fn build(
         allow_insecure: row.allow_insecure,
     };
     let agent = RemoteAgentManager::new(ctx.conversation_id, ctx.workspace, config).await?;
-    Ok(AgentInstance::Remote(Arc::new(agent)))
+    Ok(Arc::new(agent) as Arc<dyn IAgentConnector>)
 }

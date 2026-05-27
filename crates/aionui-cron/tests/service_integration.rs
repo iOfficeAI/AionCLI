@@ -12,9 +12,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use aionui_ai_agent::AgentRegistry;
-use aionui_ai_agent::agent_task::AgentInstance;
 use aionui_ai_agent::types::BuildTaskOptions;
+use aionui_ai_agent::{AgentRegistry, IAgentConnector, IAgentConnectorFactory};
 use aionui_api_types::{
     CreateCronJobRequest, CronScheduleDto, ListCronJobsQuery, SaveCronSkillRequest, UpdateCronJobRequest,
     WebSocketMessage,
@@ -65,29 +64,17 @@ impl EventBroadcaster for MockBroadcaster {
 struct StubTaskManager;
 
 #[async_trait::async_trait]
-impl aionui_ai_agent::task_manager::IWorkerTaskManager for StubTaskManager {
-    fn get_task(&self, _: &str) -> Option<AgentInstance> {
-        None
-    }
-    async fn get_or_build_task(&self, _: &str, _: BuildTaskOptions) -> Result<AgentInstance, aionui_common::AppError> {
+impl IAgentConnectorFactory for StubTaskManager {
+    async fn build_or_get(&self, _opts: BuildTaskOptions) -> Result<Arc<dyn IAgentConnector>, aionui_common::AppError> {
         Err(aionui_common::AppError::Internal("stub".into()))
     }
-    fn kill(&self, _: &str, _: Option<aionui_common::AgentKillReason>) -> Result<(), aionui_common::AppError> {
-        Ok(())
+    fn get(&self, _: &str) -> Option<Arc<dyn IAgentConnector>> {
+        None
     }
-    fn kill_and_wait(
-        &self,
-        _: &str,
-        _: Option<aionui_common::AgentKillReason>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
-        Box::pin(std::future::ready(()))
-    }
+    fn drop_connector(&self, _: &str, _: Option<aionui_common::AgentKillReason>) {}
     fn clear(&self) {}
     fn active_count(&self) -> usize {
         0
-    }
-    fn collect_idle(&self, _: TimestampMs) -> Vec<String> {
-        vec![]
     }
 }
 
@@ -550,7 +537,7 @@ async fn setup_with_conv_repo() -> (
 
     let stub_conv_repo = Arc::new(StubConvRepo::new());
     let stub_conv_repo_trait: Arc<dyn IConversationRepository> = stub_conv_repo.clone();
-    let task_manager: Arc<dyn aionui_ai_agent::task_manager::IWorkerTaskManager> = Arc::new(StubTaskManager);
+    let task_manager: Arc<dyn IAgentConnectorFactory> = Arc::new(StubTaskManager);
     let conv_service = Arc::new(ConversationService::new(
         std::env::temp_dir(),
         bc.clone() as Arc<dyn EventBroadcaster>,

@@ -23,8 +23,8 @@ use std::time::Duration;
 use aionui_ai_agent::factory::acp_assembler::{WorkspaceInfo, assemble_acp_params};
 use aionui_ai_agent::manager::acp::AcpAgentManager;
 use aionui_ai_agent::registry::AgentRegistry;
-use aionui_ai_agent::{AgentInstance, AgentStreamEvent, IAgentTask};
-use aionui_common::ConversationStatus;
+use aionui_ai_agent::{AgentStreamEvent, IAgentConnector};
+use aionui_api_types::ConversationStatus;
 use aionui_db::{SqliteAgentMetadataRepository, init_database_memory};
 use tokio::sync::broadcast;
 
@@ -121,8 +121,10 @@ async fn make_mock_agent(script: &str, backend: &str) -> (Arc<AcpAgentManager>, 
 
     let arc = Arc::new(manager);
 
-    // Subscribe to typed events BEFORE starting handler to capture all events
-    let rx = arc.subscribe();
+    // Subscribe to typed (legacy) events BEFORE starting handler to capture
+    // all events. The new connector-event channel is for the conv-layer
+    // relay path; these tests still consume the legacy broadcast directly.
+    let rx = IAgentConnector::subscribe_legacy(arc.as_ref());
     arc.start_permission_handler();
 
     (arc, rx)
@@ -307,12 +309,13 @@ async fn acp_agent_model_info_captured() {
 
     wait_for_event(&mut rx, |e| matches!(e, AgentStreamEvent::AcpModelInfo(_))).await;
 
-    // Route through the public `AgentInstance` API rather than reaching
-    // into the private `AcpAgentManager::model()`: the ai-agent crate only
-    // exposes `AgentInstance` to downstream callers, so tests should
-    // exercise the same surface.
-    let instance = AgentInstance::Acp(agent.clone());
-    let resp = instance.get_model().await.expect("get_model should succeed");
+    // Route through the `IAgentConnector` trait surface rather than
+    // reaching into private `AcpAgentManager::model()`: the ai-agent crate
+    // exposes `Arc<dyn IAgentConnector>` to downstream callers (Phase 5),
+    // so tests should exercise the same surface.
+    let resp = IAgentConnector::get_model(agent.as_ref())
+        .await
+        .expect("get_model should succeed");
     let info = resp.model_info.expect("Model info should be captured");
     assert_eq!(info.current_model_id.as_deref(), Some("claude-sonnet-4"));
     assert_eq!(info.available_models.len(), 2);

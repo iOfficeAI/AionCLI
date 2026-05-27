@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use aionui_common::{
-    AgentKillReason, AgentType, AppError, Confirmation, ConversationStatus, ErrorChain, RemoteAgentStatus, TimestampMs,
-};
+use aionui_api_types::ConversationStatus;
+use aionui_common::{AgentKillReason, AgentType, AppError, Confirmation, ErrorChain, RemoteAgentStatus, TimestampMs};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, RwLock, broadcast};
@@ -249,28 +248,8 @@ use crate::shared_kernel::approval_key;
 
 #[async_trait::async_trait]
 impl crate::agent_task::IAgentTask for RemoteAgentManager {
-    fn agent_type(&self) -> AgentType {
-        AgentType::Remote
-    }
-
-    fn conversation_id(&self) -> &str {
-        self.runtime.conversation_id()
-    }
-
-    fn workspace(&self) -> &str {
-        self.runtime.workspace()
-    }
-
     fn status(&self) -> Option<ConversationStatus> {
         self.runtime.status()
-    }
-
-    fn last_activity_at(&self) -> TimestampMs {
-        self.runtime.last_activity_at()
-    }
-
-    fn subscribe(&self) -> broadcast::Receiver<AgentStreamEvent> {
-        self.runtime.subscribe()
     }
 
     async fn send_message(&self, data: SendMessageData) -> Result<(), AppError> {
@@ -469,6 +448,113 @@ impl IAgentConnector for RemoteAgentManager {
 
     fn subscribe_legacy(&self) -> broadcast::Receiver<AgentStreamEvent> {
         self.runtime.subscribe()
+    }
+
+    // ── Task-manager method surface (Phase 5 additive) ─────────────────
+    //
+    // Delegates to the existing `IAgentTask` impl on `Self` or to the
+    // inherent helpers on `RemoteAgentManager` so the upcoming Task 5-7
+    // swap is a pure type-flip.
+
+    fn status(&self) -> Option<ConversationStatus> {
+        self.runtime.status()
+    }
+
+    async fn send_message(&self, data: SendMessageData) -> Result<(), AppError> {
+        crate::agent_task::IAgentTask::send_message(self, data).await
+    }
+
+    async fn cancel(&self) -> Result<(), AppError> {
+        crate::agent_task::IAgentTask::cancel(self).await
+    }
+
+    fn kill(&self, reason: Option<AgentKillReason>) -> Result<(), AppError> {
+        crate::agent_task::IAgentTask::kill(self, reason)
+    }
+
+    fn kill_and_wait(
+        &self,
+        reason: Option<AgentKillReason>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        RemoteAgentManager::kill_and_wait(self, reason)
+    }
+
+    fn get_confirmations(&self) -> Vec<Confirmation> {
+        RemoteAgentManager::get_confirmations(self)
+    }
+
+    fn confirm(
+        &self,
+        msg_id: &str,
+        call_id: &str,
+        data: serde_json::Value,
+        always_allow: bool,
+    ) -> Result<(), AppError> {
+        RemoteAgentManager::confirm(self, msg_id, call_id, data, always_allow)
+    }
+
+    fn check_approval(&self, action: &str, command_type: Option<&str>) -> bool {
+        RemoteAgentManager::check_approval(self, action, command_type)
+    }
+
+    /// Remote agents do not surface a session key directly; mirrors
+    /// the existing `AgentInstance::Remote(_)` arm.
+    fn get_session_key(&self) -> Option<String> {
+        None
+    }
+
+    /// Remote agents do not model a session mode; mirrors the existing
+    /// `AgentInstance::Remote(_)` arm in `get_mode`.
+    async fn get_mode(&self) -> Result<aionui_api_types::AgentModeResponse, AppError> {
+        Ok(aionui_api_types::AgentModeResponse {
+            mode: "default".into(),
+            initialized: false,
+        })
+    }
+
+    /// Mirrors the existing `AgentInstance::Remote(_)` arm in `set_mode`.
+    async fn set_mode(&self, _mode: &str) -> Result<(), AppError> {
+        Err(AppError::BadRequest(
+            "Mode switching is not supported for this agent type".into(),
+        ))
+    }
+
+    async fn get_model(&self) -> Result<aionui_api_types::GetModelInfoResponse, AppError> {
+        Ok(aionui_api_types::GetModelInfoResponse { model_info: None })
+    }
+
+    async fn set_model(&self, model_id: &str) -> Result<(), AppError> {
+        if model_id.trim().is_empty() {
+            return Err(AppError::BadRequest("model_id must not be empty".into()));
+        }
+        Err(AppError::BadRequest(
+            "Model switching is not supported for this agent type".into(),
+        ))
+    }
+
+    async fn get_usage(&self) -> Result<Option<serde_json::Value>, AppError> {
+        Ok(None)
+    }
+
+    async fn get_slash_commands(&self) -> Result<Vec<aionui_api_types::SlashCommandItem>, AppError> {
+        Ok(Vec::new())
+    }
+
+    async fn handle_side_question(
+        &self,
+        req: aionui_api_types::SideQuestionRequest,
+    ) -> Result<aionui_api_types::SideQuestionResponse, AppError> {
+        if req.question.trim().is_empty() {
+            return Err(AppError::BadRequest("question must not be empty".into()));
+        }
+        Ok(aionui_api_types::SideQuestionResponse {
+            status: "unsupported".into(),
+            answer: None,
+        })
+    }
+
+    async fn get_openclaw_runtime(&self) -> Result<serde_json::Value, AppError> {
+        Ok(serde_json::Value::Null)
     }
 }
 

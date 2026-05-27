@@ -242,12 +242,12 @@ pub fn build_conversation_state(
         services.work_dir.clone(),
         services.event_bus.clone(),
         skill_resolver,
-        services.worker_task_manager.clone(),
+        services.connector_factory.clone(),
         conversaion_repo,
         agent_metadata_repo,
         acp_session_repo,
     );
-    if let Some(hook) = services.task_manager_delete_hook.clone() {
+    if let Some(hook) = services.connector_factory_delete_hook.clone() {
         conversation_service.with_delete_hook(hook);
     }
     if let Some(cron_service) = cron_service {
@@ -256,7 +256,7 @@ pub fn build_conversation_state(
     }
     ConversationRouterState {
         service: conversation_service,
-        task_manager: services.worker_task_manager.clone(),
+        connector_factory: services.connector_factory.clone(),
     }
 }
 
@@ -383,12 +383,12 @@ pub async fn build_channel_state(
         services.work_dir.clone(),
         services.event_bus.clone(),
         skill_resolver,
-        services.worker_task_manager.clone(),
+        services.connector_factory.clone(),
         conv_repo,
         agent_metadata_repo,
         acp_session_repo,
     ));
-    if let Some(hook) = services.task_manager_delete_hook.clone() {
+    if let Some(hook) = services.connector_factory_delete_hook.clone() {
         conversation_svc.with_delete_hook(hook);
     }
 
@@ -403,7 +403,7 @@ pub async fn build_channel_state(
 
     let message_service = Arc::new(aionui_channel::message_service::ChannelMessageService::new(
         conversation_svc,
-        services.worker_task_manager.clone(),
+        services.connector_factory.clone(),
         Arc::clone(&channel_settings),
         owner_user_id,
     ));
@@ -461,12 +461,12 @@ pub fn build_team_state(
         services.work_dir.clone(),
         services.event_bus.clone(),
         skill_resolver,
-        services.worker_task_manager.clone(),
+        services.connector_factory.clone(),
         conv_repo,
         agent_metadata_repo,
         acp_session_repo,
     );
-    if let Some(hook) = services.task_manager_delete_hook.clone() {
+    if let Some(hook) = services.connector_factory_delete_hook.clone() {
         conv_service.with_delete_hook(hook);
     }
     if let Some(cron_service) = cron_service {
@@ -479,7 +479,7 @@ pub fn build_team_state(
         Arc::new(SqliteProviderRepository::new(services.database.pool().clone())),
         conv_service,
         services.event_bus.clone(),
-        services.worker_task_manager.clone(),
+        services.connector_factory.clone(),
         backend_binary_path,
         guide_mcp_config,
     );
@@ -503,7 +503,7 @@ pub fn build_cron_state(services: &AppServices) -> CronRouterState {
         services.work_dir.clone(),
         services.event_bus.clone(),
         skill_resolver,
-        services.worker_task_manager.clone(),
+        services.connector_factory.clone(),
         conv_repo.clone(),
         agent_metadata_repo,
         acp_session_repo,
@@ -511,7 +511,7 @@ pub fn build_cron_state(services: &AppServices) -> CronRouterState {
 
     let busy_guard = Arc::new(aionui_cron::busy_guard::CronBusyGuard::new());
     let executor = Arc::new(aionui_cron::executor::JobExecutor::new(
-        services.worker_task_manager.clone(),
+        services.connector_factory.clone(),
         conv_repo,
         Arc::new(conv_service.clone()),
         busy_guard,

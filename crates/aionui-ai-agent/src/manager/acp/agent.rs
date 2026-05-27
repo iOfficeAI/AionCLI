@@ -16,14 +16,12 @@ use crate::types::SendMessageData;
 use agent_client_protocol::schema::{
     CancelNotification, SessionId, SessionModelState, SessionNotification, UsageUpdate,
 };
-use aionui_api_types::{AgentHandshake, SlashCommandItem};
-use aionui_common::{
-    AgentKillReason, AgentType, AppError, ConversationStatus, ErrorChain, TimestampMs, normalize_keys_to_snake_case,
-};
+use aionui_api_types::{AgentHandshake, ConversationStatus, SlashCommandItem};
+use aionui_common::{AgentKillReason, AppError, ErrorChain, normalize_keys_to_snake_case};
 use serde_json::Value;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{Mutex, Notify, RwLock, broadcast, mpsc};
+use tokio::sync::{Mutex, Notify, RwLock, mpsc};
 use tracing::{debug, error, info, warn};
 
 /// The user-visible body inside an [`AppError`].
@@ -571,28 +569,8 @@ impl AcpAgentManager {
 
 #[async_trait::async_trait]
 impl crate::agent_task::IAgentTask for AcpAgentManager {
-    fn agent_type(&self) -> AgentType {
-        AgentType::Acp
-    }
-
-    fn conversation_id(&self) -> &str {
-        &self.params.conversation_id
-    }
-
-    fn workspace(&self) -> &str {
-        &self.params.workspace.path
-    }
-
     fn status(&self) -> Option<ConversationStatus> {
         self.runtime.status()
-    }
-
-    fn last_activity_at(&self) -> TimestampMs {
-        self.runtime.last_activity_at()
-    }
-
-    fn subscribe(&self) -> broadcast::Receiver<AgentStreamEvent> {
-        self.runtime.subscribe()
     }
 
     #[tracing::instrument(skip_all, fields(conversation_id = %self.params.conversation_id, msg_id = %data.msg_id))]

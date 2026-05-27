@@ -9,10 +9,8 @@ use aion_config::config::{CliArgs, Config};
 use aion_mcp::manager::McpManager;
 use aion_protocol::commands::SessionMode;
 use aion_protocol::{ToolApprovalManager, ToolApprovalResult};
-use aionui_api_types::AgentModeResponse;
-use aionui_common::{
-    AgentKillReason, AgentType, AppError, Confirmation, ConversationStatus, ErrorChain, TimestampMs, now_ms,
-};
+use aionui_api_types::{AgentModeResponse, ConversationStatus};
+use aionui_common::{AgentKillReason, AgentType, AppError, Confirmation, ErrorChain, TimestampMs, now_ms};
 use serde_json::Value;
 use tokio::sync::{Mutex, Notify, broadcast, oneshot};
 use tracing::{debug, error, info};
@@ -332,32 +330,115 @@ impl IAgentConnector for AionrsAgentManager {
     fn subscribe_legacy(&self) -> broadcast::Receiver<AgentStreamEvent> {
         self.runtime.subscribe()
     }
-}
 
-#[async_trait::async_trait]
-impl crate::agent_task::IAgentTask for AionrsAgentManager {
-    fn agent_type(&self) -> AgentType {
-        AgentType::Aionrs
-    }
-
-    fn conversation_id(&self) -> &str {
-        self.runtime.conversation_id()
-    }
-
-    fn workspace(&self) -> &str {
-        self.runtime.workspace()
-    }
+    // ── Task-manager method surface (Phase 5 additive) ─────────────────
+    //
+    // Each method delegates to the existing `IAgentTask` impl on `Self`
+    // or to the inherent helpers below so the upcoming Task 5-7 swap is
+    // a pure type-flip.
 
     fn status(&self) -> Option<ConversationStatus> {
         self.runtime.status()
     }
 
-    fn last_activity_at(&self) -> TimestampMs {
-        self.runtime.last_activity_at()
+    async fn send_message(&self, data: SendMessageData) -> Result<(), AppError> {
+        crate::agent_task::IAgentTask::send_message(self, data).await
     }
 
-    fn subscribe(&self) -> broadcast::Receiver<AgentStreamEvent> {
-        self.runtime.subscribe()
+    async fn cancel(&self) -> Result<(), AppError> {
+        crate::agent_task::IAgentTask::cancel(self).await
+    }
+
+    fn kill(&self, reason: Option<AgentKillReason>) -> Result<(), AppError> {
+        crate::agent_task::IAgentTask::kill(self, reason)
+    }
+
+    fn kill_and_wait(
+        &self,
+        reason: Option<AgentKillReason>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        AionrsAgentManager::kill_and_wait(self, reason)
+    }
+
+    fn get_confirmations(&self) -> Vec<Confirmation> {
+        AionrsAgentManager::get_confirmations(self)
+    }
+
+    fn confirm(
+        &self,
+        msg_id: &str,
+        call_id: &str,
+        data: serde_json::Value,
+        always_allow: bool,
+    ) -> Result<(), AppError> {
+        AionrsAgentManager::confirm(self, msg_id, call_id, data, always_allow)
+    }
+
+    fn check_approval(&self, action: &str, command_type: Option<&str>) -> bool {
+        AionrsAgentManager::check_approval(self, action, command_type)
+    }
+
+    /// Aionrs does not expose a session key; mirrors the existing
+    /// `AgentInstance::Aionrs(_)` arm in `get_session_key`.
+    fn get_session_key(&self) -> Option<String> {
+        None
+    }
+
+    async fn get_mode(&self) -> Result<aionui_api_types::AgentModeResponse, AppError> {
+        AionrsAgentManager::mode(self).await
+    }
+
+    async fn set_mode(&self, mode: &str) -> Result<(), AppError> {
+        AionrsAgentManager::set_mode(self, mode).await
+    }
+
+    /// Mirrors the existing `AgentInstance::Aionrs(_)` arm in
+    /// `get_model` — Aionrs has no model picker.
+    async fn get_model(&self) -> Result<aionui_api_types::GetModelInfoResponse, AppError> {
+        Ok(aionui_api_types::GetModelInfoResponse { model_info: None })
+    }
+
+    /// Mirrors the existing `AgentInstance::Aionrs(_)` arm in
+    /// `set_model` — model switching is not supported.
+    async fn set_model(&self, model_id: &str) -> Result<(), AppError> {
+        if model_id.trim().is_empty() {
+            return Err(AppError::BadRequest("model_id must not be empty".into()));
+        }
+        Err(AppError::BadRequest(
+            "Model switching is not supported for this agent type".into(),
+        ))
+    }
+
+    async fn get_usage(&self) -> Result<Option<serde_json::Value>, AppError> {
+        Ok(None)
+    }
+
+    async fn get_slash_commands(&self) -> Result<Vec<aionui_api_types::SlashCommandItem>, AppError> {
+        AionrsAgentManager::get_slash_commands(self).await
+    }
+
+    async fn handle_side_question(
+        &self,
+        req: aionui_api_types::SideQuestionRequest,
+    ) -> Result<aionui_api_types::SideQuestionResponse, AppError> {
+        if req.question.trim().is_empty() {
+            return Err(AppError::BadRequest("question must not be empty".into()));
+        }
+        Ok(aionui_api_types::SideQuestionResponse {
+            status: "unsupported".into(),
+            answer: None,
+        })
+    }
+
+    async fn get_openclaw_runtime(&self) -> Result<serde_json::Value, AppError> {
+        Ok(serde_json::Value::Null)
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::agent_task::IAgentTask for AionrsAgentManager {
+    fn status(&self) -> Option<ConversationStatus> {
+        self.runtime.status()
     }
 
     async fn send_message(&self, data: SendMessageData) -> Result<(), AppError> {
@@ -506,7 +587,7 @@ fn parse_session_mode(s: &str) -> SessionMode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_task::IAgentTask;
+    use crate::IAgentConnector;
 
     fn make_test_config() -> AionrsResolvedConfig {
         AionrsResolvedConfig {
@@ -530,9 +611,9 @@ mod tests {
         let agent = AionrsAgentManager::new("conv-1".into(), "/project".into(), make_test_config(), None)
             .await
             .unwrap();
-        assert_eq!(IAgentTask::agent_type(&agent), AgentType::Aionrs);
-        assert_eq!(IAgentTask::workspace(&agent), "/project");
-        assert_eq!(IAgentTask::conversation_id(&agent), "conv-1");
+        assert_eq!(IAgentConnector::agent_type(&agent), AgentType::Aionrs);
+        assert_eq!(IAgentConnector::workspace(&agent), "/project");
+        assert_eq!(IAgentConnector::conversation_id(&agent), "conv-1");
     }
 
     #[tokio::test]
@@ -540,7 +621,7 @@ mod tests {
         let agent = AionrsAgentManager::new("conv-1".into(), "/project".into(), make_test_config(), None)
             .await
             .unwrap();
-        assert_eq!(agent.status(), Some(ConversationStatus::Pending));
+        assert_eq!(IAgentConnector::status(&agent), Some(ConversationStatus::Pending));
     }
 
     #[tokio::test]
@@ -548,7 +629,7 @@ mod tests {
         let agent = AionrsAgentManager::new("conv-1".into(), "/project".into(), make_test_config(), None)
             .await
             .unwrap();
-        let _rx = IAgentTask::subscribe(&agent);
+        let _rx = IAgentConnector::subscribe_legacy(&agent);
     }
 
     #[tokio::test]
@@ -556,9 +637,9 @@ mod tests {
         let agent = AionrsAgentManager::new("conv-1".into(), "/project".into(), make_test_config(), None)
             .await
             .unwrap();
-        assert!(agent.kill(None).is_ok());
+        assert!(IAgentConnector::kill(&agent, None).is_ok());
         // kill() is a no-op for aionrs (no subprocess); status remains Pending.
-        assert_eq!(agent.status(), Some(ConversationStatus::Pending));
+        assert_eq!(IAgentConnector::status(&agent), Some(ConversationStatus::Pending));
     }
 
     #[tokio::test]
@@ -566,7 +647,7 @@ mod tests {
         let agent = AionrsAgentManager::new("conv-1".into(), "/project".into(), make_test_config(), None)
             .await
             .unwrap();
-        assert!(agent.kill(Some(AgentKillReason::IdleTimeout)).is_ok());
+        assert!(IAgentConnector::kill(&agent, Some(AgentKillReason::IdleTimeout)).is_ok());
     }
 
     #[tokio::test]
@@ -590,11 +671,11 @@ mod tests {
         let agent = AionrsAgentManager::new("conv-stop".into(), "/project".into(), make_test_config(), None)
             .await
             .unwrap();
-        let mut rx = IAgentTask::subscribe(&agent);
+        let mut rx = IAgentConnector::subscribe_legacy(&agent);
 
-        agent.cancel().await.unwrap();
+        IAgentConnector::cancel(&agent).await.unwrap();
 
-        assert_eq!(agent.status(), Some(ConversationStatus::Pending));
+        assert_eq!(IAgentConnector::status(&agent), Some(ConversationStatus::Pending));
         assert!(matches!(rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)));
     }
 
@@ -695,7 +776,7 @@ mod tests {
         let agent = AionrsAgentManager::new("conv-err".into(), "/project".into(), make_test_config(), None)
             .await
             .unwrap();
-        let mut rx = IAgentTask::subscribe(&agent);
+        let mut rx = IAgentConnector::subscribe_legacy(&agent);
 
         agent.runtime.emit_error("test error");
         // emit_error sets status to Finished, so emit_finish is a no-op here.

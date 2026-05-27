@@ -156,6 +156,9 @@ impl IConversationService for MockConvService {
     async fn cancel(&self, _user_id: &str, _id: &str) -> Result<(), AppError> {
         Ok(())
     }
+    async fn cancel_idle(&self, _id: &str) -> Result<(), AppError> {
+        Ok(())
+    }
     fn status(&self, id: &str) -> ConvServiceStatus {
         self.statuses
             .lock()
@@ -166,6 +169,9 @@ impl IConversationService for MockConvService {
     }
     fn subscribe(&self, _id: &str) -> broadcast::Receiver<ConversationEvent> {
         self.event_tx.subscribe()
+    }
+    fn collect_idle(&self, _threshold_ms: i64) -> Vec<String> {
+        Vec::new()
     }
 }
 
