@@ -142,7 +142,7 @@ impl CronService {
             job.enabled = enabled;
         }
         if let Some(schedule_dto) = &req.schedule {
-            let schedule = schedule_from_dto(schedule_dto);
+            let schedule = schedule_from_dto_with_existing_timezone(schedule_dto, &job.schedule);
             validate_schedule(&schedule)?;
             job.schedule = schedule;
         }
@@ -1220,6 +1220,20 @@ fn build_update_params(job: &CronJob, req: &UpdateCronJobRequest) -> UpdateCronJ
     }
 }
 
+fn schedule_from_dto_with_existing_timezone(dto: &CronScheduleDto, existing: &CronSchedule) -> CronSchedule {
+    match dto {
+        CronScheduleDto::Cron { expr, tz, description } => CronSchedule::Cron {
+            expr: expr.clone(),
+            tz: tz.clone().or_else(|| match existing {
+                CronSchedule::Cron { tz, .. } => tz.clone(),
+                _ => None,
+            }),
+            description: description.clone(),
+        },
+        _ => schedule_from_dto(dto),
+    }
+}
+
 fn schedule_to_row_fields(schedule: &CronSchedule) -> (String, String, Option<String>, Option<String>) {
     match schedule {
         CronSchedule::At { at_ms, description } => ("at".to_owned(), at_ms.to_string(), None, description.clone()),
@@ -1442,6 +1456,31 @@ mod tests {
         assert_eq!(params.schedule_kind.as_deref(), Some("cron"));
         assert_eq!(params.schedule_value.as_deref(), Some("0 0 9 * * *"));
         assert!(params.next_run_at.is_some());
+    }
+
+    #[test]
+    fn preserves_existing_cron_timezone_when_update_omits_tz() {
+        let existing = CronSchedule::Cron {
+            expr: "0 0 9 * * *".into(),
+            tz: Some("Asia/Shanghai".into()),
+            description: Some("daily".into()),
+        };
+        let dto = CronScheduleDto::Cron {
+            expr: "0 30 9 * * *".into(),
+            tz: None,
+            description: Some("daily".into()),
+        };
+
+        let schedule = schedule_from_dto_with_existing_timezone(&dto, &existing);
+
+        assert_eq!(
+            schedule,
+            CronSchedule::Cron {
+                expr: "0 30 9 * * *".into(),
+                tz: Some("Asia/Shanghai".into()),
+                description: Some("daily".into()),
+            }
+        );
     }
 
     #[test]

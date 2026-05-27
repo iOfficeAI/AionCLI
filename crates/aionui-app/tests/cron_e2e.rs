@@ -295,6 +295,38 @@ async fn cj9_update_schedule_type() {
     assert!(json["data"]["state"]["next_run_at_ms"].as_i64().is_some());
 }
 
+#[tokio::test]
+async fn cj9b_update_schedule_preserves_existing_timezone_when_omitted() {
+    let (mut app, services) = build_app().await;
+    let (token, csrf) = setup_and_login(&mut app, &services, "admin", "StrongP@ss1").await;
+
+    let created = create_job(
+        &mut app,
+        &token,
+        &csrf,
+        json!({
+            "name": "Schedule Change With Timezone",
+            "schedule": { "kind": "cron", "expr": "0 0 9 * * *", "tz": "Asia/Shanghai" },
+            "message": "cron message",
+            "conversation_id": "conv_1",
+            "agent_type": "acp",
+            "created_by": "user"
+        }),
+    )
+    .await;
+    let job_id = created["id"].as_str().unwrap();
+
+    let update_body = json!({"schedule": {"kind": "cron", "expr": "0 30 9 * * *"}});
+    let req = json_with_token("PUT", &format!("/api/cron/jobs/{job_id}"), update_body, &token, &csrf);
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let json = body_json(resp).await;
+    assert_eq!(json["data"]["schedule"]["kind"], "cron");
+    assert_eq!(json["data"]["schedule"]["expr"], "0 30 9 * * *");
+    assert_eq!(json["data"]["schedule"]["tz"], "Asia/Shanghai");
+}
+
 // ── CJ-10: Update nonexistent ────────────────────────────────────────
 
 #[tokio::test]
