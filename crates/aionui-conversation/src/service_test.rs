@@ -35,6 +35,7 @@ use aionui_realtime::EventBroadcaster;
 use serde_json::json;
 use tokio::sync::broadcast;
 
+use crate::conv_service_trait::{ConversationEvent, IConversationService};
 use crate::service::ConversationService;
 use crate::skill_resolver::FixedSkillResolver;
 
@@ -511,11 +512,11 @@ async fn create_returns_conversation_with_defaults() {
 
     assert!(!resp.id.is_empty());
     assert_eq!(resp.r#type, AgentType::Acp);
-    // Phase 2: status is derived from the runtime ConvActor. A freshly
-    // created conversation has no actor entry → maps to legacy `Finished`.
-    // (The `Pending` variant will go away with `aionui_common::ConversationStatus`
-    // in Phase 5/6.)
-    assert_eq!(resp.status, ConversationStatus::Finished);
+    // A freshly created conversation has no ConvActor entry; the response
+    // status falls back to the DB row's "pending" so the wire format keeps
+    // signalling never-opened to the frontend. The actor-derived status
+    // takes over on first turn.
+    assert_eq!(resp.status, ConversationStatus::Pending);
     assert_eq!(resp.source, Some(ConversationSource::Aionui));
     assert!(!resp.pinned);
     assert!(resp.pinned_at.is_none());
@@ -929,13 +930,11 @@ async fn reset_sets_status_to_pending() {
     svc.reset("user_1", &conv.id).await.unwrap();
 
     let fetched = svc.get("user_1", &conv.id).await.unwrap();
-    // Phase 2: response.status is derived from ConvActor (no actor → Finished).
-    // The historical reset-writes-status semantics still updates DB.status to
-    // "pending" on disk for legacy observers — but the public response shape
-    // now reflects the runtime state. The test name is preserved for git
-    // archeology; rename when `aionui_common::ConversationStatus` is dropped
-    // in Phase 5/6.
-    assert_eq!(fetched.status, ConversationStatus::Finished);
+    // reset() writes DB.status="pending" and clears any actor; with no
+    // actor entry the response status falls back to the DB column, so the
+    // wire format reports `Pending`. Rename the test when
+    // `aionui_common::ConversationStatus` is dropped in Phase 5/6.
+    assert_eq!(fetched.status, ConversationStatus::Pending);
 }
 
 #[tokio::test]
@@ -1602,36 +1601,32 @@ async fn send_message_persists_factory_resolved_workspace() {
 }
 
 #[tokio::test]
-async fn send_message_continues_cron_system_responses() {
+async fn send_message_is_single_turn_with_system_responses() {
+    // Phase 4: conv layer no longer chains continuations. A single
+    // `send_message` dispatches exactly ONE turn. `system_responses`
+    // captured by the relay are forwarded via the `TurnCompleted` event
+    // for biz-layer subscribers (e.g. `CronContinuationOrchestrator`)
+    // to act on — the conv layer must NOT re-enter `send_message`
+    // itself.
     let (svc, broadcaster, _repo, _default_task_mgr) = make_service();
     let task_mgr = Arc::new(MockTaskManager::new());
     let conv = svc.create("user_1", make_create_req()).await.unwrap();
 
     let scripted_agent = Arc::new(ScriptedAgent::new(
         &conv.id,
-        vec![
-            vec![
-                AgentStreamEvent::Text(TextEventData {
-                    content: "I'll check. [CRON_LIST]".into(),
-                }),
-                AgentStreamEvent::Finish(FinishEventData::default()),
-            ],
-            vec![
-                AgentStreamEvent::Text(TextEventData {
-                    content: "[CRON_CREATE]\nname: Daily Greeting\nschedule: 0 9 * * *\nschedule_description: Daily at 9:00 AM\nmessage: Say good morning\n[/CRON_CREATE]".into(),
-                }),
-                AgentStreamEvent::Finish(FinishEventData::default()),
-            ],
-            vec![
-                AgentStreamEvent::Text(TextEventData {
-                    content: "Done. The task is scheduled.".into(),
-                }),
-                AgentStreamEvent::Finish(FinishEventData::default()),
-            ],
-        ],
+        vec![vec![
+            AgentStreamEvent::Text(TextEventData {
+                content: "I'll check. [CRON_LIST]".into(),
+            }),
+            AgentStreamEvent::Finish(FinishEventData::default()),
+        ]],
     ));
     task_mgr.insert_agent(&conv.id, AgentInstance::Mock(scripted_agent.clone()));
     svc.with_cron_service(Some(Arc::new(MockCronContinuationService)));
+
+    // Subscribe BEFORE send so we don't miss TurnStarted/TurnCompleted.
+    // Use the trait surface to mirror how biz-layer subscribers do it.
+    let mut rx = IConversationService::subscribe(&svc, &conv.id);
 
     let task_mgr_dyn: Arc<dyn IWorkerTaskManager> = task_mgr.clone();
     let req: SendMessageRequest = serde_json::from_value(json!({
@@ -1641,9 +1636,10 @@ async fn send_message_continues_cron_system_responses() {
 
     svc.send_message("user_1", &conv.id, req, &task_mgr_dyn).await.unwrap();
 
+    // Wait for exactly ONE send through to the agent.
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
-            if scripted_agent.sent_contents().len() >= 3 {
+            if !scripted_agent.sent_contents().is_empty() {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -1652,15 +1648,40 @@ async fn send_message_continues_cron_system_responses() {
     .await
     .unwrap();
 
-    let sends = scripted_agent.sent_contents();
-    assert_eq!(sends.len(), 3);
-    assert_eq!(sends[0], "Create the task now");
-    assert_eq!(sends[1], "[System: No scheduled tasks]");
-    assert_eq!(sends[2], "[System: Created cron job 'Daily Greeting']");
+    // Drain the lifecycle event stream: TurnStarted → TurnCompleted.
+    let evt1 = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(evt1, ConversationEvent::TurnStarted { .. }));
+
+    let evt2 = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let captured_responses = match evt2 {
+        ConversationEvent::TurnCompleted { system_responses, .. } => system_responses,
+        other => panic!("expected TurnCompleted, got {other:?}"),
+    };
+    assert_eq!(
+        captured_responses,
+        vec!["[System: No scheduled tasks]".to_string()],
+        "TurnCompleted must surface the relay-captured system_responses"
+    );
+
+    // CRUCIAL: conv layer must not chain a second turn. Give the
+    // would-be loop time to fire and verify nothing else arrives.
+    let next = tokio::time::timeout(std::time::Duration::from_millis(150), rx.recv()).await;
+    assert!(next.is_err(), "conv layer must not chain a second turn (got {next:?})");
+    assert_eq!(
+        scripted_agent.sent_contents().len(),
+        1,
+        "send_message must invoke the agent exactly once per call"
+    );
 
     let finished = svc.get("user_1", &conv.id).await.unwrap();
     // Phase 2 Task 6: response.status is derived from the runtime ConvActor.
-    // After the turn loop exits, the actor is `Idle`, which the legacy
+    // After the turn task exits, the actor is `Idle`, which the legacy
     // three-state mapping flattens to `Finished` for client compat.
     assert_eq!(finished.status, ConversationStatus::Finished);
 
@@ -2406,10 +2427,12 @@ async fn response_status_reflects_runtime_not_db() {
     let (svc, _broadcaster, repo, _task_mgr) = make_service();
     let conv = svc.create("user_1", make_create_req()).await.unwrap();
 
-    // Corrupt the DB.status column to "running". Pre-Phase-2 code would
-    // surface that string as the response status. Phase 2 reads from the
-    // ConvActor, which has no entry for this conversation, so the
-    // response must say `Finished`.
+    // Spin up an actor in Idle so the response is no longer reading from
+    // row.status; then corrupt DB.status to "running" and verify the
+    // actor's view (Idle → Finished) wins over the corrupted column.
+    let actor = svc.get_or_create_actor(&conv.id);
+    actor.mark_idle().await;
+
     let corrupt = ConversationRowUpdate {
         status: Some("running".into()),
         ..Default::default()
@@ -2420,12 +2443,10 @@ async fn response_status_reflects_runtime_not_db() {
     assert_eq!(
         resp.status,
         ConversationStatus::Finished,
-        "Phase 2: status comes from ConvActor (Idle → Finished), not DB.status"
+        "Phase 2: when an actor exists, its state wins over DB.status"
     );
 
     // Now begin a turn on the actor and assert the response flips to Running.
-    let actor = svc.get_or_create_actor(&conv.id);
-    actor.mark_idle().await;
     let _held = actor.begin_turn("msg-running".into()).await.unwrap();
 
     let resp = svc.get("user_1", &conv.id).await.unwrap();

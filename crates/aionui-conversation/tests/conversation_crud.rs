@@ -132,8 +132,9 @@ async fn t1_1_create_with_defaults() {
 
     assert!(!resp.id.is_empty());
     assert_eq!(resp.r#type, AgentType::Acp);
-    // Phase 2: response.status is derived from ConvActor (no actor → Finished).
-    assert_eq!(resp.status, ConversationStatus::Finished);
+    // Newly-created rows have no ConvActor entry, so the response status
+    // falls back to the legacy DB.status="pending".
+    assert_eq!(resp.status, ConversationStatus::Pending);
     assert_eq!(resp.source, Some(ConversationSource::Aionui));
     assert!(!resp.pinned);
     assert!(resp.pinned_at.is_none());
@@ -600,8 +601,9 @@ async fn full_lifecycle_create_get_update_delete() {
 
     // Create
     let created = svc.create(USER_ID, make_create_req()).await.unwrap();
-    // Phase 2: response.status is derived from ConvActor (Idle → Finished).
-    assert_eq!(created.status, ConversationStatus::Finished);
+    // Newly-created rows have no ConvActor entry, so the response status
+    // falls back to the legacy DB.status="pending".
+    assert_eq!(created.status, ConversationStatus::Pending);
 
     // Get
     let fetched = svc.get(USER_ID, &created.id).await.unwrap();

@@ -36,8 +36,6 @@ use crate::stream_relay::StreamRelay;
 use dashmap::DashMap;
 use std::sync::RwLock;
 
-const MAX_CRON_CONTINUATIONS_PER_TURN: usize = 4;
-
 #[derive(Clone)]
 pub struct ConversationService {
     workspace_root: std::path::PathBuf,
@@ -1116,79 +1114,62 @@ impl ConversationService {
         // correlation id so DB row, WebSocket stream events, and
         // agent-internal tracing all share one identifier per turn.
         let user_msg_id_ret = user_msg_id.clone();
+        let event_tx = actor.event_tx.clone();
+        // Phase 4: `send` is single-turn. The cron-style continuation
+        // loop has moved out of the conv layer into the biz-layer
+        // `CronContinuationOrchestrator`, which observes the
+        // `TurnCompleted` event below and decides whether to issue a
+        // follow-up `send`. The conv layer no longer interprets
+        // `system_responses` — it just forwards them.
+        //
         // `turn_handle` is moved into the spawned task so its `Drop` runs
-        // when the turn loop exits — that's what releases the actor's
+        // when the turn task exits — that's what releases the actor's
         // running slot back to Idle and unblocks any waiting `cancel()`.
         tokio::spawn(async move {
             let _turn_guard = turn_handle;
-            let first_turn_msg_id = Self::mint_msg_id();
-            let mut pending_send = Some((
-                SendMessageData {
-                    content: req.content,
-                    msg_id: first_turn_msg_id.clone(),
-                    files: req.files,
-                    inject_skills: req.inject_skills,
-                },
-                first_turn_msg_id,
-            ));
-            let mut continuation_count = 0usize;
+            let turn_msg_id = Self::mint_msg_id();
+            let send_data = SendMessageData {
+                content: req.content,
+                msg_id: turn_msg_id.clone(),
+                files: req.files,
+                inject_skills: req.inject_skills,
+            };
 
-            while let Some((current_send, msg_id)) = pending_send.take() {
-                if continuation_count >= MAX_CRON_CONTINUATIONS_PER_TURN {
-                    warn!(
-                        conversation_id = %conv_id,
-                        max = MAX_CRON_CONTINUATIONS_PER_TURN,
-                        "Reached cron continuation limit; ending turn early"
-                    );
-                    break;
+            let relay = StreamRelay::new(
+                conv_id.clone(),
+                turn_msg_id.clone(),
+                user_id_owned.clone(),
+                Arc::clone(&repo),
+                Arc::clone(&broadcaster),
+                cron_service.clone(),
+            );
+
+            let rx = agent.subscribe();
+            let send_agent = agent.clone();
+            let conv_id_send = conv_id.clone();
+            // 1. Send the message to the agent and concurrently run the relay to stream events.
+            tokio::spawn(async move {
+                if let Err(e) = send_agent.send_message(send_data).await {
+                    error!(conversation_id = %conv_id_send, error = %ErrorChain(&e), "Agent send_message failed");
                 }
+            });
+            // 2. Wait for the agent to process the message and complete the turn, while the relay streams events in real time.
+            let outcome = relay.consume(rx).await;
 
-                let relay = StreamRelay::new(
-                    conv_id.clone(),
-                    msg_id,
-                    user_id_owned.clone(),
-                    Arc::clone(&repo),
-                    Arc::clone(&broadcaster),
-                    cron_service.clone(),
-                )
-                .with_turn_completion(false);
-
-                let rx = agent.subscribe();
-                let send_agent = agent.clone();
-                let conv_id_send = conv_id.clone();
-                // 1. Send the message to the agent and concurrently run the relay to stream events.
-                tokio::spawn(async move {
-                    if let Err(e) = send_agent.send_message(current_send).await {
-                        error!(conversation_id = %conv_id_send, error = %ErrorChain(&e), "Agent send_message failed");
-                    }
-                });
-                // 2. Wait for the agent to process the message and complete the turn, while the relay streams events in real time.
-                let outcome = relay.consume(rx).await;
-
-                if let Some(session_key) = agent.get_session_key() {
-                    persist_session_key(&repo, &conv_id, &session_key).await;
-                }
-
-                if outcome.system_responses.is_empty() {
-                    break;
-                }
-                continuation_count += 1;
-                let next_turn_msg_id = Self::mint_msg_id();
-                pending_send = Some((
-                    SendMessageData {
-                        content: outcome.system_responses.join("\n"),
-                        msg_id: next_turn_msg_id.clone(),
-                        files: vec![],
-                        inject_skills: vec![],
-                    },
-                    next_turn_msg_id,
-                ));
+            if let Some(session_key) = agent.get_session_key() {
+                persist_session_key(&repo, &conv_id, &session_key).await;
             }
 
-            StreamRelay::complete_conversation(&repo, &broadcaster, &conv_id).await;
+            // Surface the turn boundary to biz-layer subscribers. Best
+            // effort: subscribers may have dropped, which is fine.
+            let _ = event_tx.send(crate::conv_service_trait::ConversationEvent::TurnCompleted {
+                msg_id: turn_msg_id,
+                system_responses: outcome.system_responses,
+            });
+            // TurnHandle drops at scope end → ConvActor transitions to Idle.
         });
 
-        info!(msg_id = %user_msg_id_ret, "Message dispatched, stream relay started");
+        info!(msg_id = %user_msg_id_ret, "Message dispatched, single-turn relay started");
         Ok(user_msg_id_ret)
     }
 

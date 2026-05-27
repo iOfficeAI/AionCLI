@@ -61,7 +61,6 @@ pub struct StreamRelay {
     repo: Arc<dyn IConversationRepository>,
     broadcaster: Arc<dyn EventBroadcaster>,
     cron_service: Option<Arc<dyn ICronService>>,
-    complete_turn: bool,
 }
 
 impl StreamRelay {
@@ -80,13 +79,7 @@ impl StreamRelay {
             repo,
             broadcaster,
             cron_service,
-            complete_turn: true,
         }
-    }
-
-    pub fn with_turn_completion(mut self, enabled: bool) -> Self {
-        self.complete_turn = enabled;
-        self
     }
 
     /// Run the relay loop. Consumes `self` and runs until the agent stream ends.
@@ -173,9 +166,7 @@ impl StreamRelay {
                         .await;
                         self.forward_to_websocket(&event);
                         let outcome = self.finalize(&full_text_buffer, &text_segments, &event).await;
-                        if self.complete_turn {
-                            Self::complete_conversation(&self.repo, &self.broadcaster, &self.conversation_id).await;
-                        }
+                        Self::complete_conversation(&self.repo, &self.broadcaster, &self.conversation_id).await;
                         break outcome;
                     }
                     AgentStreamEvent::ToolCall(data) => {
@@ -222,9 +213,7 @@ impl StreamRelay {
                             &AgentStreamEvent::Finish(aionui_ai_agent::protocol::events::FinishEventData::default()),
                         )
                         .await;
-                    if self.complete_turn {
-                        Self::complete_conversation(&self.repo, &self.broadcaster, &self.conversation_id).await;
-                    }
+                    Self::complete_conversation(&self.repo, &self.broadcaster, &self.conversation_id).await;
                     break outcome;
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {

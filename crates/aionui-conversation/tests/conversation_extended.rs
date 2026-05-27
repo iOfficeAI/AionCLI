@@ -175,8 +175,9 @@ async fn t7_1_reset_clears_messages_and_status() {
     svc.reset(USER_ID, &conv.id).await.unwrap();
 
     let fetched = svc.get(USER_ID, &conv.id).await.unwrap();
-    // Phase 2: response.status comes from ConvActor (Idle → Finished).
-    assert_eq!(fetched.status, ConversationStatus::Finished);
+    // reset() writes DB.status="pending" and clears any actor; with no
+    // actor entry the response status falls back to the DB column.
+    assert_eq!(fetched.status, ConversationStatus::Pending);
 
     let messages = svc
         .list_messages(USER_ID, &conv.id, ListMessagesQuery::default())

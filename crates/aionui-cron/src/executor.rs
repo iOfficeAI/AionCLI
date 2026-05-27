@@ -7,7 +7,7 @@ use aionui_ai_agent::types::{BuildTaskOptions, SendMessageData};
 use aionui_ai_agent::{AgentRegistry, AgentStreamEvent};
 use aionui_api_types::{CreateConversationRequest, SendMessageRequest};
 use aionui_common::{AgentType, ProviderWithModel, now_ms};
-use aionui_conversation::ConversationService;
+use aionui_conversation::{ConversationService, IConversationService};
 use aionui_db::models::MessageRow;
 use aionui_db::{ConversationRowUpdate, IConversationRepository};
 use aionui_realtime::EventBroadcaster;
@@ -17,6 +17,7 @@ use tracing::{error, info, warn};
 
 use crate::artifacts::{broadcast_artifact, build_cron_trigger_artifact};
 use crate::busy_guard::CronBusyGuard;
+use crate::continuation::{CronContinuationOrchestrator, CronTurnContext, DEFAULT_MAX_CRON_CONTINUATIONS};
 use crate::error::CronError;
 use crate::prompt::{
     build_existing_conversation_prompt, build_new_conversation_prompt_with_skill_suggest,
@@ -69,6 +70,11 @@ pub struct JobExecutor {
     broadcaster: Arc<dyn EventBroadcaster>,
     agent_registry: Arc<AgentRegistry>,
     skill_suggest_detector: SkillSuggestDetector,
+    /// Cap on follow-up `send`s the `CronContinuationOrchestrator` will
+    /// issue per cron-triggered turn. Phase 4 moved this knob from the
+    /// conv layer into the cron executor. See
+    /// `aionui_cron::continuation::DEFAULT_MAX_CRON_CONTINUATIONS`.
+    cron_max_continuations: usize,
 }
 
 impl JobExecutor {
@@ -95,7 +101,16 @@ impl JobExecutor {
             broadcaster,
             agent_registry,
             skill_suggest_detector,
+            cron_max_continuations: DEFAULT_MAX_CRON_CONTINUATIONS,
         }
+    }
+
+    /// Override the maximum number of continuation follow-ups per cron
+    /// turn. Primarily used by tests; production callers should use the
+    /// default (4).
+    pub fn with_max_continuations(mut self, max: usize) -> Self {
+        self.cron_max_continuations = max;
+        self
     }
 
     pub async fn execute(&self, job: &CronJob) -> ExecutionResult {
@@ -583,6 +598,25 @@ impl JobExecutor {
             inject_skills: skill_names.clone(),
             hidden: true,
         };
+
+        // Phase 4: spawn the per-turn continuation orchestrator BEFORE
+        // dispatching the cron prompt so it cannot miss the
+        // `TurnCompleted` event the conv layer emits at end of turn.
+        // The orchestrator decides whether to chain follow-up sends
+        // when the agent's response carries cron-style system_responses
+        // (e.g. "[System: Created cron job '…']") — the conv layer no
+        // longer interprets those.
+        let orch_service: Arc<dyn IConversationService> = self.conversation_service.clone();
+        let orch_rx = orch_service.subscribe(conversation_id);
+        let orchestrator = CronContinuationOrchestrator::new(
+            Arc::clone(&orch_service),
+            CronTurnContext {
+                user_id: user_id.clone(),
+                conversation_id: conversation_id.to_owned(),
+                max_continuations: self.cron_max_continuations,
+            },
+        );
+        tokio::spawn(orchestrator.run(orch_rx));
 
         match self
             .conversation_service
@@ -1162,6 +1196,7 @@ async fn persist_legacy_skill_file(data_dir: &Path, job: &CronJob, raw_content: 
 }
 
 #[cfg(test)]
+#[allow(deprecated)] // Test fixtures still construct ConversationRow.status; the column is removed in Phase 5/6.
 mod tests {
     use super::*;
     use crate::types::{CreatedBy, CronAgentConfig, CronSchedule};
