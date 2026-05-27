@@ -260,13 +260,12 @@ impl AgentInstance {
 
     /// Pending confirmation items for this task.
     ///
-    /// ACP currently tracks permission prompts inline through the
-    /// permission router (not surfaced here), so returns empty.
-    /// Aionrs / OpenClaw / Remote maintain inline confirmation lists.
+    /// ACP surfaces pending permission prompts through its permission
+    /// router. Aionrs / OpenClaw / Remote maintain inline confirmation lists.
     /// Nanobot has no concept of confirmations.
     pub fn get_confirmations(&self) -> Vec<aionui_common::Confirmation> {
         match self {
-            Self::Acp(_) => Vec::new(),
+            Self::Acp(m) => m.get_confirmations(),
             Self::Aionrs(m) => m.get_confirmations(),
             Self::OpenClaw(m) => m.get_confirmations(),
             Self::Nanobot(_) => Vec::new(),

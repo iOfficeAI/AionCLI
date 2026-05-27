@@ -720,6 +720,12 @@ impl AcpAgentManager {
         })
     }
 
+    /// Pending ACP permission prompts recoverable through the conversation
+    /// confirmation API.
+    pub fn get_confirmations(&self) -> Vec<aionui_common::Confirmation> {
+        self.permission_router.get_confirmations()
+    }
+
     /// Submit a permission response for a pending tool call. ACP confirms
     /// always carry an `option_id`; `always_allow` is consumed by the CLI
     /// and is not reflected in the local approval memory (the ACP CLI
