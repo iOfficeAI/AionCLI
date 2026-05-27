@@ -170,6 +170,7 @@ impl SkillSuggestDetector {
 }
 
 #[cfg(test)]
+#[allow(deprecated)] // Test fixtures still construct ConversationRow.status; the column is removed in Phase 5/6.
 mod tests {
     use super::*;
     use aionui_db::models::ConversationRow;

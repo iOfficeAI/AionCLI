@@ -49,6 +49,24 @@ Biz-layer orchestration lives outside this crate. If a new conv-layer
 method needs biz context, expose a hook instead and let the biz layer
 register a callback.
 
+### 5. `send` is single-turn
+
+`IConversationService::send` dispatches exactly one turn and emits
+`ConversationEvent::TurnCompleted { msg_id, system_responses }` when
+the relay finishes. Multi-turn chaining (cron continuations,
+agent-self-prompted follow-ups, etc.) is a biz-layer concern —
+`aionui-cron`'s `CronContinuationOrchestrator` is the canonical
+subscriber. Do NOT add a continuation loop, retry loop, or pending-send
+queue inside the conv-layer spawn task.
+
+CI grep:
+
+```bash
+rg "MAX_.*CONTINUATIONS|continuation_count|pending_send" crates/aionui-conversation/src
+```
+
+MUST return zero matches.
+
 ## Module layout
 
 | Module | Responsibility |

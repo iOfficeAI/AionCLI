@@ -35,11 +35,29 @@ pub enum ConversationStatus {
 /// (cron, team) need.
 #[derive(Debug, Clone)]
 pub enum ConversationEvent {
-    TurnStarted { msg_id: String },
-    Chunk { msg_id: String, payload: serde_json::Value },
-    TurnCompleted { msg_id: String },
-    TurnError { msg_id: String, error: String },
-    TurnCancelled { msg_id: String },
+    TurnStarted {
+        msg_id: String,
+    },
+    Chunk {
+        msg_id: String,
+        payload: serde_json::Value,
+    },
+    /// A turn finished. `system_responses` carries any cron-style
+    /// continuation hints captured by the relay; the conv layer does
+    /// NOT interpret them — biz-layer subscribers (e.g. the cron
+    /// orchestrator) decide whether to chain a follow-up `send`.
+    /// Empty for ordinary user-initiated turns.
+    TurnCompleted {
+        msg_id: String,
+        system_responses: Vec<String>,
+    },
+    TurnError {
+        msg_id: String,
+        error: String,
+    },
+    TurnCancelled {
+        msg_id: String,
+    },
 }
 
 /// Public conv-layer trait. Biz-layer callers (team / cron / assistant)
@@ -84,5 +102,19 @@ mod tests {
     #[test]
     fn status_idle_default() {
         assert_eq!(ConversationStatus::default(), ConversationStatus::Idle);
+    }
+
+    #[test]
+    fn turn_completed_carries_system_responses() {
+        let evt = ConversationEvent::TurnCompleted {
+            msg_id: "m1".into(),
+            system_responses: vec!["next-prompt".into()],
+        };
+        match evt {
+            ConversationEvent::TurnCompleted { system_responses, .. } => {
+                assert_eq!(system_responses, vec!["next-prompt".to_owned()]);
+            }
+            _ => panic!("expected TurnCompleted variant"),
+        }
     }
 }

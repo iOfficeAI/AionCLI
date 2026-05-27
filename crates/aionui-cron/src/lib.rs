@@ -1,6 +1,7 @@
 //! Scheduled job engine: cron scheduler, executor, and lifecycle event emitter.
 mod artifacts;
 pub mod busy_guard;
+pub mod continuation;
 pub mod error;
 pub mod events;
 pub mod executor;
@@ -13,6 +14,7 @@ pub mod skill_suggest;
 pub mod state;
 pub mod types;
 
+pub use continuation::{CronContinuationOrchestrator, CronTurnContext, DEFAULT_MAX_CRON_CONTINUATIONS};
 pub use events::CronEventEmitter;
 pub use routes::cron_routes;
 pub use state::CronRouterState;
