@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.14](https://github.com/iOfficeAI/AionCore/compare/v0.1.13...v0.1.14) (2026-05-27)
+
+
+### Bug Fixes
+
+* preserve cron timezone on legacy schedule updates ([#344](https://github.com/iOfficeAI/AionCore/issues/344)) ([6328b76](https://github.com/iOfficeAI/AionCore/commit/6328b7683133a6f74e87add6c11386ebbb0dad49))
+* **startup:** add backend readiness diagnostics ([#346](https://github.com/iOfficeAI/AionCore/issues/346)) ([ae8e01c](https://github.com/iOfficeAI/AionCore/commit/ae8e01c927118779bbad64da42a6b81aef27e9c9))
+
+
+### Code Refactoring
+
+* four-layer architecture (connect / conv / biz) ([#349](https://github.com/iOfficeAI/AionCore/issues/349)) ([2a11285](https://github.com/iOfficeAI/AionCore/commit/2a11285e316ffc7f0076d385dad8e09a4af2de4b))
+
 ## [0.1.13](https://github.com/iOfficeAI/AionCore/compare/v0.1.12...v0.1.13) (2026-05-26)
 
 
