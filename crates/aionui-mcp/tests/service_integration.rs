@@ -5,7 +5,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use aionui_api_types::{BatchImportMcpServersRequest, CreateMcpServerRequest, McpTransport, UpdateMcpServerRequest};
+use aionui_api_types::{
+    BatchImportMcpServersRequest, CreateMcpServerRequest, ImportMcpServerRequest, McpTransport, UpdateMcpServerRequest,
+};
 use aionui_db::SqliteMcpServerRepository;
 use aionui_mcp::{McpConfigService, McpError};
 
@@ -39,6 +41,35 @@ fn http_req(name: &str) -> CreateMcpServerRequest {
         },
         original_json: None,
         builtin: false,
+    }
+}
+
+fn stdio_import_req(name: &str) -> ImportMcpServerRequest {
+    ImportMcpServerRequest {
+        name: name.to_owned(),
+        description: Some("test".to_owned()),
+        transport: McpTransport::Stdio {
+            command: "npx".into(),
+            args: vec!["-y".into(), "@test/server".into()],
+            env: HashMap::new(),
+        },
+        original_json: None,
+        builtin: false,
+        enabled: None,
+    }
+}
+
+fn http_import_req(name: &str) -> ImportMcpServerRequest {
+    ImportMcpServerRequest {
+        name: name.to_owned(),
+        description: None,
+        transport: McpTransport::Http {
+            url: "https://example.com/mcp".into(),
+            headers: HashMap::from([("Auth".into(), "Bearer tok".into())]),
+        },
+        original_json: None,
+        builtin: false,
+        enabled: None,
     }
 }
 
@@ -282,8 +313,8 @@ async fn batch_import_creates_and_upserts() {
 
     let req = BatchImportMcpServersRequest {
         servers: vec![
-            http_req("existing"), // upsert
-            stdio_req("new"),     // create
+            http_import_req("existing"), // upsert
+            stdio_import_req("new"),     // create
         ],
     };
     let results = svc.batch_import(req).await.unwrap();
@@ -291,4 +322,24 @@ async fn batch_import_creates_and_upserts() {
 
     let all = svc.list_servers().await.unwrap();
     assert_eq!(all.len(), 2);
+}
+
+#[tokio::test]
+async fn batch_import_preserves_enabled_in_database() {
+    let svc = make_service().await;
+    let mut req = stdio_import_req("enabled-db-mcp");
+    req.enabled = Some(true);
+
+    let result = svc
+        .batch_import(BatchImportMcpServersRequest { servers: vec![req] })
+        .await
+        .unwrap();
+
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].name, "enabled-db-mcp");
+    assert!(result[0].enabled);
+
+    let listed = svc.list_servers().await.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert!(listed[0].enabled);
 }

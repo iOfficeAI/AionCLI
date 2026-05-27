@@ -4,6 +4,7 @@ use aionui_api_types::{
     BatchImportMcpServersRequest, CreateMcpServerRequest, McpServerResponse, UpdateMcpServerRequest,
 };
 use aionui_db::{CreateMcpServerParams, IMcpServerRepository, UpdateMcpServerParams};
+use tracing::info;
 
 use crate::error::McpError;
 use crate::types::{McpServer, McpServerTransport};
@@ -175,7 +176,7 @@ impl McpConfigService {
             .map(|(server_req, (transport, config_json))| CreateMcpServerParams {
                 name: &server_req.name,
                 description: server_req.description.as_deref(),
-                enabled: false,
+                enabled: server_req.enabled.unwrap_or(false),
                 transport_type: transport.transport_type(),
                 transport_config: config_json.as_str(),
                 tools: None,
@@ -185,6 +186,12 @@ impl McpConfigService {
             .collect();
 
         let rows = self.repo.batch_upsert(&create_params).await?;
+        info!(
+            requested_count = req.servers.len(),
+            imported_count = rows.len(),
+            enabled_count = rows.iter().filter(|row| row.enabled).count(),
+            "batch imported MCP servers"
+        );
         rows.into_iter()
             .map(|row| McpServer::from_row(row).map(McpServer::into_response))
             .collect()
@@ -198,7 +205,7 @@ impl McpConfigService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aionui_api_types::McpTransport;
+    use aionui_api_types::{ImportMcpServerRequest, McpTransport};
     use aionui_common::{McpServerStatus, TimestampMs};
     use aionui_db::models::McpServerRow;
     use aionui_db::{CreateMcpServerParams, DbError, UpdateMcpServerParams};
@@ -420,6 +427,35 @@ mod tests {
             },
             original_json: None,
             builtin: false,
+        }
+    }
+
+    fn stdio_import_req(name: &str) -> ImportMcpServerRequest {
+        ImportMcpServerRequest {
+            name: name.to_owned(),
+            description: Some("test server".to_owned()),
+            transport: McpTransport::Stdio {
+                command: "npx".into(),
+                args: vec!["-y".into(), "@test/server".into()],
+                env: HashMap::new(),
+            },
+            original_json: None,
+            builtin: false,
+            enabled: None,
+        }
+    }
+
+    fn http_import_req(name: &str) -> ImportMcpServerRequest {
+        ImportMcpServerRequest {
+            name: name.to_owned(),
+            description: None,
+            transport: McpTransport::Http {
+                url: "https://example.com/mcp".into(),
+                headers: HashMap::new(),
+            },
+            original_json: None,
+            builtin: false,
+            enabled: None,
         }
     }
 
@@ -696,7 +732,7 @@ mod tests {
     async fn batch_import_creates_new_servers() {
         let svc = make_service();
         let req = BatchImportMcpServersRequest {
-            servers: vec![stdio_create_req("a"), http_create_req("b")],
+            servers: vec![stdio_import_req("a"), http_import_req("b")],
         };
         let results = svc.batch_import(req).await.unwrap();
         assert_eq!(results.len(), 2);
@@ -712,8 +748,8 @@ mod tests {
 
         let req = BatchImportMcpServersRequest {
             servers: vec![
-                http_create_req("existing"),   // update
-                stdio_create_req("brand-new"), // create
+                http_import_req("existing"),   // update
+                stdio_import_req("brand-new"), // create
             ],
         };
         let results = svc.batch_import(req).await.unwrap();
@@ -721,6 +757,20 @@ mod tests {
 
         let all = svc.list_servers().await.unwrap();
         assert_eq!(all.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn batch_import_preserves_enabled_state() {
+        let svc = make_service();
+        let mut req = stdio_import_req("enabled-mcp");
+        req.enabled = Some(true);
+        let result = svc
+            .batch_import(BatchImportMcpServersRequest { servers: vec![req] })
+            .await
+            .unwrap();
+
+        assert_eq!(result[0].name, "enabled-mcp");
+        assert!(result[0].enabled);
     }
 
     #[tokio::test]

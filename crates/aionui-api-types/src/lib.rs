@@ -86,10 +86,11 @@ pub use file::{
 };
 pub use lifecycle::{GitHubReleaseAsset, SystemInfoResponse, UpdateCheckRequest, UpdateCheckResult, UpdateReleaseInfo};
 pub use mcp::{
-    BatchImportMcpServersRequest, CreateMcpServerRequest, DetectedMcpServerResponse, McpAgentSyncResult, McpAuthMethod,
-    McpConnectionTestResult, McpServerResponse, McpSyncResult, McpToolResponse, McpTransport, OAuthCheckStatusRequest,
-    OAuthLoginRequest, OAuthLoginResponse, OAuthLogoutRequest, OAuthStatusResponse, RemoveFromAgentsRequest,
-    SyncToAgentsRequest, TestMcpConnectionRequest, UpdateMcpServerRequest,
+    BatchImportMcpServersRequest, CreateMcpServerRequest, DetectedMcpServerResponse, ImportMcpServerRequest,
+    McpAgentSyncResult, McpAuthMethod, McpConnectionTestResult, McpServerResponse, McpSyncResult, McpToolResponse,
+    McpTransport, OAuthCheckStatusRequest, OAuthLoginRequest, OAuthLoginResponse, OAuthLogoutRequest,
+    OAuthStatusResponse, RemoveFromAgentsRequest, SyncToAgentsRequest, TestMcpConnectionRequest,
+    UpdateMcpServerRequest,
 };
 pub use office::{
     CellCoord, CellRange, ConversionResultDto, ConversionTarget, DetectStarOfficeRequest, DocumentConversionRequest,

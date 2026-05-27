@@ -98,7 +98,17 @@ impl McpSyncService {
         let _guard = self.service_lock.lock().await;
 
         let servers = self.load_servers_by_ids(server_ids).await?;
-        info!(count = servers.len(), "syncing MCP servers to agents");
+        info!(
+            requested_count = server_ids.len(),
+            loaded_count = servers.len(),
+            "syncing MCP servers to agents"
+        );
+        if !server_ids.is_empty() && servers.is_empty() {
+            warn!(
+                requested_count = server_ids.len(),
+                "requested MCP sync loaded zero servers"
+            );
+        }
 
         let mut agent_results = Vec::new();
         for adapter in self.adapters.iter() {

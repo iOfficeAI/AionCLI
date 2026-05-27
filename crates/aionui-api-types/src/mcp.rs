@@ -66,6 +66,25 @@ pub struct CreateMcpServerRequest {
     pub builtin: bool,
 }
 
+/// Request item for `POST /api/mcp/servers/import`.
+///
+/// Import can preserve the enabled state from a legacy source. Plain create
+/// intentionally does not accept `enabled`, because enabling must also sync
+/// the server to agent configs.
+#[derive(Debug, Deserialize)]
+pub struct ImportMcpServerRequest {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub transport: McpTransport,
+    #[serde(default)]
+    pub original_json: Option<String>,
+    #[serde(default)]
+    pub builtin: bool,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+}
+
 /// Request body for `PUT /api/mcp/servers/:id` — partial update.
 #[derive(Debug, Deserialize)]
 pub struct UpdateMcpServerRequest {
@@ -82,7 +101,7 @@ pub struct UpdateMcpServerRequest {
 /// Request body for `POST /api/mcp/servers/import` — batch import.
 #[derive(Debug, Deserialize)]
 pub struct BatchImportMcpServersRequest {
-    pub servers: Vec<CreateMcpServerRequest>,
+    pub servers: Vec<ImportMcpServerRequest>,
 }
 
 // ---------------------------------------------------------------------------
