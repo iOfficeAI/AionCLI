@@ -69,10 +69,6 @@ test:
 lint:
     cargo clippy --workspace -- -D warnings
 
-# Enforce four-layer dependency rule (biz must not reach into connect)
-layer-check:
-    bash scripts/check_layer_deps.sh
-
 lint-fix:
     cargo fix --allow-dirty --allow-staged
     cargo clippy --fix --workspace --allow-dirty --allow-staged -- -D warnings
@@ -96,8 +92,8 @@ run *ARGS:
 run-release *ARGS:
     cargo run --release --bin aioncore -- {{ARGS}}
 
-# Pre-push gate: format, lint, layer check, auto-commit fixes, test, then push
-push *ARGS: lint-fix fmt layer-check _auto-commit-fixes test
+# Pre-push gate: format, lint, auto-commit fixes, test, then push
+push *ARGS: lint-fix fmt _auto-commit-fixes test
     git push {{ ARGS }}
 
 # Auto-commit any formatting/lint fixes if there are changes

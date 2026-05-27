@@ -34,14 +34,6 @@ impl IConversationRepository for SqliteConversationRepository {
     }
 
     async fn create(&self, row: &ConversationRow) -> Result<(), DbError> {
-        // `row.status` is `#[deprecated]` because runtime code should
-        // not consult it — `aionui_conversation::ConvActor` is the
-        // source of truth. The DB column itself stays for backwards
-        // compatibility with external observers (export/import, legacy
-        // dashboards), so the INSERT must still bind the value
-        // verbatim.
-        #[allow(deprecated)]
-        let status = &row.status;
         sqlx::query(
             "INSERT INTO conversations \
                 (id, user_id, name, type, extra, model, status, source, \
@@ -54,7 +46,7 @@ impl IConversationRepository for SqliteConversationRepository {
         .bind(&row.r#type)
         .bind(&row.extra)
         .bind(&row.model)
-        .bind(status)
+        .bind(&row.status)
         .bind(&row.source)
         .bind(&row.channel_chat_id)
         .bind(row.pinned)
@@ -704,7 +696,6 @@ async fn execute_count(pool: &SqlitePool, sql: &str, binds: &[BindValue]) -> Res
 }
 
 #[cfg(test)]
-#[allow(deprecated)] // ConversationRow.status is exercised by the row-level CRUD tests.
 mod tests {
     use super::*;
     use crate::init_database_memory;

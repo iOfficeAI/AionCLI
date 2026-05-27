@@ -3,7 +3,7 @@
 //! Tests exercise the repository trait interface without knowledge of
 //! the underlying SQLite implementation details.
 //!
-//! Covers test-plan items:
+//! Covers test-plan items from Phase 12 test-plan:
 //! - Section A (CRUD): CJ-1..CJ-12 (data-layer portion)
 //! - Section C (Skill): SK-1..SK-7 (data-layer portion)
 //! - Section D (Schedule Calculation): SC-1..SC-8 (data-layer portion)

@@ -1,18 +1,12 @@
 use std::path::Path;
-use std::sync::Arc;
 
-use aionui_api_types::{
-    ConversationArtifactResponse, ConversationResponse, ConversationStatus, MessageResponse, MessageSearchItem,
-};
+use aionui_api_types::{ConversationArtifactResponse, ConversationResponse, MessageResponse, MessageSearchItem};
 use aionui_common::{
-    AgentType, AppError, ConversationSource, MessagePosition, MessageStatus, MessageType, ProviderWithModel,
+    AgentType, AppError, ConversationSource, ConversationStatus, MessagePosition, MessageStatus, MessageType,
+    ProviderWithModel,
 };
 use aionui_db::MessageSearchRow;
 use aionui_db::models::{ConversationArtifactRow, ConversationRow, MessageRow};
-use dashmap::DashMap;
-
-use crate::conv_actor::ConvActor;
-use crate::conv_service_trait::ConversationStatus as ConvConversationStatus;
 
 /// Convert a database row into an API response DTO.
 ///
@@ -20,21 +14,10 @@ use crate::conv_service_trait::ConversationStatus as ConvConversationStatus;
 /// `data_dir` is required so the response can expose a derived
 /// `is_temporary_workspace` flag without storing that attribute on disk —
 /// see [`row_to_response_with_extra`].
-///
-/// `actors` is the per-conversation runtime state map owned by
-/// `ConversationService`. `ConversationResponse.status` is derived from
-/// this map rather than from `row.status`. Callers that legitimately
-/// have no actor map at hand (e.g. ad-hoc tests for the conversion
-/// logic itself) can pass an empty `DashMap`, which yields
-/// `Idle/Finished`.
-pub fn row_to_response(
-    row: ConversationRow,
-    data_dir: &Path,
-    actors: &DashMap<String, Arc<ConvActor>>,
-) -> Result<ConversationResponse, AppError> {
+pub fn row_to_response(row: ConversationRow, data_dir: &Path) -> Result<ConversationResponse, AppError> {
     let extra: serde_json::Value =
         serde_json::from_str(&row.extra).map_err(|e| AppError::Internal(format!("Invalid extra JSON: {e}")))?;
-    row_to_response_with_extra(row, extra, data_dir, actors)
+    row_to_response_with_extra(row, extra, data_dir)
 }
 
 /// Same as [`row_to_response`] but takes a pre-parsed `extra` value. Used
@@ -51,7 +34,6 @@ pub fn row_to_response_with_extra(
     row: ConversationRow,
     mut extra: serde_json::Value,
     data_dir: &Path,
-    actors: &DashMap<String, Arc<ConvActor>>,
 ) -> Result<ConversationResponse, AppError> {
     let is_temporary_workspace = {
         let ws = extra.get("workspace").and_then(|v| v.as_str()).unwrap_or("");
@@ -65,24 +47,9 @@ pub fn row_to_response_with_extra(
     }
 
     let agent_type: AgentType = string_to_enum(&row.r#type)?;
-
-    // Runtime status (Idle/Running) is derived from the ConvActor map.
-    // When no actor exists for this row (newly-created conversation, or
-    // one that has not been opened since process start), fall back to
-    // the legacy DB.status so the wire format keeps emitting `pending`
-    // for the never-opened state. Frontend compatibility requires
-    // `pending` for newly-created rows so the empty conversation view
-    // renders correctly.
-    #[allow(deprecated)]
-    let status: ConversationStatus = match actors.get(&row.id).map(|a| a.public_status()) {
-        Some(ConvConversationStatus::Running { .. }) => ConversationStatus::Running,
-        Some(ConvConversationStatus::Idle) => ConversationStatus::Finished,
-        None => row
-            .status
-            .as_deref()
-            .map(string_to_enum)
-            .transpose()?
-            .unwrap_or(ConversationStatus::Pending),
+    let status: ConversationStatus = match row.status.as_deref() {
+        None | Some("") => ConversationStatus::Finished,
+        Some(s) => string_to_enum(s)?,
     };
 
     let source: Option<ConversationSource> = row.source.as_deref().map(string_to_enum).transpose()?;
@@ -248,17 +215,7 @@ fn extract_preview_text(raw_content: &str) -> String {
 }
 
 /// Convert a search result row into an API search item DTO.
-pub fn search_row_to_item(
-    row: MessageSearchRow,
-    data_dir: &Path,
-    actors: &DashMap<String, Arc<ConvActor>>,
-) -> Result<MessageSearchItem, AppError> {
-    // We rebuild a `ConversationRow` purely so we can reuse `row_to_response`.
-    // The `status` column is `#[deprecated]` because runtime code must
-    // not consult it. We still copy `row.conversation_status` so the
-    // struct can be populated; `row_to_response` then ignores that
-    // value and derives the runtime status from the `actors` map.
-    #[allow(deprecated)]
+pub fn search_row_to_item(row: MessageSearchRow, data_dir: &Path) -> Result<MessageSearchItem, AppError> {
     let conversation_row = ConversationRow {
         id: row.conversation_id,
         user_id: String::new(),
@@ -275,7 +232,7 @@ pub fn search_row_to_item(
         updated_at: row.conversation_updated_at,
     };
 
-    let conversation = row_to_response(conversation_row, data_dir, actors)?;
+    let conversation = row_to_response(conversation_row, data_dir)?;
     let preview_text = extract_preview_text(&row.content);
 
     Ok(MessageSearchItem {
@@ -288,18 +245,10 @@ pub fn search_row_to_item(
 }
 
 #[cfg(test)]
-#[allow(deprecated)] // Tests deliberately construct `ConversationRow.status` to
-// verify legacy fixture handling. The field is `#[deprecated]`
-// but remains the DB column shape.
 mod tests {
     use super::*;
-    use aionui_api_types::ConversationStatus;
-    use aionui_common::{AgentType, ConversationSource};
+    use aionui_common::{AgentType, ConversationSource, ConversationStatus};
     use serde_json::json;
-
-    fn empty_actors() -> DashMap<String, Arc<ConvActor>> {
-        DashMap::new()
-    }
 
     fn make_row(
         agent_type: &str,
@@ -335,13 +284,9 @@ mod tests {
             Some(&model.to_string()),
             r#"{"workspace": "/project"}"#,
         );
-        let actors = empty_actors();
-        let resp = row_to_response(row, Path::new("/tmp/data"), &actors).unwrap();
+        let resp = row_to_response(row, Path::new("/tmp/data")).unwrap();
         assert_eq!(resp.id, "conv_1");
         assert_eq!(resp.r#type, AgentType::Acp);
-        // When no actor is registered, status falls back to the legacy
-        // DB.status so the wire format keeps emitting `pending` for
-        // never-opened rows. Once an actor exists, runtime state wins.
         assert_eq!(resp.status, ConversationStatus::Pending);
         assert_eq!(resp.source, Some(ConversationSource::Aionui));
         assert_eq!(resp.model.unwrap().model, "m1");
@@ -350,35 +295,9 @@ mod tests {
     }
 
     #[test]
-    fn row_to_response_status_running_when_actor_running() {
-        let row = make_row("acp", "pending", Some("aionui"), None, "{}");
-        let actors: DashMap<String, Arc<ConvActor>> = DashMap::new();
-        let actor = ConvActor::new("conv_1".into());
-        // Drive the actor into Running synchronously via the public surface:
-        // mark_idle then begin_turn.
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let _handle = rt.block_on(async {
-            actor.mark_idle().await;
-            actor.begin_turn("msg-1".into()).await.unwrap()
-        });
-        actors.insert("conv_1".into(), actor);
-
-        let resp = row_to_response(row, Path::new("/tmp/data"), &actors).unwrap();
-        assert_eq!(resp.status, ConversationStatus::Running);
-        // Drop the handle inside the runtime so the actor's Drop side-effects
-        // (which spawn nothing) don't leak.
-        drop(_handle);
-        drop(rt);
-    }
-
-    #[test]
     fn row_to_response_no_source() {
         let row = make_row("acp", "running", None, None, "{}");
-        let actors = empty_actors();
-        let resp = row_to_response(row, Path::new("/tmp/data"), &actors).unwrap();
+        let resp = row_to_response(row, Path::new("/tmp/data")).unwrap();
         assert!(resp.source.is_none());
         assert!(resp.model.is_none());
     }
@@ -386,8 +305,7 @@ mod tests {
     #[test]
     fn row_to_response_invalid_type() {
         let row = make_row("invalid", "pending", None, None, "{}");
-        let actors = empty_actors();
-        let err = row_to_response(row, Path::new("/tmp/data"), &actors).unwrap_err();
+        let err = row_to_response(row, Path::new("/tmp/data")).unwrap_err();
         assert!(matches!(err, AppError::Internal(_)));
     }
 
@@ -408,8 +326,7 @@ mod tests {
             created_at: 1000,
             updated_at: 2000,
         };
-        let actors = empty_actors();
-        let err = row_to_response(row, Path::new("/tmp/data"), &actors).unwrap_err();
+        let err = row_to_response(row, Path::new("/tmp/data")).unwrap_err();
         assert!(matches!(err, AppError::Internal(_)));
     }
 
@@ -464,8 +381,7 @@ mod tests {
             None,
             r#"{"workspace":"/srv/aionui-data/conversations/claude-temp-abc"}"#,
         );
-        let actors = empty_actors();
-        let resp = row_to_response(row, Path::new("/srv/aionui-data"), &actors).unwrap();
+        let resp = row_to_response(row, Path::new("/srv/aionui-data")).unwrap();
         assert_eq!(resp.extra["is_temporary_workspace"], true);
     }
 
@@ -478,16 +394,14 @@ mod tests {
             None,
             r#"{"workspace":"/Users/alice/my-project"}"#,
         );
-        let actors = empty_actors();
-        let resp = row_to_response(row, Path::new("/srv/aionui-data"), &actors).unwrap();
+        let resp = row_to_response(row, Path::new("/srv/aionui-data")).unwrap();
         assert_eq!(resp.extra["is_temporary_workspace"], false);
     }
 
     #[test]
     fn row_to_response_marks_missing_workspace_as_non_temporary() {
         let row = make_row("acp", "pending", Some("aionui"), None, r#"{}"#);
-        let actors = empty_actors();
-        let resp = row_to_response(row, Path::new("/srv/aionui-data"), &actors).unwrap();
+        let resp = row_to_response(row, Path::new("/srv/aionui-data")).unwrap();
         assert_eq!(resp.extra["is_temporary_workspace"], false);
     }
 
@@ -508,8 +422,7 @@ mod tests {
             created_at: 1000,
             updated_at: 3000,
         };
-        let actors = empty_actors();
-        let resp = row_to_response(row, Path::new("/tmp/data"), &actors).unwrap();
+        let resp = row_to_response(row, Path::new("/tmp/data")).unwrap();
         assert!(resp.pinned);
         assert_eq!(resp.pinned_at, Some(5000));
         assert_eq!(resp.channel_chat_id.as_deref(), Some("chat:1"));
@@ -583,8 +496,7 @@ mod tests {
             conversation_updated_at: 2000,
         };
 
-        let actors = empty_actors();
-        let item = search_row_to_item(row, Path::new("/tmp/data"), &actors).unwrap();
+        let item = search_row_to_item(row, Path::new("/tmp/data")).unwrap();
 
         assert_eq!(item.message_id, "msg_1");
         assert_eq!(item.message_type, "text");
@@ -620,8 +532,7 @@ mod tests {
             conversation_updated_at: 2000,
         };
 
-        let actors = empty_actors();
-        let err = search_row_to_item(row, Path::new("/tmp/data"), &actors).unwrap_err();
+        let err = search_row_to_item(row, Path::new("/tmp/data")).unwrap_err();
         assert!(matches!(err, AppError::Internal(_)));
     }
 
@@ -646,8 +557,7 @@ mod tests {
             conversation_updated_at: 2000,
         };
 
-        let actors = empty_actors();
-        let err = search_row_to_item(row, Path::new("/tmp/data"), &actors).unwrap_err();
+        let err = search_row_to_item(row, Path::new("/tmp/data")).unwrap_err();
         assert!(matches!(err, AppError::Internal(_)));
     }
 }

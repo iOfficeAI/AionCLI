@@ -3,7 +3,8 @@ use crate::types::ConnectionId;
 /// Routes upstream WebSocket messages to business logic handlers.
 ///
 /// The `name` field of the incoming `WebSocketMessage` determines
-/// which handler processes the message.
+/// which handler processes the message. Phase 4 provides only a
+/// no-op implementation; concrete routing is added in later phases.
 pub trait MessageRouter: Send + Sync {
     /// Route an upstream message to the appropriate handler.
     ///

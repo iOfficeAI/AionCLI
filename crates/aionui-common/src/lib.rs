@@ -14,9 +14,9 @@ mod types;
 pub use case_convert::{camel_to_snake, normalize_keys_to_snake_case};
 pub use crypto::{decrypt_string, encrypt_string};
 pub use enums::{
-    AgentKillReason, AgentType, ConversationSource, FileChangeOperation, McpServerStatus, McpSource, MessagePosition,
-    MessageStatus, MessageType, PreviewContentType, ProtocolType, RemoteAgentAuthType, RemoteAgentProtocol,
-    RemoteAgentStatus,
+    AgentKillReason, AgentType, ConversationSource, ConversationStatus, FileChangeOperation, McpServerStatus,
+    McpSource, MessagePosition, MessageStatus, MessageType, PreviewContentType, ProtocolType, RemoteAgentAuthType,
+    RemoteAgentProtocol, RemoteAgentStatus,
 };
 pub use error::{AppError, ErrorChain};
 pub use hooks::OnConversationDelete;

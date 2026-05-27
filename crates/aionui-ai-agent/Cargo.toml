@@ -61,10 +61,3 @@ aionui-db.workspace = true
 [[test]]
 name = "agent_types_integration"
 required-features = ["test-support"]
-
-# Integration tests for the connect-layer cancel/run_turn invariants
-# (Phase 1 of the conversation refactor). Reaches into test-only
-# helpers on `AionrsAgentManager`, so requires `test-support`.
-[[test]]
-name = "connector_cancel_invariants"
-required-features = ["test-support"]

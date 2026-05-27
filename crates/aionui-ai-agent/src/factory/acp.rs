@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::connector::IAgentConnector;
+use crate::agent_task::AgentInstance;
 use crate::factory::AgentFactoryDeps;
 use crate::factory::acp_assembler::{WorkspaceInfo, assemble_acp_params};
 use crate::factory::context::FactoryContext;
@@ -17,7 +17,7 @@ pub(super) async fn build(
     deps: Arc<AgentFactoryDeps>,
     options: BuildTaskOptions,
     ctx: FactoryContext,
-) -> Result<Arc<dyn IAgentConnector>, AppError> {
+) -> Result<AgentInstance, AppError> {
     let belongs_to_team = options
         .extra
         .get("teamId")
@@ -152,7 +152,7 @@ pub(super) async fn build(
     arc.start_session_event_tracker(notification_rx);
     CatalogForwarder::spawn(
         arc.agent_id().to_owned(),
-        crate::IAgentConnector::subscribe_legacy(arc.as_ref()),
+        crate::IAgentTask::subscribe(arc.as_ref()),
         catalog_tx,
     );
 
@@ -170,12 +170,14 @@ pub(super) async fn build(
     // the caller sees "warmed up" == "ready for PUT /mode | /model".
     arc.warmup_session().await?;
 
+    let instance = AgentInstance::Acp(Arc::clone(&arc));
+
     // Hand the service the domain event receiver so it can
     // persist user intent changes without reverse-engineering
     // them from CLI observations.
     deps.acp_agent_service.attach(ctx.conversation_id, domain_rx).await;
 
-    Ok(arc as Arc<dyn IAgentConnector>)
+    Ok(instance)
 }
 
 /// Load the operator's enabled MCP servers from the DB, log+skip any rows

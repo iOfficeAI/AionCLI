@@ -7,8 +7,8 @@ use aionui_api_types::{AionrsBuildExtra, GuideMcpConfig, TEAM_MCP_SERVER_NAME, T
 use aionui_common::AppError;
 use tracing::{debug, info};
 
+use crate::agent_task::AgentInstance;
 use crate::capability::team_guide_prompt;
-use crate::connector::IAgentConnector;
 use crate::factory::AgentFactoryDeps;
 use crate::factory::context::FactoryContext;
 use crate::manager::aionrs::{AionrsAgentManager, sanitize_session_messages};
@@ -20,7 +20,7 @@ pub(super) async fn build(
     deps: Arc<AgentFactoryDeps>,
     options: BuildTaskOptions,
     ctx: FactoryContext,
-) -> Result<Arc<dyn IAgentConnector>, AppError> {
+) -> Result<AgentInstance, AppError> {
     let belongs_to_team = options
         .extra
         .get("teamId")
@@ -169,7 +169,7 @@ pub(super) async fn build(
     };
 
     let agent = AionrsAgentManager::new(ctx.conversation_id, ctx.workspace, config, resume_session).await?;
-    Ok(Arc::new(agent) as Arc<dyn IAgentConnector>)
+    Ok(AgentInstance::Aionrs(Arc::new(agent)))
 }
 
 /// Map AionUi DB platform name to the aionrs provider identifier.

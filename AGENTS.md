@@ -30,62 +30,6 @@ When changing a critical path, explicitly evaluate whether logs are needed for d
 
 Production-visible logs must not include sensitive payloads such as prompts, tool input/output, file contents, command bodies, tokens, secrets, or raw provider requests/responses. If such payloads are needed for local debugging, they must be behind explicit development-only guards and never enabled by default.
 
-### Four-Layer Architecture
-
-The conversation/agent system is organized into four layers with strictly
-downward dependencies:
-
-```
-biz layer        aionui-team / aionui-cron / aionui-assistant
-                            │
-                            ▼ uses IConversationService
-conv layer       aionui-conversation
-                            │
-                            ▼ uses IAgentConnector / IAgentConnectorFactory
-connect layer    aionui-ai-agent
-                            │
-                            ▼ spawns and talks to
-agent layer      aionrs / acp engine processes
-```
-
-**Rules:**
-- Biz layer talks to the conv layer ONLY through `IConversationService`.
-  Never reach around it to call `IAgentConnectorFactory`, `IAgentConnector`,
-  or any connect-layer type directly.
-- Conv layer talks to the connect layer ONLY through `IAgentConnector`
-  and `IAgentConnectorFactory`. The conv layer is the sole owner of
-  per-conversation runtime state (idle/running, last_activity).
-- Connect layer is a stateless adapter: each `IAgentConnector` impl
-  spawns the corresponding agent process and translates events. It
-  MUST NOT carry conversation-level state (status, history) — that's
-  conv-layer territory.
-
-**Why this exists:** the ELECTRON-1KB Sentry issue family
-(1FZ / 1J4 / 1MJ / 1EV / 1E9 / 1P0 / 1KB) was caused by state
-fragmentation across five holders (DB.status, AgentRuntime.status,
-OnceCell, ACP session state, OS subprocess) with no single source of
-truth. The race window between user cancel and the next user send
-produced 409 Conflict bursts that confused the UI and corrupted
-agent sessions. The four-layer split exists to prevent that class of
-bug at the type level.
-
-**Enforcement:** `scripts/check_layer_deps.sh` (wired into `just push`)
-greps for forbidden cross-layer imports and Phase-5-deleted types.
-Each crate has a `crates/<crate>/AGENTS.md` with the per-layer hard
-rules. If you find yourself adding state to bridge two layers, stop —
-it belongs to one of them, not in between.
-
-### Per-crate AGENTS.md
-
-Each crate that participates in the four-layer architecture has its own
-AGENTS.md with hard rules:
-
-- [`crates/aionui-conversation/AGENTS.md`](crates/aionui-conversation/AGENTS.md) — conv layer
-- [`crates/aionui-team/AGENTS.md`](crates/aionui-team/AGENTS.md) — biz layer (team)
-- [`crates/aionui-ai-agent/AGENTS.md`](crates/aionui-ai-agent/AGENTS.md) — connect layer
-
-Read those before changing code in the corresponding crate.
-
 ## Architecture
 
 > For detailed background and design decisions, see [ARCHITECTURE.md](./ARCHITECTURE.md).

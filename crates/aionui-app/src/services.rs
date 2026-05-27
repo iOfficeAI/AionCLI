@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use aionui_ai_agent::{
-    AcpSessionSyncService, AcpSkillManager, AgentFactoryDeps, AgentRegistry, ConnectorFactory, IAgentConnectorFactory,
+    AcpSessionSyncService, AcpSkillManager, AgentFactoryDeps, AgentRegistry, IWorkerTaskManager, WorkerTaskManagerImpl,
     build_agent_factory,
 };
 use aionui_api_types::GuideMcpConfig;
@@ -28,12 +28,12 @@ pub struct AppServices {
     pub qr_token_store: Arc<QrTokenStore>,
     pub ws_manager: Arc<WebSocketManager>,
     pub event_bus: Arc<BroadcastEventBus>,
-    pub connector_factory: Arc<dyn IAgentConnectorFactory>,
-    /// Same instance as `connector_factory`, exposed through the
+    pub worker_task_manager: Arc<dyn IWorkerTaskManager>,
+    /// Same instance as `worker_task_manager`, exposed through the
     /// `OnConversationDelete` trait so `ConversationService::with_delete_hook`
     /// can wire it up. Optional because tests construct `AppServices` with a
-    /// mock factory that does not implement the trait.
-    pub connector_factory_delete_hook: Option<Arc<dyn OnConversationDelete>>,
+    /// mock `worker_task_manager` that does not implement the trait.
+    pub task_manager_delete_hook: Option<Arc<dyn OnConversationDelete>>,
     pub agent_registry: Arc<AgentRegistry>,
     pub conversation_repo: Arc<dyn IConversationRepository>,
     pub acp_session_sync: Arc<AcpSessionSyncService>,
@@ -55,11 +55,11 @@ pub struct AppServices {
 }
 
 impl AppServices {
-    /// Replace the connector factory after construction.
+    /// Replace the worker task manager after construction.
     ///
     /// Primarily used by tests to inject mock implementations.
-    pub fn with_connector_factory(mut self, factory: Arc<dyn IAgentConnectorFactory>) -> Self {
-        self.connector_factory = factory;
+    pub fn with_worker_task_manager(mut self, wtm: Arc<dyn IWorkerTaskManager>) -> Self {
+        self.worker_task_manager = wtm;
         self
     }
 
@@ -176,9 +176,9 @@ impl AppServices {
         // Agent factory is now wired. Future extension/custom agents
         // that get written to `agent_metadata` will show up after the
         // relevant service calls `AgentRegistry::hydrate`.
-        let factory_concrete = Arc::new(ConnectorFactory::new(factory));
-        let connector_factory: Arc<dyn IAgentConnectorFactory> = factory_concrete.clone();
-        let connector_factory_delete_hook: Arc<dyn OnConversationDelete> = factory_concrete;
+        let task_manager_concrete = Arc::new(WorkerTaskManagerImpl::new(factory));
+        let worker_task_manager: Arc<dyn IWorkerTaskManager> = task_manager_concrete.clone();
+        let task_manager_delete_hook: Arc<dyn OnConversationDelete> = task_manager_concrete;
 
         Ok(Self {
             database,
@@ -188,8 +188,8 @@ impl AppServices {
             qr_token_store: Arc::new(QrTokenStore::new()),
             ws_manager: Arc::new(WebSocketManager::new()),
             event_bus: Arc::new(BroadcastEventBus::new(256)),
-            connector_factory,
-            connector_factory_delete_hook: Some(connector_factory_delete_hook),
+            worker_task_manager,
+            task_manager_delete_hook: Some(task_manager_delete_hook),
             agent_registry,
             conversation_repo,
             acp_session_sync: acp_agent_service,

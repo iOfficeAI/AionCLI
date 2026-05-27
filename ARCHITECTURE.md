@@ -76,7 +76,7 @@ Each crate owns an independent business domain. They remain loosely coupled from
 | `aionui-office` | Office document handling (Excel, PPT, Word), preview, conversion |
 | `aionui-system` | System settings, provider management, version checking, model fetching |
 | `aionui-mcp` | MCP protocol integration, OAuth, multi-platform adapters |
-| `aionui-ai-agent` | Connect layer for the conversation/agent runtime: `IAgentConnector` trait, per-protocol connectors (ACP, aionrs, remote, nanobot, openclaw), `IAgentConnectorFactory` cache (see [Conversation / Agent Runtime](#conversation--agent-runtime)) |
+| `aionui-ai-agent` | Agent lifecycle management, worker task queues, ACP/auxiliary skills |
 | `aionui-extension` | Extension registry, hub management, skill discovery and installation |
 | `aionui-shell` | Shell command execution, speech-to-text |
 | `aionui-assistant` | Assistant configuration and management |
@@ -95,7 +95,7 @@ Composition → Domain → Capability → Foundation
 ```
 
 - ✅ Upper layers may depend on lower layers
-- ✅ Same-layer interaction through trait abstractions (e.g., the conv layer talks to the connect layer via `IAgentConnector` / `IAgentConnectorFactory`; biz crates talk to the conv layer via `IConversationService`)
+- ✅ Same-layer interaction through trait abstractions (e.g., conversation uses ai-agent capability via IWorkerTaskManager trait)
 - ❌ Lower layers must not depend on upper layers
 - ❌ Circular dependencies are forbidden
 
@@ -347,7 +347,7 @@ pub struct AppServices {
     pub qr_token_store: Arc<QrTokenStore>,
     pub ws_manager: Arc<WebSocketManager>,
     pub event_bus: Arc<BroadcastEventBus>,
-    pub connector_factory: Arc<dyn IAgentConnectorFactory>,
+    pub worker_task_manager: Arc<dyn IWorkerTaskManager>,
     pub agent_registry: Arc<AgentRegistry>,
     pub conversation_repo: Arc<dyn IConversationRepository>,
     pub acp_session_sync: Arc<AcpSessionSyncService>,
@@ -681,92 +681,6 @@ Before adding a new crate, confirm:
 - [ ] Routes use `/api/` prefix with kebab-case resource names
 - [ ] Includes corresponding test files
 - [ ] WebSocket events follow `domain.camelCaseAction` naming convention
-
-## Conversation / Agent Runtime
-
-### Layers
-
-| Layer | Crates | Responsibility |
-|---|---|---|
-| Biz | `aionui-team`, `aionui-cron`, `aionui-assistant` | Domain orchestration: teammates, schedules, mailboxes |
-| Conv | `aionui-conversation` | Per-conversation runtime state (`ConvActor`), turn serialization, event fan-out, idle scanner |
-| Connect | `aionui-ai-agent` | Stateless adapter: `IAgentConnector` per agent type (ACP, aionrs, remote, nanobot, openclaw), `IAgentConnectorFactory` cache |
-| Agent | `aionrs`, ACP engines, remote agents | Process-level concerns: subprocess lifecycle, stdin/stdout JSON-RPC |
-
-### Single Source of Truth
-
-`ConvActor` (in `aionui-conversation/src/conv_actor.rs`) holds the
-per-conversation runtime state machine:
-
-```
-NeverOpened ──mark_idle──▶ Idle
-                             │
-                             ▼
-                         begin_turn ──▶ Running { msg_id }
-                             ▲                   │
-                             │             TurnHandle dropped
-                             │                   │
-                             └──── wait_for_idle ◀
-```
-
-The `Mutex<ConvState>` serializes turns. A `tokio::sync::Notify`
-(`idle_notify`) makes `cancel()` block until the running turn has fully
-released its slot — `wait_for_idle()` parks here, and the `TurnHandle`
-RAII guard fires it on drop. Together they close the cancel→send race
-that motivated the refactor.
-
-### Trait surface
-
-- `IConversationService` (in `aionui-conversation/src/conv_service_trait.rs`)
-  — biz-layer entry point. Methods: `create`, `delete`, `get`, `list`,
-  `warmup`, `send`, `cancel`, `cancel_idle`, `status`, `subscribe`,
-  `collect_idle`. Phase 2.
-- `IAgentConnector` (in `aionui-ai-agent/src/connector/trait_def.rs`)
-  — connect-layer trait. Methods include `run_turn`,
-  `cancel_current_turn`, `subscribe`, plus the additive task-manager
-  surface (`status`, `send_message`, `cancel`, `kill`, `confirm`, mode
-  / model getters/setters, …) that survived the Phase 5 reshape. Phase 1.
-- `IAgentConnectorFactory` (in `aionui-ai-agent/src/connector_factory.rs`)
-  — connect-layer cache. `build_or_get(opts) -> Arc<dyn IAgentConnector>`,
-  plus `get`, `drop_connector`, `clear`, `active_count`. Single-flight
-  per `conversation_id` via `OnceCell`. Phase 5.
-
-### Historical context
-
-The ELECTRON-1KB Sentry issue family (1FZ, 1J4, 1MJ, 1EV, 1E9, 1P0,
-1KB) was the trigger. State was fragmented across five holders
-(`conversations.status` in DB, `AgentRuntime.status`, the ACP session
-`OnceCell`, ACP protocol-level state, and the OS subprocess). When
-users cancelled a turn and immediately sent the next message, races
-between those holders produced 409 Conflict, lost turns, and corrupted
-ACP sessions.
-
-The refactor (May 2026, Phases 1–5) replaced those five holders with
-two: `ConvActor::state` (runtime) and `ConversationRow` (history). The
-`#[deprecated] ConversationRow.status` column survives one more
-deprecation window for safety; Phase 6 schedules its removal.
-
-### What lives where
-
-| Concern | Crate / type |
-|---|---|
-| Is conversation X running? | `IConversationService::status(id) -> ConversationStatus` |
-| Cancel turn safely (user-initiated) | `IConversationService::cancel(user_id, id)` |
-| Cancel turn from a background task | `IConversationService::cancel_idle(id)` |
-| Stream of turn events | `IConversationService::subscribe(id) -> broadcast::Receiver<ConversationEvent>` |
-| Collect stale conversations for cleanup | `IConversationService::collect_idle(threshold_ms)` |
-| Idle-conversation scanner | `aionui-conversation::start_idle_scanner` (Phase 5) |
-| Cron continuation chaining | `aionui-cron::CronContinuationOrchestrator` (Phase 4) |
-| Agent process lifecycle | `aionui-ai-agent` connectors |
-
-### Layer-dependency check
-
-`scripts/check_layer_deps.sh` (wired into `just push`) greps for
-forbidden cross-layer imports and Phase-5-deleted symbols
-(`IWorkerTaskManager`, `WorkerTaskManagerImpl`, `AgentInstance`,
-`IMockAgent`, `aionui_common::ConversationStatus`). Each crate
-participating in this stack also has its own `crates/<crate>/AGENTS.md`
-with the per-layer hard rules.
 
 ## Runtime Infrastructure
 

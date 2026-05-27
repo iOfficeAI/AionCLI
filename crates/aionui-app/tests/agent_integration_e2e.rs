@@ -1,94 +1,202 @@
-//! E2E integration tests with mock agent connectors.
+//! E2E integration tests with mock agent tasks.
 //!
 //! Tests the message flow, confirmation system, and auxiliary routes
-//! with a mock `IAgentConnectorFactory` that provides in-memory connectors.
+//! with a mock IWorkerTaskManager that provides in-memory agents.
 
 mod common;
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use axum::http::StatusCode;
-use serde_json::json;
+use serde_json::{Value, json};
+use tokio::sync::broadcast;
 use tower::ServiceExt;
 
-use aionui_ai_agent::protocol::events::{FinishEventData, TextEventData};
-use aionui_ai_agent::test_support::{MockConnector, MockConnectorFactory};
-use aionui_ai_agent::{AgentStreamEvent, ConnectorBuildFn, IAgentConnector, IAgentConnectorFactory};
-use aionui_common::Confirmation;
+use aionui_ai_agent::agent_task::{AgentInstance, IAgentTask, IMockAgent};
+use aionui_ai_agent::protocol::events::TextEventData;
+use aionui_ai_agent::types::{BuildTaskOptions, SendMessageData};
+use aionui_ai_agent::{AgentStreamEvent, IWorkerTaskManager};
+use aionui_common::{AgentKillReason, AgentType, AppError, Confirmation, ConversationStatus, TimestampMs, now_ms};
+use async_trait::async_trait;
 
 use common::{body_json, get_with_token, json_with_token, setup_and_login};
 
-// ── Mock connector + factory wiring ────────────────────────────
+// ── Mock Agent ──────────────────────────────────────────────────
 
-/// Build a connector pre-seeded with a 1-event script (text + finish)
-/// so the first `send_message` echoes a "Mock response" and terminates,
-/// matching the legacy `MockAgent::send_message` behaviour.
-fn make_mock_connector(conv_id: &str, workspace: &str) -> Arc<MockConnector> {
-    MockConnector::builder(conv_id)
-        .workspace(workspace)
-        .allow_direct_confirm()
-        .script(vec![
-            AgentStreamEvent::Text(TextEventData {
-                content: "Mock response".into(),
-            }),
-            AgentStreamEvent::Finish(FinishEventData::default()),
-        ])
-        .build_arc()
+struct MockAgent {
+    conversation_id: String,
+    workspace: String,
+    event_tx: broadcast::Sender<AgentStreamEvent>,
+    confirmations: Mutex<Vec<Confirmation>>,
+    approvals: Mutex<std::collections::HashMap<String, bool>>,
+    last_activity: AtomicI64,
 }
 
-async fn build_app_with_mock_tasks() -> (axum::Router, aionui_app::AppServices, Arc<MockConnectorFactory>) {
+impl MockAgent {
+    fn new(conversation_id: &str, workspace: &str) -> Self {
+        let (event_tx, _) = broadcast::channel(256);
+        Self {
+            conversation_id: conversation_id.to_owned(),
+            workspace: workspace.to_owned(),
+            event_tx,
+            confirmations: Mutex::new(vec![]),
+            approvals: Mutex::new(std::collections::HashMap::new()),
+            last_activity: AtomicI64::new(now_ms()),
+        }
+    }
+}
+
+#[async_trait]
+impl IAgentTask for MockAgent {
+    fn agent_type(&self) -> AgentType {
+        AgentType::Acp
+    }
+
+    fn conversation_id(&self) -> &str {
+        &self.conversation_id
+    }
+
+    fn workspace(&self) -> &str {
+        &self.workspace
+    }
+
+    fn status(&self) -> Option<ConversationStatus> {
+        Some(ConversationStatus::Running)
+    }
+
+    fn last_activity_at(&self) -> TimestampMs {
+        self.last_activity.load(Ordering::Relaxed)
+    }
+
+    fn subscribe(&self) -> broadcast::Receiver<AgentStreamEvent> {
+        self.event_tx.subscribe()
+    }
+
+    async fn send_message(&self, _data: SendMessageData) -> Result<(), AppError> {
+        self.last_activity.store(now_ms(), Ordering::Relaxed);
+        // Emit a text event and finish
+        let _ = self.event_tx.send(AgentStreamEvent::Text(TextEventData {
+            content: "Mock response".into(),
+        }));
+        let _ = self.event_tx.send(AgentStreamEvent::Finish(
+            aionui_ai_agent::protocol::events::FinishEventData::default(),
+        ));
+        Ok(())
+    }
+
+    async fn cancel(&self) -> Result<(), AppError> {
+        Ok(())
+    }
+
+    fn kill(&self, _reason: Option<AgentKillReason>) -> Result<(), AppError> {
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl IMockAgent for MockAgent {
+    fn get_confirmations(&self) -> Vec<Confirmation> {
+        self.confirmations.lock().unwrap().clone()
+    }
+
+    fn check_approval(&self, action: &str, _command_type: Option<&str>) -> bool {
+        self.approvals.lock().unwrap().get(action).copied().unwrap_or(false)
+    }
+
+    fn confirm(&self, _msg_id: &str, call_id: &str, _data: Value, always_allow: bool) -> Result<(), AppError> {
+        let mut confs = self.confirmations.lock().unwrap();
+        confs.retain(|c| c.call_id != call_id);
+        if always_allow {
+            self.approvals.lock().unwrap().insert("test_action".to_owned(), true);
+        }
+        Ok(())
+    }
+}
+
+// ── Mock Worker Task Manager ────────────────────────────────────
+
+struct MockTaskManager {
+    agents: Mutex<std::collections::HashMap<String, AgentInstance>>,
+}
+
+impl MockTaskManager {
+    fn new() -> Self {
+        Self {
+            agents: Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    fn insert(&self, conv_id: &str, workspace: &str) -> Arc<MockAgent> {
+        let agent = Arc::new(MockAgent::new(conv_id, workspace));
+        self.agents
+            .lock()
+            .unwrap()
+            .insert(conv_id.to_owned(), AgentInstance::Mock(agent.clone()));
+        agent
+    }
+}
+
+#[async_trait::async_trait]
+impl IWorkerTaskManager for MockTaskManager {
+    fn get_task(&self, conversation_id: &str) -> Option<AgentInstance> {
+        self.agents.lock().unwrap().get(conversation_id).cloned()
+    }
+
+    async fn get_or_build_task(
+        &self,
+        conversation_id: &str,
+        _options: BuildTaskOptions,
+    ) -> Result<AgentInstance, AppError> {
+        let mut agents = self.agents.lock().unwrap();
+        if let Some(existing) = agents.get(conversation_id) {
+            return Ok(existing.clone());
+        }
+        let instance = AgentInstance::Mock(Arc::new(MockAgent::new(conversation_id, "/mock-workspace")));
+        agents.insert(conversation_id.to_owned(), instance.clone());
+        Ok(instance)
+    }
+
+    fn kill(&self, conversation_id: &str, _reason: Option<AgentKillReason>) -> Result<(), AppError> {
+        self.agents.lock().unwrap().remove(conversation_id);
+        Ok(())
+    }
+
+    fn kill_and_wait(
+        &self,
+        conversation_id: &str,
+        reason: Option<AgentKillReason>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        let _ = self.kill(conversation_id, reason);
+        Box::pin(std::future::ready(()))
+    }
+
+    fn clear(&self) {
+        self.agents.lock().unwrap().clear();
+    }
+
+    fn active_count(&self) -> usize {
+        self.agents.lock().unwrap().len()
+    }
+
+    fn collect_idle(&self, _idle_threshold_ms: TimestampMs) -> Vec<String> {
+        vec![]
+    }
+}
+
+// ── Test App builder with mock agents ───────────────────────────
+
+async fn build_app_with_mock_tasks() -> (axum::Router, aionui_app::AppServices, Arc<MockTaskManager>) {
     let db = aionui_db::init_database_memory().await.unwrap();
     let services = aionui_app::AppServices::from_config(db, &aionui_app::AppConfig::default())
         .await
         .unwrap();
 
-    let build_fn: ConnectorBuildFn = Arc::new(|opts| {
-        Box::pin(async move {
-            let connector: Arc<dyn IAgentConnector> = make_mock_connector(&opts.conversation_id, "/mock-workspace");
-            Ok(connector)
-        })
-    });
-    let mock_tm: Arc<MockConnectorFactory> = MockConnectorFactory::builder().build_fn(build_fn).build();
-    let factory_dyn: Arc<dyn IAgentConnectorFactory> = mock_tm.clone();
-    let services = services.with_connector_factory(factory_dyn);
+    let mock_tm = Arc::new(MockTaskManager::new());
+    let services = services.with_worker_task_manager(mock_tm.clone());
 
-    let (router, _conv_service) = aionui_app::create_router(&services).await;
+    let router = aionui_app::create_router(&services).await;
     (router, services, mock_tm)
-}
-
-/// Insert a pre-built mock connector into the factory cache so the
-/// E2E flow under test sees a fixed agent (mirrors the legacy
-/// `MockTaskManager::insert` ergonomics).
-fn insert_mock_connector(factory: &Arc<MockConnectorFactory>, conv_id: &str, workspace: &str) -> Arc<MockConnector> {
-    let connector = make_mock_connector(conv_id, workspace);
-    let dyn_connector: Arc<dyn IAgentConnector> = connector.clone();
-    factory.insert(conv_id, dyn_connector);
-    connector
-}
-
-/// Variant of [`insert_mock_connector`] that pre-seeds the connector
-/// with a list of pending [`Confirmation`]s, so the confirm endpoint
-/// can locate the call by id without a real agent emitting one first.
-fn insert_mock_connector_with_confirmations(
-    factory: &Arc<MockConnectorFactory>,
-    conv_id: &str,
-    workspace: &str,
-    confs: Vec<Confirmation>,
-) -> Arc<MockConnector> {
-    let connector = MockConnector::builder(conv_id)
-        .workspace(workspace)
-        .allow_direct_confirm()
-        .confirmations(confs)
-        .script(vec![
-            AgentStreamEvent::Text(TextEventData {
-                content: "Mock response".into(),
-            }),
-            AgentStreamEvent::Finish(FinishEventData::default()),
-        ])
-        .build_arc();
-    let dyn_connector: Arc<dyn IAgentConnector> = connector.clone();
-    factory.insert(conv_id, dyn_connector);
-    connector
 }
 
 async fn create_conversation(app: &mut axum::Router, token: &str, csrf: &str, name: &str) -> String {
@@ -130,7 +238,7 @@ async fn stop_stream_with_mock_agent() {
     let (mut app, services, mock_tm) = build_app_with_mock_tasks().await;
     let (token, csrf) = setup_and_login(&mut app, &services, "admin", "Pass123!").await;
     let conv_id = create_conversation(&mut app, &token, &csrf, "Stop Test").await;
-    insert_mock_connector(&mock_tm, &conv_id, "/mock-workspace");
+    mock_tm.insert(&conv_id, "/mock-workspace");
 
     let req = json_with_token(
         "POST",
@@ -170,7 +278,7 @@ async fn list_confirmations_empty() {
     let (mut app, services, mock_tm) = build_app_with_mock_tasks().await;
     let (token, csrf) = setup_and_login(&mut app, &services, "admin", "Pass123!").await;
     let conv_id = create_conversation(&mut app, &token, &csrf, "Confirm Test").await;
-    insert_mock_connector(&mock_tm, &conv_id, "/mock-workspace");
+    mock_tm.insert(&conv_id, "/mock-workspace");
 
     let req = get_with_token(&format!("/api/conversations/{conv_id}/confirmations"), &token);
     let resp = app.oneshot(req).await.unwrap();
@@ -186,21 +294,18 @@ async fn confirm_and_check_approval() {
     let (mut app, services, mock_tm) = build_app_with_mock_tasks().await;
     let (token, csrf) = setup_and_login(&mut app, &services, "admin", "Pass123!").await;
     let conv_id = create_conversation(&mut app, &token, &csrf, "Approval Test").await;
+    let agent = mock_tm.insert(&conv_id, "/mock-workspace");
+
     // Pre-populate a pending confirmation so the confirm endpoint can find it
-    let _agent = insert_mock_connector_with_confirmations(
-        &mock_tm,
-        &conv_id,
-        "/mock-workspace",
-        vec![Confirmation {
-            id: "conf-1".into(),
-            call_id: "call-42".into(),
-            title: Some("Allow file edit".into()),
-            action: Some("test_action".into()),
-            description: String::new(),
-            command_type: None,
-            options: vec![],
-        }],
-    );
+    agent.confirmations.lock().unwrap().push(Confirmation {
+        id: "conf-1".into(),
+        call_id: "call-42".into(),
+        title: Some("Allow file edit".into()),
+        action: Some("test_action".into()),
+        description: String::new(),
+        command_type: None,
+        options: vec![],
+    });
 
     // Confirm a call with alwaysAllow=true
     let req = json_with_token(
@@ -231,7 +336,7 @@ async fn check_approval_not_set() {
     let (mut app, services, mock_tm) = build_app_with_mock_tasks().await;
     let (token, csrf) = setup_and_login(&mut app, &services, "admin", "Pass123!").await;
     let conv_id = create_conversation(&mut app, &token, &csrf, "Approval NotSet").await;
-    insert_mock_connector(&mock_tm, &conv_id, "/mock-workspace");
+    mock_tm.insert(&conv_id, "/mock-workspace");
 
     let req = get_with_token(
         &format!("/api/conversations/{conv_id}/approvals/check?action=unknown_action"),
@@ -251,7 +356,7 @@ async fn slash_commands_with_mock_returns_empty() {
     let (mut app, services, mock_tm) = build_app_with_mock_tasks().await;
     let (token, csrf) = setup_and_login(&mut app, &services, "admin", "Pass123!").await;
     let conv_id = create_conversation(&mut app, &token, &csrf, "Slash Mock Test").await;
-    insert_mock_connector(&mock_tm, &conv_id, "/mock-workspace");
+    mock_tm.insert(&conv_id, "/mock-workspace");
 
     let req = get_with_token(&format!("/api/conversations/{conv_id}/slash-commands"), &token);
     let resp = app.oneshot(req).await.unwrap();
@@ -269,7 +374,7 @@ async fn openclaw_runtime_wrong_agent_type() {
     let (mut app, services, mock_tm) = build_app_with_mock_tasks().await;
     let (token, csrf) = setup_and_login(&mut app, &services, "admin", "Pass123!").await;
     let conv_id = create_conversation(&mut app, &token, &csrf, "OpenClaw Wrong Type").await;
-    insert_mock_connector(&mock_tm, &conv_id, "/mock-workspace");
+    mock_tm.insert(&conv_id, "/mock-workspace");
 
     let req = get_with_token(&format!("/api/conversations/{conv_id}/openclaw/runtime"), &token);
     let resp = app.oneshot(req).await.unwrap();
@@ -288,7 +393,7 @@ async fn side_question_with_mock_agent() {
     let (mut app, services, mock_tm) = build_app_with_mock_tasks().await;
     let (token, csrf) = setup_and_login(&mut app, &services, "admin", "Pass123!").await;
     let conv_id = create_conversation(&mut app, &token, &csrf, "Side Q Mock").await;
-    insert_mock_connector(&mock_tm, &conv_id, "/mock-workspace");
+    mock_tm.insert(&conv_id, "/mock-workspace");
 
     let req = json_with_token(
         "POST",

@@ -11,7 +11,7 @@ async fn test_local_mode_skips_auth() {
     };
     let services = aionui_app::AppServices::from_config(db, &config).await.unwrap();
 
-    let (router, _conv_service) = aionui_app::create_router(&services).await;
+    let router = aionui_app::create_router(&services).await;
 
     // Health check should work
     let response = router
@@ -38,7 +38,7 @@ async fn test_non_local_mode_requires_auth() {
         .await
         .unwrap();
 
-    let (router, _conv_service) = aionui_app::create_router(&services).await;
+    let router = aionui_app::create_router(&services).await;
 
     let response = router
         .oneshot(Request::builder().uri("/api/settings").body(Body::empty()).unwrap())

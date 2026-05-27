@@ -1,27 +1,8 @@
 use aionui_common::{
-    AgentType, ConversationSource, MessagePosition, MessageStatus, MessageType, PaginatedResult, ProviderWithModel,
-    TimestampMs,
+    AgentType, ConversationSource, ConversationStatus, MessagePosition, MessageStatus, MessageType, PaginatedResult,
+    ProviderWithModel, TimestampMs,
 };
 use serde::{Deserialize, Serialize};
-
-/// Wire-format status of a conversation row.
-///
-/// Pure DTO: the real runtime status is
-/// `aionui_conversation::ConversationStatus` (an
-/// `Idle / Running { msg_id }` enum on `ConvActor`). The conv layer's
-/// `row_to_response` collapses runtime state into one of these three
-/// lowercase strings so the existing wire contract with the frontend
-/// is preserved unchanged.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ConversationStatus {
-    /// Newly-created row that has never been opened in this process.
-    Pending,
-    /// Actor exists and an in-flight turn is active.
-    Running,
-    /// Actor exists and is idle (no in-flight turn).
-    Finished,
-}
 
 // ── Request types ──────────────────────────────────────────────────
 

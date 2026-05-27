@@ -15,12 +15,12 @@ use aionui_common::{AgentType, AppError};
 use aionui_db::{IMcpServerRepository, IProviderRepository, IRemoteAgentRepository};
 use futures_util::FutureExt;
 
+use crate::agent_task::AgentInstance;
 use crate::capability::skill_manager::AcpSkillManager;
-use crate::connector::IAgentConnector;
-use crate::connector_factory::ConnectorBuildFn;
 use crate::factory::context::FactoryContext;
 use crate::persistence::AcpSessionSyncService;
 use crate::registry::AgentRegistry;
+use crate::task_manager::AgentFactory;
 use crate::types::BuildTaskOptions;
 
 /// Dependencies needed by the agent factory to construct agents.
@@ -46,16 +46,14 @@ pub struct AgentFactoryDeps {
     pub mcp_server_repo: Option<Arc<dyn IMcpServerRepository>>,
 }
 
-/// Build a production connector factory closure that dispatches to
-/// concrete agent types and returns a fully-initialised
-/// `Arc<dyn IAgentConnector>`.
+/// Build a production agent factory that dispatches to concrete agent types.
 ///
-/// The closure is async: the returned `BoxFuture` is driven by the
-/// [`crate::connector_factory::ConnectorFactory`] on whatever runtime is
-/// currently polling it. This lets us spawn CLI processes and await ACP
-/// handshakes directly, without the scoped-thread + `block_on` bridge
-/// the old sync-factory version needed.
-pub fn build_agent_factory(deps: AgentFactoryDeps) -> ConnectorBuildFn {
+/// [`AgentFactory`] is async: the returned `BoxFuture` is driven by
+/// [`crate::task_manager::IWorkerTaskManager::get_or_build_task`] on whatever
+/// runtime is currently polling it. This lets us spawn CLI processes and
+/// await ACP handshakes directly, without the scoped-thread + `block_on`
+/// bridge the old sync-factory version needed.
+pub fn build_agent_factory(deps: AgentFactoryDeps) -> AgentFactory {
     let deps = Arc::new(deps);
 
     Arc::new(move |options: BuildTaskOptions| {
@@ -64,10 +62,7 @@ pub fn build_agent_factory(deps: AgentFactoryDeps) -> ConnectorBuildFn {
     })
 }
 
-async fn build_agent(
-    deps: Arc<AgentFactoryDeps>,
-    options: BuildTaskOptions,
-) -> Result<Arc<dyn IAgentConnector>, AppError> {
+async fn build_agent(deps: Arc<AgentFactoryDeps>, options: BuildTaskOptions) -> Result<AgentInstance, AppError> {
     let ctx = FactoryContext::resolve(&deps, &options).await?;
     match options.agent_type {
         AgentType::Gemini => Err(AppError::ConversationArchived(

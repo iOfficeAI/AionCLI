@@ -170,7 +170,6 @@ impl SkillSuggestDetector {
 }
 
 #[cfg(test)]
-#[allow(deprecated)] // Test fixtures still construct ConversationRow.status; the column will be dropped from the schema after N stable releases.
 mod tests {
     use super::*;
     use aionui_db::models::ConversationRow;

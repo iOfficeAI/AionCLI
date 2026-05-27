@@ -1,6 +1,6 @@
 //! Agent-session operations on ConversationService.
 //!
-//! These forward to the active connector (via `self.connector(id)`) for
+//! These forward to the active AgentInstance (via `self.task(id)`) for
 //! mode/model/usage/slash-commands/side-question/openclaw-runtime queries,
 //! plus workspace browsing that needs the conversations.extra.workspace
 //! field.
@@ -24,37 +24,37 @@ impl ConversationService {
     // ── Mode ────────────────────────────────────────────────────────
 
     pub async fn get_mode(&self, conversation_id: &str) -> Result<AgentModeResponse, AppError> {
-        self.connector(conversation_id)?.get_mode().await
+        self.task(conversation_id)?.get_mode().await
     }
 
     pub async fn set_mode(&self, conversation_id: &str, req: SetModeRequest) -> Result<(), AppError> {
         if req.mode.trim().is_empty() {
             return Err(AppError::BadRequest("mode must not be empty".into()));
         }
-        self.connector(conversation_id)?.set_mode(&req.mode).await
+        self.task(conversation_id)?.set_mode(&req.mode).await
     }
 
     // ── Model ───────────────────────────────────────────────────────
 
     pub async fn get_model(&self, conversation_id: &str) -> Result<GetModelInfoResponse, AppError> {
-        self.connector(conversation_id)?.get_model().await
+        self.task(conversation_id)?.get_model().await
     }
 
     pub async fn set_model(&self, conversation_id: &str, req: SetModelRequest) -> Result<(), AppError> {
         if req.model_id.trim().is_empty() {
             return Err(AppError::BadRequest("model_id must not be empty".into()));
         }
-        self.connector(conversation_id)?.set_model(&req.model_id).await
+        self.task(conversation_id)?.set_model(&req.model_id).await
     }
 
     // ── Usage / Slash commands ──────────────────────────────────────
 
     pub async fn get_usage(&self, conversation_id: &str) -> Result<Option<serde_json::Value>, AppError> {
-        self.connector(conversation_id)?.get_usage().await
+        self.task(conversation_id)?.get_usage().await
     }
 
     pub async fn get_slash_commands(&self, conversation_id: &str) -> Result<Vec<SlashCommandItem>, AppError> {
-        self.connector(conversation_id)?.get_slash_commands().await
+        self.task(conversation_id)?.get_slash_commands().await
     }
 
     // ── Side question ───────────────────────────────────────────────
@@ -64,15 +64,15 @@ impl ConversationService {
         conversation_id: &str,
         req: SideQuestionRequest,
     ) -> Result<SideQuestionResponse, AppError> {
-        // `IAgentConnector::handle_side_question` already validates that the
+        // `AgentInstance::handle_side_question` already validates that the
         // question is non-empty; no need to duplicate the check here.
-        self.connector(conversation_id)?.handle_side_question(req).await
+        self.task(conversation_id)?.handle_side_question(req).await
     }
 
     // ── OpenClaw runtime diagnostics ────────────────────────────────
 
     pub async fn get_openclaw_runtime(&self, conversation_id: &str) -> Result<serde_json::Value, AppError> {
-        self.connector(conversation_id)?.get_openclaw_runtime().await
+        self.task(conversation_id)?.get_openclaw_runtime().await
     }
 
     // ── Workspace browsing ──────────────────────────────────────────

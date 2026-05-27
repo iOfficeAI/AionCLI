@@ -1,5 +1,3 @@
-#![allow(deprecated)] // ConversationRow.status is exercised by these row-level schema tests.
-
 use aionui_db::{init_database_memory, models::ConversationRow, models::MessageRow};
 use sqlx::Row;
 

@@ -1,5 +1,3 @@
-#![allow(deprecated)] // ConversationRow.status is exercised by these row-level CRUD tests.
-
 use aionui_db::{
     ConversationFilters, ConversationRowUpdate, IConversationRepository, MessageRowUpdate, SortOrder,
     SqliteConversationRepository, init_database_memory, models::ConversationRow, models::MessageRow,

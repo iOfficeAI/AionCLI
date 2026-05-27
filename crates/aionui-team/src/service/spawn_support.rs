@@ -219,55 +219,6 @@ impl TeamSessionService {
         &self.conversation_service
     }
 
-    /// Persist the team MCP stdio config into the spawned agent's
-    /// conversation row, then kill any pre-existing connector and warm
-    /// up the new one.
-    ///
-    /// This wraps the connect-layer `connector_factory.drop_connector`
-    /// and conv-layer `warmup` pair behind a single biz-layer entry
-    /// point. It lives on `TeamSessionService` because the upstream
-    /// session has no connect-layer dependency, while the team
-    /// service still owns `connector_factory` and can rebuild a
-    /// connector after the conversation row's extra has changed.
-    pub(crate) async fn attach_spawned_agent_process_bg(
-        &self,
-        agent: &crate::types::TeamAgent,
-        mcp_stdio_cfg: crate::mcp::TeamMcpStdioConfig,
-        user_id: &str,
-    ) -> Result<(), TeamError> {
-        let patch = serde_json::json!({
-            "team_mcp_stdio_config": mcp_stdio_cfg,
-            "session_mode": resolve_full_auto_mode(&agent.backend),
-        });
-
-        self.conversation_service
-            .update_extra(&agent.conversation_id, patch)
-            .await
-            .map_err(|e| {
-                TeamError::InvalidRequest(format!(
-                    "failed to persist team_mcp_stdio_config for {}: {e}",
-                    agent.slot_id
-                ))
-            })?;
-
-        self.connector_factory.drop_connector(
-            &agent.conversation_id,
-            Some(aionui_common::AgentKillReason::TeamMcpRebuild),
-        );
-
-        self.conversation_service
-            .warmup(user_id, &agent.conversation_id, &self.connector_factory)
-            .await
-            .map_err(|e| {
-                TeamError::InvalidRequest(format!(
-                    "failed to warm up spawned agent {}: {e}",
-                    agent.conversation_id
-                ))
-            })?;
-
-        Ok(())
-    }
-
     /// Create the conversation + persist the new agent slot for a spawn.
     ///
     /// Holds the per-team `add_agent` lock for the entirety of the

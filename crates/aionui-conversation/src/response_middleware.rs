@@ -190,7 +190,7 @@ fn parse_cron_update_body(job_id: &str, body: &str) -> Option<CronUpdateParams> 
 }
 
 // ---------------------------------------------------------------------------
-// ICronService trait
+// ICronService trait (implemented in Phase 12)
 // ---------------------------------------------------------------------------
 
 /// Result of a cron command execution.
@@ -202,8 +202,8 @@ pub struct CronCommandResult {
 
 /// Abstract cron service for executing cron commands.
 ///
-/// Implemented by `aionui-cron`. The middleware uses it via
-/// dependency injection.
+/// This trait will be implemented in Phase 12 (cron module).
+/// The middleware uses it via dependency injection.
 #[async_trait]
 pub trait ICronService: Send + Sync {
     /// Create a cron job. Returns the created job ID on success.

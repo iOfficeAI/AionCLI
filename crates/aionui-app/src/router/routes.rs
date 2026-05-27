@@ -42,14 +42,7 @@ use super::trace::with_access_log;
 /// 1. Security response headers (X-Frame-Options, etc.)
 /// 2. CSRF protection (Double Submit Cookie)
 /// 3. Route handlers (auth routes + system routes + conversation routes + file routes + health check)
-///
-/// Returns the router together with the canonical
-/// `Arc<dyn IConversationService>` constructed by
-/// `build_conversation_state`. The conv-layer idle scanner (started in
-/// `commands::server`) takes ownership of that handle so its
-/// `cancel_idle` calls flow through the same actor map the HTTP routes
-/// observe.
-pub async fn create_router(services: &AppServices) -> (Router, Arc<dyn aionui_conversation::IConversationService>) {
+pub async fn create_router(services: &AppServices) -> Router {
     let boot = Instant::now();
     tracing::info!("startup: router assembly started");
 
@@ -99,14 +92,12 @@ pub async fn create_router(services: &AppServices) -> (Router, Arc<dyn aionui_co
         "startup: channel plugin restore scheduled"
     );
 
-    let conversation_service: Arc<dyn aionui_conversation::IConversationService> =
-        Arc::new(states.conversation.service.clone());
     let router = create_router_with_states(services, states);
     tracing::info!(
         elapsed_ms = boot.elapsed().as_millis(),
         "startup: router assembly completed"
     );
-    (router, conversation_service)
+    router
 }
 
 /// Create the application router with custom module states.

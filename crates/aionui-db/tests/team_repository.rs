@@ -3,7 +3,7 @@
 //! Tests exercise the repository trait interface without knowledge of
 //! the underlying SQLite implementation details.
 //!
-//! Covers test-plan items:
+//! Covers test-plan items from Phase 11 test-plan:
 //! - Section 1 (Team CRUD): TC-1..TC-7, TL-1..TL-3, TG-1..TG-2, TD-1..TD-6, TR-1..TR-4
 //! - Section 4 (Mailbox): MW-1..MW-3, MR-1..MR-4, MH-1..MH-3, MD-1..MD-2
 //! - Section 5 (Task Board): TK-1..TK-3, TU-1..TU-5, CU-1..CU-4, TT-1..TT-3, TKD-1..TKD-2

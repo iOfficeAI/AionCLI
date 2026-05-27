@@ -1,20 +1,88 @@
-//! Integration tests for residual cross-cutting agent helpers.
+//! Integration tests for agent type implementations and auxiliary features.
 //!
-//! Tests that exercised the legacy task-manager / mock-agent fan-out
-//! (`collect_idle_ignores_non_acp_agent_types`) are covered by
-//! `aionui-team` and `aionui-cron` integration suites. What remains
-//! here is what is genuinely scoped to this crate:
-//! - Aionrs manager metadata via the new `IAgentConnector` surface
-//! - workspace browsing (filesystem, no agent involved)
-//! - `build_system_instructions_with_skills_index` text helper
-//! - `AgentType` serde round-trip
+//! These tests validate:
+//! - Each agent manager implements IAgentTask correctly
+//! - Agent factory can build all agent types
+//! - Idle scanner finds eligible tasks
+//! - Workspace browsing works with real filesystem
+//! - Aionrs stub returns appropriate errors
 
-use aionui_ai_agent::IAgentConnector;
+use std::sync::Arc;
+
 use aionui_ai_agent::manager::aionrs::AionrsAgentManager;
-use aionui_ai_agent::types::AionrsResolvedConfig;
+use aionui_ai_agent::task_manager::AgentFactory;
+use aionui_ai_agent::types::{AionrsResolvedConfig, BuildTaskOptions, SendMessageData};
+use aionui_ai_agent::*;
 use aionui_ai_agent::{SkillIndex, build_system_instructions_with_skills_index};
-use aionui_common::{AgentKillReason, AgentType};
+use aionui_common::{AgentKillReason, AgentType, ConversationStatus, ProviderWithModel, TimestampMs, now_ms};
 use serde_json::json;
+use std::sync::atomic::{AtomicI64, Ordering};
+use tokio::sync::broadcast;
+
+// ---------------------------------------------------------------------------
+// Mock agent for WorkerTaskManager tests with different agent types
+// ---------------------------------------------------------------------------
+
+struct TypedMockAgent {
+    agent_type: AgentType,
+    conversation_id: String,
+    workspace: String,
+    status: Option<ConversationStatus>,
+    last_activity: AtomicI64,
+    event_tx: broadcast::Sender<AgentStreamEvent>,
+}
+
+impl TypedMockAgent {
+    fn new(agent_type: AgentType, conversation_id: &str, status: Option<ConversationStatus>) -> Self {
+        let (event_tx, _) = broadcast::channel(16);
+        Self {
+            agent_type,
+            conversation_id: conversation_id.to_owned(),
+            workspace: "/tmp/test".to_owned(),
+            status,
+            last_activity: AtomicI64::new(now_ms()),
+            event_tx,
+        }
+    }
+
+    fn with_last_activity(mut self, ts: TimestampMs) -> Self {
+        self.last_activity = AtomicI64::new(ts);
+        self
+    }
+}
+
+#[async_trait::async_trait]
+impl IAgentTask for TypedMockAgent {
+    fn agent_type(&self) -> AgentType {
+        self.agent_type
+    }
+    fn conversation_id(&self) -> &str {
+        &self.conversation_id
+    }
+    fn workspace(&self) -> &str {
+        &self.workspace
+    }
+    fn status(&self) -> Option<ConversationStatus> {
+        self.status
+    }
+    fn last_activity_at(&self) -> TimestampMs {
+        self.last_activity.load(Ordering::Relaxed)
+    }
+    fn subscribe(&self) -> broadcast::Receiver<AgentStreamEvent> {
+        self.event_tx.subscribe()
+    }
+    async fn send_message(&self, _data: SendMessageData) -> Result<(), aionui_common::AppError> {
+        Ok(())
+    }
+    async fn cancel(&self) -> Result<(), aionui_common::AppError> {
+        Ok(())
+    }
+    fn kill(&self, _reason: Option<AgentKillReason>) -> Result<(), aionui_common::AppError> {
+        Ok(())
+    }
+}
+
+impl IMockAgent for TypedMockAgent {}
 
 // ---------------------------------------------------------------------------
 // Aionrs agent tests (real implementation with AgentEngine)
@@ -42,8 +110,8 @@ async fn aionrs_agent_kill_succeeds() {
     let agent = AionrsAgentManager::new("conv-1".into(), "/proj".into(), make_aionrs_config(), None)
         .await
         .unwrap();
-    assert!(IAgentConnector::kill(&agent, None).is_ok());
-    assert!(IAgentConnector::kill(&agent, Some(AgentKillReason::IdleTimeout)).is_ok());
+    assert!(agent.kill(None).is_ok());
+    assert!(agent.kill(Some(AgentKillReason::IdleTimeout)).is_ok());
 }
 
 #[tokio::test]
@@ -51,10 +119,9 @@ async fn aionrs_agent_confirm_succeeds() {
     let agent = AionrsAgentManager::new("conv-1".into(), "/proj".into(), make_aionrs_config(), None)
         .await
         .unwrap();
-    // `confirm` is an inherent method on `AionrsAgentManager` (the
-    // `IAgentConnector::confirm` trait method dispatches to it); the
-    // test calls the inherent method directly to keep argument shape
-    // identical to the production callers in the conv layer.
+    // `confirm` is an inherent method on `AionrsAgentManager` (reached via
+    // `AgentInstance::Aionrs(..)` in production); the test calls it
+    // directly on the concrete manager.
     let result = agent.confirm("msg", "call", json!({}), false);
     assert!(result.is_ok());
 }
@@ -64,11 +131,69 @@ async fn aionrs_agent_metadata() {
     let agent = AionrsAgentManager::new("conv-abc".into(), "/work".into(), make_aionrs_config(), None)
         .await
         .unwrap();
-    assert_eq!(IAgentConnector::agent_type(&agent), AgentType::Aionrs);
-    assert_eq!(IAgentConnector::workspace(&agent), "/work");
-    assert_eq!(IAgentConnector::conversation_id(&agent), "conv-abc");
+    assert_eq!(agent.agent_type(), AgentType::Aionrs);
+    assert_eq!(agent.workspace(), "/work");
+    assert_eq!(agent.conversation_id(), "conv-abc");
+    assert_eq!(agent.status(), Some(ConversationStatus::Pending));
     assert!(agent.get_confirmations().is_empty());
     assert!(!agent.check_approval("any", None));
+}
+
+// ---------------------------------------------------------------------------
+// Idle scanner: collect_idle only finds ACP tasks
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn collect_idle_ignores_non_acp_agent_types() {
+    use futures_util::FutureExt;
+    let old_ts = now_ms() - 600_000; // 10 min ago
+
+    // Build a factory that creates typed mocks (all finished + old)
+    let factory: AgentFactory = Arc::new(move |opts: BuildTaskOptions| {
+        async move {
+            let mock = TypedMockAgent::new(
+                opts.agent_type,
+                &opts.conversation_id,
+                Some(ConversationStatus::Finished),
+            )
+            .with_last_activity(old_ts);
+            Ok(AgentInstance::Mock(Arc::new(mock)))
+        }
+        .boxed()
+    });
+    let mgr = WorkerTaskManagerImpl::new(factory);
+
+    let make_opts = |agent_type: AgentType, id: &str| BuildTaskOptions {
+        agent_type,
+        workspace: "/tmp".into(),
+        model: ProviderWithModel {
+            provider_id: "p".into(),
+            model: "m".into(),
+            use_model: None,
+        },
+        conversation_id: id.into(),
+        extra: json!(null),
+    };
+
+    mgr.get_or_build_task("nanobot-1", make_opts(AgentType::Nanobot, "nanobot-1"))
+        .await
+        .unwrap();
+    mgr.get_or_build_task("openclaw-1", make_opts(AgentType::OpenclawGateway, "openclaw-1"))
+        .await
+        .unwrap();
+    mgr.get_or_build_task("acp-1", make_opts(AgentType::Acp, "acp-1"))
+        .await
+        .unwrap();
+    mgr.get_or_build_task("remote-1", make_opts(AgentType::Remote, "remote-1"))
+        .await
+        .unwrap();
+
+    assert_eq!(mgr.active_count(), 4);
+
+    // Only ACP should be collected
+    let idle = mgr.collect_idle(300_000); // 5-min threshold
+    assert_eq!(idle.len(), 1);
+    assert_eq!(idle[0], "acp-1");
 }
 
 // ---------------------------------------------------------------------------
@@ -161,7 +286,7 @@ fn agent_type_serde_all_variants() {
         (AgentType::Aionrs, "\"aionrs\""),
     ] {
         let json = serde_json::to_string(&variant).unwrap();
-        assert_eq!(json, expected_json, "Failed for {variant:?}");
+        assert_eq!(json, expected_json, "Failed for {:?}", variant);
         let parsed: AgentType = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, variant);
     }

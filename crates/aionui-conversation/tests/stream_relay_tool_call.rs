@@ -1,6 +1,3 @@
-// Test fixture builds `ConversationRow.status`, which is `#[deprecated]`.
-#![allow(deprecated)]
-
 use std::sync::Arc;
 
 use aionui_ai_agent::{

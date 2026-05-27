@@ -1,13 +1,3 @@
-// The `status` field is `#[deprecated]`. The `sqlx::FromRow` derive
-// expands to code that writes that field at row-materialisation time,
-// which fires the deprecation lint inside this very file. The
-// struct-level `#[allow(deprecated)]` does not silence the warning at
-// the field's declaration site, so we apply a module-level allow here.
-// This is intentionally narrow: only this single model file is
-// affected; every other consumer of `ConversationRow::status` still
-// sees the deprecation warning.
-#![allow(deprecated)]
-
 use aionui_common::TimestampMs;
 use serde::{Deserialize, Serialize};
 
@@ -19,12 +9,6 @@ use serde::{Deserialize, Serialize};
 ///
 /// JSON fields (`extra`, `model`) are stored as TEXT in SQLite and
 /// deserialized by the service layer.
-///
-/// Note: this module declares `#![allow(deprecated)]` so the
-/// `sqlx::FromRow` derive can still write to the (deprecated) `status`
-/// field when materialising rows from the database. The deprecation
-/// warning still fires at every other (hand-written) construction or
-/// read site outside this file, which is the intended UX.
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct ConversationRow {
     pub id: String,
@@ -38,14 +22,6 @@ pub struct ConversationRow {
     /// JSON object: `ProviderWithModel` serialized.
     pub model: Option<String>,
     /// One of: "pending", "running", "finished". NULL in legacy rows.
-    ///
-    /// `aionui_conversation::ConvActor` is the runtime source of
-    /// truth for whether a conversation is processing a message. This
-    /// column is purely advisory legacy and will be dropped from the
-    /// schema after N stable releases.
-    #[deprecated(note = "ConvActor is the runtime source of truth. \
-                DB.status is purely advisory legacy and will be dropped \
-                from the schema after N stable releases.")]
     pub status: Option<String>,
     /// One of: "aionui", "telegram", "lark", "dingtalk", "weixin".
     pub source: Option<String>,

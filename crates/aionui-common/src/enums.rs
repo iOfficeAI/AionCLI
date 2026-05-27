@@ -102,6 +102,15 @@ impl AgentType {
     }
 }
 
+/// Runtime status of a conversation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ConversationStatus {
+    Pending,
+    Running,
+    Finished,
+}
+
 /// Origin of a conversation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -330,6 +339,13 @@ mod tests {
         assert_eq!(json, r#""openai""#);
         let parsed: ProtocolType = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, ProtocolType::OpenAI);
+    }
+
+    #[test]
+    fn test_conversation_status_lowercase() {
+        let val = ConversationStatus::Pending;
+        let json = serde_json::to_string(&val).unwrap();
+        assert_eq!(json, r#""pending""#);
     }
 
     #[test]
