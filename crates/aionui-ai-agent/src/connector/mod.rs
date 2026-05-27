@@ -1,5 +1,4 @@
-//! Connect-layer trait abstractions. Phase 1 of the conversation
-//! refactor (see docs/superpowers/specs/2026-05-26-conversation-layer-refactor-design.md).
+//! Connect-layer trait abstractions.
 
 mod trait_def;
 

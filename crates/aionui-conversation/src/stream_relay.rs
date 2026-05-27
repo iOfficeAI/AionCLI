@@ -751,13 +751,13 @@ impl StreamRelay {
         broadcaster: &Arc<dyn EventBroadcaster>,
         conversation_id: &str,
     ) {
-        // Phase 2: DB.status is no longer the runtime source of truth —
-        // `ConvActor` is. The runtime transition back to `Idle` is handled
-        // by `TurnHandle::Drop` in the `send_message` spawn. Here we only
-        // need to broadcast turn.completed so live subscribers re-enable
-        // the input. The `_repo` parameter is preserved to keep the
-        // signature stable for callers across the Phase 2 series; it will
-        // be removed once all callers no longer pass it (Phase 5/6).
+        // DB.status is not the runtime source of truth — `ConvActor`
+        // is. The runtime transition back to `Idle` is handled by
+        // `TurnHandle::Drop` in the `send_message` spawn. Here we
+        // only broadcast turn.completed so live subscribers re-enable
+        // the input. `_repo` is preserved to keep the signature
+        // stable for callers; it can be dropped once they all stop
+        // passing it.
         let payload = json!({
             "conversation_id": conversation_id,
             "session_id": conversation_id,

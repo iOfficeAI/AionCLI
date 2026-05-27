@@ -1,11 +1,11 @@
-// The `status` field is `#[deprecated]` (Phase 2). The `sqlx::FromRow`
-// derive expands to code that writes that field at row-materialisation
-// time, which fires the deprecation lint inside this very file. The
+// The `status` field is `#[deprecated]`. The `sqlx::FromRow` derive
+// expands to code that writes that field at row-materialisation time,
+// which fires the deprecation lint inside this very file. The
 // struct-level `#[allow(deprecated)]` does not silence the warning at
 // the field's declaration site, so we apply a module-level allow here.
-// This is intentionally narrow: only this single model file is affected;
-// every other consumer of `ConversationRow::status` still sees the
-// deprecation warning.
+// This is intentionally narrow: only this single model file is
+// affected; every other consumer of `ConversationRow::status` still
+// sees the deprecation warning.
 #![allow(deprecated)]
 
 use aionui_common::TimestampMs;
@@ -39,12 +39,11 @@ pub struct ConversationRow {
     pub model: Option<String>,
     /// One of: "pending", "running", "finished". NULL in legacy rows.
     ///
-    /// Phase 2 (2026-05-26): `aionui_conversation::ConvActor` is now the
-    /// runtime source of truth for whether a conversation is processing
-    /// a message. This column is purely advisory legacy and will be
-    /// dropped from the schema after N stable releases.
-    /// See `docs/superpowers/specs/2026-05-26-conversation-layer-refactor-design.md`.
-    #[deprecated(note = "Phase 2: ConvActor is the runtime source of truth. \
+    /// `aionui_conversation::ConvActor` is the runtime source of
+    /// truth for whether a conversation is processing a message. This
+    /// column is purely advisory legacy and will be dropped from the
+    /// schema after N stable releases.
+    #[deprecated(note = "ConvActor is the runtime source of truth. \
                 DB.status is purely advisory legacy and will be dropped \
                 from the schema after N stable releases.")]
     pub status: Option<String>,

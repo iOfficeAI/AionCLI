@@ -486,13 +486,11 @@ impl OpenClawAgentManager {
     }
 }
 
-// ── IAgentConnector impl (Phase 5 additive) ────────────────────────────
+// ── IAgentConnector impl ────────────────────────────────────────────────
 //
-// Phase 5: OpenClaw is one of the two manager types that did not yet
-// implement the connect-layer trait. Each method delegates to the
-// existing `IAgentTask` impl on `Self` or the inherent helpers above
-// (in `confirmations.rs` and the diagnostics block) so the upcoming
-// Task 5-7 swap is a pure type-flip.
+// Each method delegates to the crate-private `IAgentTask` impl on
+// `Self` or to the inherent helpers above (in `confirmations.rs` and
+// the diagnostics block).
 #[async_trait::async_trait]
 impl crate::connector::IAgentConnector for OpenClawAgentManager {
     fn agent_type(&self) -> AgentType {

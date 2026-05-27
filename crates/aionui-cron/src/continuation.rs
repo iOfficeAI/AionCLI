@@ -1,8 +1,8 @@
 //! Cron continuation orchestrator.
 //!
-//! Phase 4 moved the multi-turn continuation loop OUT of the conv layer
-//! and into the biz layer. The conv layer's `IConversationService::send`
-//! is now strictly single-turn — it dispatches one turn and emits a
+//! The multi-turn continuation loop lives in the biz layer. The conv
+//! layer's `IConversationService::send` is strictly single-turn — it
+//! dispatches one turn and emits a
 //! `ConversationEvent::TurnCompleted { msg_id, system_responses }` on
 //! the conversation's broadcast channel.
 //!
@@ -14,14 +14,11 @@
 //!   3. caps the chain at `max_continuations` to bound runaway loops.
 //!
 //! The orchestrator owns no conversation state of its own — it is a
-//! pure event consumer. Each invocation of [`CronContinuationOrchestrator::run`]
-//! is scoped to a single cron-triggered turn and exits as soon as a
-//! `TurnCompleted` arrives with empty `system_responses`, the cap is
-//! reached, the broadcast channel is closed, or a follow-up `send`
-//! fails.
-//!
-//! See `docs/superpowers/specs/2026-05-26-conversation-layer-refactor-design.md`
-//! § Phase 4.
+//! pure event consumer. Each invocation of
+//! [`CronContinuationOrchestrator::run`] is scoped to a single
+//! cron-triggered turn and exits as soon as a `TurnCompleted` arrives
+//! with empty `system_responses`, the cap is reached, the broadcast
+//! channel is closed, or a follow-up `send` fails.
 
 use std::sync::Arc;
 

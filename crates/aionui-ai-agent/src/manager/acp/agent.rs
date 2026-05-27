@@ -155,7 +155,7 @@ pub struct AcpAgentManager {
     /// stop — closing the cancel→send race documented in ELECTRON-1KB.
     /// Lifecycle: written by `ensure_session_and_send` on every prompt
     /// completion (any result path), read by `cancel_current_turn`. Held
-    /// in an `Arc` so future Phase 2 conv-actor tasks can clone it without
+    /// in an `Arc` so conv-actor tasks can clone it without
     /// extending the manager's lifetime.
     pub(super) cancel_ack: Arc<Notify>,
 }

@@ -69,9 +69,8 @@ pub struct JobExecutor {
     broadcaster: Arc<dyn EventBroadcaster>,
     agent_registry: Arc<AgentRegistry>,
     skill_suggest_detector: SkillSuggestDetector,
-    /// Cap on follow-up `send`s the `CronContinuationOrchestrator` will
-    /// issue per cron-triggered turn. Phase 4 moved this knob from the
-    /// conv layer into the cron executor. See
+    /// Cap on follow-up `send`s the `CronContinuationOrchestrator`
+    /// will issue per cron-triggered turn. See
     /// `aionui_cron::continuation::DEFAULT_MAX_CRON_CONTINUATIONS`.
     cron_max_continuations: usize,
 }
@@ -598,13 +597,13 @@ impl JobExecutor {
             hidden: true,
         };
 
-        // Phase 4: spawn the per-turn continuation orchestrator BEFORE
+        // Spawn the per-turn continuation orchestrator BEFORE
         // dispatching the cron prompt so it cannot miss the
         // `TurnCompleted` event the conv layer emits at end of turn.
         // The orchestrator decides whether to chain follow-up sends
-        // when the agent's response carries cron-style system_responses
-        // (e.g. "[System: Created cron job '…']") — the conv layer no
-        // longer interprets those.
+        // when the agent's response carries cron-style
+        // system_responses (e.g. "[System: Created cron job '…']").
+        // The conv layer does not interpret those.
         let orch_service: Arc<dyn IConversationService> = self.conversation_service.clone();
         let orch_rx = orch_service.subscribe(conversation_id);
         let orchestrator = CronContinuationOrchestrator::new(
@@ -1195,7 +1194,7 @@ async fn persist_legacy_skill_file(data_dir: &Path, job: &CronJob, raw_content: 
 }
 
 #[cfg(test)]
-#[allow(deprecated)] // Test fixtures still construct ConversationRow.status; the column is removed in Phase 5/6.
+#[allow(deprecated)] // Test fixtures still construct ConversationRow.status; the column will be dropped from the schema after N stable releases.
 mod tests {
     use super::*;
     use crate::types::{CreatedBy, CronAgentConfig, CronSchedule};

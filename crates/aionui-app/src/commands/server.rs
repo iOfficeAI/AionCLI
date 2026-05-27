@@ -25,12 +25,12 @@ pub async fn run_server(env: ServerEnvironment, services: AppServices) -> Result
     let listener = TcpListener::bind(&addr).await?;
     info!(elapsed_ms = boot.elapsed().as_millis(), "Server listening on {addr}");
 
-    // Kick off the idle-conversation reaper. The scanner task polls every
-    // 60 s and cancels conversations whose ConvActor has been Idle past the
-    // default 5-minute idle threshold. The watch channel propagates
-    // graceful-shutdown so the scanner exits on SIGINT/SIGTERM. Phase 5:
-    // ownership moved from the connect layer to the conv layer — the
-    // scanner now goes through `IConversationService::cancel_idle` rather
+    // Kick off the idle-conversation reaper. The scanner task polls
+    // every 60 s and cancels conversations whose ConvActor has been
+    // Idle past the default 5-minute idle threshold. The watch
+    // channel propagates graceful-shutdown so the scanner exits on
+    // SIGINT/SIGTERM. The scanner is owned by the conv layer and
+    // cancels through `IConversationService::cancel_idle` rather
     // than poking the connector directly.
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let idle_scanner_handle = aionui_conversation::start_idle_scanner(conversation_service, shutdown_rx, None, None);

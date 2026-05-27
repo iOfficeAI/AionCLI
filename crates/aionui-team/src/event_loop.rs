@@ -82,9 +82,8 @@ impl EventLoopRegistry {
 
 /// Context shared across all iterations of one agent's event loop.
 ///
-/// `conversation_service` is the single conv-layer entry point used by the
-/// loop for warmup, send and runtime status reads. The legacy
-/// connect-layer task-manager field was removed in Phase 3 — biz-layer
+/// `conversation_service` is the single conv-layer entry point used
+/// by the loop for warmup, send and runtime status reads. Biz-layer
 /// code reaches the connect layer only through this trait.
 pub struct AgentLoopContext {
     pub team_id: String,
@@ -268,10 +267,10 @@ async fn execute_turn(ctx: &AgentLoopContext, input: &crate::session::WakeInput)
 
 /// Finalize a completed turn: reset DB status, mark idle (or error), cascade to leader.
 async fn finalize_turn(ctx: &AgentLoopContext, finish_ok: bool, _conversation_id: &str) {
-    // DB.status writes are gone (Phase 2/3) — the conv-layer ConvActor
-    // and StreamRelay finalize the conversation row. The team event loop
-    // only owns slot-scheduler bookkeeping and the cross-agent wake
-    // cascade.
+    // DB.status writes are gone — the conv-layer ConvActor and
+    // StreamRelay finalize the conversation row. The team event
+    // loop only owns slot-scheduler bookkeeping and the cross-agent
+    // wake cascade.
     if !finish_ok {
         let _ = ctx.scheduler.set_status(&ctx.slot_id, TeammateStatus::Error).await;
     }

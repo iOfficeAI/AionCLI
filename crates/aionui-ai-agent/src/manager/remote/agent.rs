@@ -346,8 +346,8 @@ impl RemoteAgentManager {
             state.confirmations.retain(|c| c.call_id != call_id);
         }
 
-        // WebSocket send for confirmation will be fully wired in Phase 6.15 integration
-        // via a command channel that avoids &self lifetime issues in spawned tasks.
+        // TODO: wire WebSocket send for confirmation through a command
+        // channel to avoid &self lifetime issues in spawned tasks.
         warn!(
             conversation_id = %self.runtime.conversation_id(),
             call_id = call_id,
@@ -396,8 +396,8 @@ impl IAgentConnector for RemoteAgentManager {
 
     async fn open(&self) -> Result<(), ConnectorError> {
         // RemoteAgentManager opens lazily via the existing connect path
-        // owned outside this trait. Phase 1: treat open() as a no-op so
-        // the conv-layer mutex serialization can still call it.
+        // owned outside this trait. Treat open() as a no-op so the
+        // conv-layer mutex serialization can still call it.
         Ok(())
     }
 
@@ -450,11 +450,10 @@ impl IAgentConnector for RemoteAgentManager {
         self.runtime.subscribe()
     }
 
-    // ── Task-manager method surface (Phase 5 additive) ─────────────────
+    // ── Lifecycle / control surface ─────────────────────────────────────
     //
-    // Delegates to the existing `IAgentTask` impl on `Self` or to the
-    // inherent helpers on `RemoteAgentManager` so the upcoming Task 5-7
-    // swap is a pure type-flip.
+    // Delegates to the crate-private `IAgentTask` impl on `Self` or to
+    // the inherent helpers on `RemoteAgentManager`.
 
     fn status(&self) -> Option<ConversationStatus> {
         self.runtime.status()

@@ -7,7 +7,7 @@
 //! Covers test-plan items: CJ-1..CJ-12, SK-1..SK-7, SC-1..SC-8,
 //! OC-1, SR-1, ICronService trait integration.
 
-#![allow(deprecated)] // Test fixtures still construct ConversationRow.status; the column is removed in Phase 5/6.
+#![allow(deprecated)] // Test fixtures still construct ConversationRow.status; the column will be dropped from the schema after N stable releases.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

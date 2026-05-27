@@ -107,12 +107,10 @@ impl IAgentConnector for AcpAgentManager {
         self.runtime.subscribe()
     }
 
-    // ── Task-manager method surface (Phase 5 additive) ─────────────────
+    // ── Lifecycle / control surface ─────────────────────────────────────
     //
-    // Each method delegates to the existing `IAgentTask` impl on `Self`
-    // or to the inherent helpers on `AcpAgentManager` so the upcoming
-    // Task 5-7 swap (Arc<dyn IAgentConnector> in place of AgentInstance)
-    // is a pure type-flip — every call site keeps compiling.
+    // Each method delegates to the crate-private `IAgentTask` impl on
+    // `Self` or to the inherent helpers on `AcpAgentManager`.
 
     fn status(&self) -> Option<ConversationStatus> {
         crate::agent_task::IAgentTask::status(self)

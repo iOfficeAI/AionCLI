@@ -74,8 +74,8 @@ pub struct ConvActor {
     /// waiting are all handled correctly.
     idle_notify: Notify,
     /// Wall-clock ms of the last meaningful runtime activity for this
-    /// conversation. Used by the conv-layer idle scanner (Phase 5) to
-    /// pick stale conversations. Updated on:
+    /// conversation. Used by the conv-layer idle scanner to pick
+    /// stale conversations. Updated on:
     /// - `ConvActor::new`         — initial creation timestamp
     /// - `mark_idle()`            — warmup completion / explicit settle
     /// - `begin_turn()`           — turn dispatch

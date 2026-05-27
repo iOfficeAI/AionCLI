@@ -22,10 +22,11 @@ use crate::conv_service_trait::ConversationStatus as ConvConversationStatus;
 /// see [`row_to_response_with_extra`].
 ///
 /// `actors` is the per-conversation runtime state map owned by
-/// `ConversationService`. Phase 2 derives `ConversationResponse.status`
-/// from this map rather than from `row.status`. Callers that legitimately
-/// have no actor map at hand (e.g. ad-hoc tests for the conversion logic
-/// itself) can pass an empty `DashMap`, which yields `Idle/Finished`.
+/// `ConversationService`. `ConversationResponse.status` is derived from
+/// this map rather than from `row.status`. Callers that legitimately
+/// have no actor map at hand (e.g. ad-hoc tests for the conversion
+/// logic itself) can pass an empty `DashMap`, which yields
+/// `Idle/Finished`.
 pub fn row_to_response(
     row: ConversationRow,
     data_dir: &Path,
@@ -65,15 +66,13 @@ pub fn row_to_response_with_extra(
 
     let agent_type: AgentType = string_to_enum(&row.r#type)?;
 
-    // Phase 2: runtime status (Idle/Running) is derived from the ConvActor
-    // map. When no actor exists for this row (newly-created conversation,
-    // or one that has not been opened since process start), fall back to
+    // Runtime status (Idle/Running) is derived from the ConvActor map.
+    // When no actor exists for this row (newly-created conversation, or
+    // one that has not been opened since process start), fall back to
     // the legacy DB.status so the wire format keeps emitting `pending`
-    // for the never-opened state. The legacy three-state enum
-    // (Pending/Running/Finished) is preserved end-to-end through Phase 5;
-    // Phase 6 schedules the DTO/column cleanup. Frontend compatibility
-    // requires `pending` for newly-created rows so the empty conversation
-    // view renders correctly.
+    // for the never-opened state. Frontend compatibility requires
+    // `pending` for newly-created rows so the empty conversation view
+    // renders correctly.
     #[allow(deprecated)]
     let status: ConversationStatus = match actors.get(&row.id).map(|a| a.public_status()) {
         Some(ConvConversationStatus::Running { .. }) => ConversationStatus::Running,
@@ -255,10 +254,10 @@ pub fn search_row_to_item(
     actors: &DashMap<String, Arc<ConvActor>>,
 ) -> Result<MessageSearchItem, AppError> {
     // We rebuild a `ConversationRow` purely so we can reuse `row_to_response`.
-    // Phase 2: the `status` column is `#[deprecated]` because runtime code
-    // must not consult it. We still copy `row.conversation_status` so the
-    // struct can be populated; `row_to_response` then ignores that value
-    // and derives the runtime status from the `actors` map.
+    // The `status` column is `#[deprecated]` because runtime code must
+    // not consult it. We still copy `row.conversation_status` so the
+    // struct can be populated; `row_to_response` then ignores that
+    // value and derives the runtime status from the `actors` map.
     #[allow(deprecated)]
     let conversation_row = ConversationRow {
         id: row.conversation_id,
@@ -291,7 +290,7 @@ pub fn search_row_to_item(
 #[cfg(test)]
 #[allow(deprecated)] // Tests deliberately construct `ConversationRow.status` to
 // verify legacy fixture handling. The field is `#[deprecated]`
-// (Phase 2) but remains the DB column shape.
+// but remains the DB column shape.
 mod tests {
     use super::*;
     use aionui_api_types::ConversationStatus;
@@ -340,9 +339,9 @@ mod tests {
         let resp = row_to_response(row, Path::new("/tmp/data"), &actors).unwrap();
         assert_eq!(resp.id, "conv_1");
         assert_eq!(resp.r#type, AgentType::Acp);
-        // Phase 2: when no actor is registered, status falls back to the
-        // legacy DB.status so the wire format keeps emitting `pending` for
-        // never-opened rows. Once an actor exists, runtime state takes over.
+        // When no actor is registered, status falls back to the legacy
+        // DB.status so the wire format keeps emitting `pending` for
+        // never-opened rows. Once an actor exists, runtime state wins.
         assert_eq!(resp.status, ConversationStatus::Pending);
         assert_eq!(resp.source, Some(ConversationSource::Aionui));
         assert_eq!(resp.model.unwrap().model, "m1");

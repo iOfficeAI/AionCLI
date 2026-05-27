@@ -1,13 +1,11 @@
 //! Background scanner that asks the conv layer for idle conversations
 //! and cancels them. Runs until the shutdown watch fires.
 //!
-//! Phase 5: this scanner replaces the connect-layer
-//! `aionui_ai_agent::start_idle_scanner`. The decision logic
-//! ("Idle for ≥ N seconds AND ConvActor::Idle") now lives entirely on
-//! `IConversationService::collect_idle`; cancellation flows through
-//! `IConversationService::cancel_idle`, which resolves the conversation
-//! owner internally so this background task does not need an
-//! authenticated user identity.
+//! The decision logic ("Idle for ≥ N seconds AND ConvActor::Idle")
+//! lives on `IConversationService::collect_idle`; cancellation flows
+//! through `IConversationService::cancel_idle`, which resolves the
+//! conversation owner internally so this background task does not
+//! need an authenticated user identity.
 
 use std::sync::Arc;
 use std::time::Duration;
