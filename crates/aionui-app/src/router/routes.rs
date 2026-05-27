@@ -1,6 +1,7 @@
 //! Top-level router assembly: middleware stack + module route merges.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::extract::DefaultBodyLimit;
 use axum::http::Method;
@@ -42,6 +43,9 @@ use super::trace::with_access_log;
 /// 2. CSRF protection (Double Submit Cookie)
 /// 3. Route handlers (auth routes + system routes + conversation routes + file routes + health check)
 pub async fn create_router(services: &AppServices) -> Router {
+    let boot = Instant::now();
+    tracing::info!("startup: router assembly started");
+
     // Bridge event bus → WebSocket manager: forward all broadcast events
     // to connected WebSocket clients.
     let mut event_rx = services.event_bus.subscribe();
@@ -53,17 +57,26 @@ pub async fn create_router(services: &AppServices) -> Router {
     });
 
     let (states, channel_components) = build_module_states(services).await;
+    tracing::info!(elapsed_ms = boot.elapsed().as_millis(), "startup: module states built");
 
     // Wire TeamSessionService into Guide MCP server now that both are available.
     services
         .inject_guide_service(Arc::downgrade(&states.team.service))
         .await;
+    tracing::info!(
+        elapsed_ms = boot.elapsed().as_millis(),
+        "startup: guide MCP service injected"
+    );
 
     // Start channel orchestrator (message loop)
     tokio::spawn(
         channel_components
             .orchestrator
             .run(channel_components.message_rx, channel_components.confirm_rx),
+    );
+    tracing::info!(
+        elapsed_ms = boot.elapsed().as_millis(),
+        "startup: channel orchestrator spawned"
     );
 
     // Restore enabled channel plugins (starts receiving IM messages)
@@ -74,8 +87,17 @@ pub async fn create_router(services: &AppServices) -> Router {
             tracing::warn!(error = %e, "failed to restore channel plugins");
         }
     });
+    tracing::info!(
+        elapsed_ms = boot.elapsed().as_millis(),
+        "startup: channel plugin restore scheduled"
+    );
 
-    create_router_with_states(services, states)
+    let router = create_router_with_states(services, states);
+    tracing::info!(
+        elapsed_ms = boot.elapsed().as_millis(),
+        "startup: router assembly completed"
+    );
+    router
 }
 
 /// Create the application router with custom module states.

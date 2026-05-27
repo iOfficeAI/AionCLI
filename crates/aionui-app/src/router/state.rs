@@ -4,6 +4,7 @@
 //! `build_*_state` constructs one `*RouterState` from `AppServices`.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use aionui_ai_agent::{AgentRouterState, AgentService, RemoteAgentRouterState, RemoteAgentService};
 use aionui_assistant::{AssistantRouterState, AssistantService, BuiltinAssistantRegistry};
@@ -101,16 +102,31 @@ pub struct ChannelOrchestratorComponents {
 
 /// Build all default `ModuleStates` from application services.
 pub async fn build_module_states(services: &AppServices) -> (ModuleStates, ChannelOrchestratorComponents) {
+    let boot = Instant::now();
+    tracing::info!("startup: module state build started");
+
     let (ext_state, hub_state, mut skill_state) = build_extension_states(services).await;
+    tracing::info!(
+        elapsed_ms = boot.elapsed().as_millis(),
+        "startup: extension states built"
+    );
 
     let scan_paths = resolve_scan_paths_for_data_dir(&services.data_dir);
     if let Err(error) = ext_state.registry.initialize_with_scan_paths(scan_paths).await {
         tracing::warn!(error = %error, "extension registry initialize failed");
     }
+    tracing::info!(
+        elapsed_ms = boot.elapsed().as_millis(),
+        "startup: extension registry initialized"
+    );
 
     let assistant = build_assistant_state(services, ext_state.registry.clone());
     let cron = build_cron_state(services);
     cron.cron_service.init().await;
+    tracing::info!(
+        elapsed_ms = boot.elapsed().as_millis(),
+        "startup: cron state initialized"
+    );
 
     // The agent catalog already hydrated at startup (see `lib.rs`).
     // Extension-contributed rows will land in `agent_metadata` in a
@@ -120,6 +136,7 @@ pub async fn build_module_states(services: &AppServices) -> (ModuleStates, Chann
     skill_state.assistant_dispatcher = Some(dispatcher);
 
     let (channel_state, channel_components) = build_channel_state(services, ext_state.registry.clone()).await;
+    tracing::info!(elapsed_ms = boot.elapsed().as_millis(), "startup: channel state built");
 
     let backend_binary_path = Arc::new(
         std::env::current_exe()
@@ -156,6 +173,10 @@ pub async fn build_module_states(services: &AppServices) -> (ModuleStates, Chann
         shell: build_shell_state(services),
         assistant,
     };
+    tracing::info!(
+        elapsed_ms = boot.elapsed().as_millis(),
+        "startup: module state build completed"
+    );
 
     (states, channel_components)
 }
