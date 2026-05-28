@@ -60,6 +60,7 @@ pub enum ProviderHealthCheckErrorKind {
     Forbidden,
     NotFound,
     InsufficientQuota,
+    AwsCredentials,
     InvalidRequest,
     RateLimited,
     ConnectionError,

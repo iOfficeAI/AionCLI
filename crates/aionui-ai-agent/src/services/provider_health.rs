@@ -262,6 +262,13 @@ pub(crate) fn classify_error(message: &str, is_timeout: bool) -> ProviderHealthC
     {
         return ProviderHealthCheckErrorKind::InsufficientQuota;
     }
+    if lower.contains("aws credential")
+        || lower.contains("loading credentials")
+        || lower.contains("invalid refresh token")
+        || lower.contains("session token not found")
+    {
+        return ProviderHealthCheckErrorKind::AwsCredentials;
+    }
     if lower.contains("api error 401") || lower.contains("unauthorized") || lower.contains("invalid api key") {
         return ProviderHealthCheckErrorKind::Unauthorized;
     }
@@ -313,6 +320,24 @@ mod tests {
                 false
             ),
             ProviderHealthCheckErrorKind::InvalidAuthorizationHeader
+        );
+    }
+
+    #[test]
+    fn classify_error_detects_aws_credentials() {
+        assert_eq!(
+            classify_error(
+                "Provider error: Connection error: AWS credential error: an error occurred while loading credentials",
+                false
+            ),
+            ProviderHealthCheckErrorKind::AwsCredentials
+        );
+        assert_eq!(
+            classify_error(
+                "service error: UnauthorizedException: Session token not found or invalid",
+                false
+            ),
+            ProviderHealthCheckErrorKind::AwsCredentials
         );
     }
 
