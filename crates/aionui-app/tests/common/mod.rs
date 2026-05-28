@@ -153,7 +153,7 @@ impl IAgentTask for NoopMockAgent {
     async fn send_message(
         &self,
         _data: aionui_ai_agent::types::SendMessageData,
-    ) -> Result<(), aionui_common::AppError> {
+    ) -> Result<(), aionui_ai_agent::AgentSendError> {
         Ok(())
     }
     async fn cancel(&self) -> Result<(), aionui_common::AppError> {

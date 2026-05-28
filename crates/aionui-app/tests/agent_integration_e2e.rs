@@ -73,7 +73,7 @@ impl IAgentTask for MockAgent {
         self.event_tx.subscribe()
     }
 
-    async fn send_message(&self, _data: SendMessageData) -> Result<(), AppError> {
+    async fn send_message(&self, _data: SendMessageData) -> Result<(), aionui_ai_agent::AgentSendError> {
         self.last_activity.store(now_ms(), Ordering::Relaxed);
         // Emit a text event and finish
         let _ = self.event_tx.send(AgentStreamEvent::Text(TextEventData {

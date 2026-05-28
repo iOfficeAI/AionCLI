@@ -80,10 +80,7 @@ async fn relay_handles_error_event() {
     let rx = event_tx.subscribe();
 
     event_tx
-        .send(AgentStreamEvent::Error(ErrorEventData {
-            message: "timeout".into(),
-            code: None,
-        }))
+        .send(AgentStreamEvent::Error(ErrorEventData::legacy("timeout", None)))
         .unwrap();
 
     relay.run(rx).await;

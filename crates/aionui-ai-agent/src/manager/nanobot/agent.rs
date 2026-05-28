@@ -12,6 +12,7 @@ use crate::agent_runtime::AgentRuntime;
 use crate::capability::cli_process::CliAgentProcess;
 use crate::manager::process_registry::register_session_process;
 use crate::protocol::events::AgentStreamEvent;
+use crate::protocol::send_error::AgentSendError;
 use crate::types::SendMessageData;
 use std::path::PathBuf;
 
@@ -187,7 +188,7 @@ impl crate::agent_task::IAgentTask for NanobotAgentManager {
         self.runtime.subscribe()
     }
 
-    async fn send_message(&self, data: SendMessageData) -> Result<(), AppError> {
+    async fn send_message(&self, data: SendMessageData) -> Result<(), AgentSendError> {
         self.runtime.bump_activity();
 
         {
@@ -205,7 +206,14 @@ impl crate::agent_task::IAgentTask for NanobotAgentManager {
             }
         });
 
-        self.process.send(&payload).await
+        match self.process.send(&payload).await {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                let send_error = AgentSendError::from_app_error(err);
+                self.runtime.emit_error_data(send_error.stream_error().clone());
+                Err(send_error)
+            }
+        }
     }
 
     async fn cancel(&self) -> Result<(), AppError> {

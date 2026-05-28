@@ -264,7 +264,10 @@ mod tests {
         fn subscribe(&self) -> broadcast::Receiver<AgentStreamEvent> {
             self.event_tx.subscribe()
         }
-        async fn send_message(&self, _data: SendMessageData) -> Result<(), AppError> {
+        async fn send_message(
+            &self,
+            _data: SendMessageData,
+        ) -> Result<(), crate::protocol::send_error::AgentSendError> {
             Ok(())
         }
         async fn cancel(&self) -> Result<(), AppError> {

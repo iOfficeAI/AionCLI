@@ -12,6 +12,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::agent_runtime::AgentRuntime;
 use crate::protocol::events::AgentStreamEvent;
+use crate::protocol::send_error::AgentSendError;
 use crate::types::SendMessageData;
 
 /// Internal mutable state for the Remote agent.
@@ -272,7 +273,7 @@ impl crate::agent_task::IAgentTask for RemoteAgentManager {
         self.runtime.subscribe()
     }
 
-    async fn send_message(&self, data: SendMessageData) -> Result<(), AppError> {
+    async fn send_message(&self, data: SendMessageData) -> Result<(), AgentSendError> {
         self.runtime.bump_activity();
 
         let is_first = {
@@ -293,7 +294,14 @@ impl crate::agent_task::IAgentTask for RemoteAgentManager {
                     "msgId": data.msg_id,
                 }
             });
-            self.ws_send(&payload).await
+            match self.ws_send(&payload).await {
+                Ok(()) => Ok(()),
+                Err(err) => {
+                    let send_error = AgentSendError::from_app_error(err);
+                    self.runtime.emit_error_data(send_error.stream_error().clone());
+                    Err(send_error)
+                }
+            }
         } else {
             // Subsequent messages: try to resume session
             let session_key = self.state.read().await.session_key.clone();
@@ -310,7 +318,14 @@ impl crate::agent_task::IAgentTask for RemoteAgentManager {
             if !data.files.is_empty() {
                 payload["data"]["files"] = json!(data.files);
             }
-            self.ws_send(&payload).await
+            match self.ws_send(&payload).await {
+                Ok(()) => Ok(()),
+                Err(err) => {
+                    let send_error = AgentSendError::from_app_error(err);
+                    self.runtime.emit_error_data(send_error.stream_error().clone());
+                    Err(send_error)
+                }
+            }
         }
     }
 

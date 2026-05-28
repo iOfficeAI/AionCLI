@@ -25,6 +25,7 @@ use aionui_mcp::{AcpMcpCapabilities, parse_acp_mcp_capabilities};
 use aionui_realtime::EventBroadcaster;
 use aionui_runtime::resolve_command_path;
 use std::collections::{HashMap, HashSet};
+use tokio::sync::oneshot;
 use tracing::{debug, error, info, warn};
 
 use crate::convert::{
@@ -1375,14 +1376,16 @@ impl ConversationService {
                 let rx = agent.subscribe();
                 let send_agent = agent.clone();
                 let conv_id_send = conv_id.clone();
+                let (send_error_tx, send_error_rx) = oneshot::channel();
                 // 1. Send the message to the agent and concurrently run the relay to stream events.
                 tokio::spawn(async move {
                     if let Err(e) = send_agent.send_message(current_send).await {
                         error!(conversation_id = %conv_id_send, error = %ErrorChain(&e), "Agent send_message failed");
+                        let _ = send_error_tx.send(e);
                     }
                 });
                 // 2. Wait for the agent to process the message and complete the turn, while the relay streams events in real time.
-                let outcome = relay.consume(rx).await;
+                let outcome = relay.consume_with_send_error(rx, send_error_rx).await;
 
                 if let Some(session_key) = agent.get_session_key() {
                     persist_session_key(&repo, &conv_id, &session_key).await;

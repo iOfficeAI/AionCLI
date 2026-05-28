@@ -11,6 +11,7 @@ use crate::agent_runtime::AgentRuntime;
 use crate::capability::cli_process::CliAgentProcess;
 use crate::manager::process_registry::register_session_process;
 use crate::protocol::events::AgentStreamEvent;
+use crate::protocol::send_error::AgentSendError;
 use crate::types::SendMessageData;
 use aionui_api_types::OpenClawBuildExtra;
 
@@ -403,7 +404,7 @@ impl crate::agent_task::IAgentTask for OpenClawAgentManager {
         self.runtime.subscribe()
     }
 
-    async fn send_message(&self, data: SendMessageData) -> Result<(), AppError> {
+    async fn send_message(&self, data: SendMessageData) -> Result<(), AgentSendError> {
         self.runtime.bump_activity();
 
         let is_first = {
@@ -419,17 +420,20 @@ impl crate::agent_task::IAgentTask for OpenClawAgentManager {
             text_state.reset_for_new_turn();
         }
 
-        let result = self.do_send_message(is_first, data).await;
-        if let Err(ref e) = result {
-            error!(
-                conversation_id = %self.runtime.conversation_id(),
-                error = %ErrorChain(e),
-                "OpenClaw send_message failed, emitting Error+Finish"
-            );
-            self.runtime.emit_error(format!("OpenClaw send failed: {e}"));
-            self.runtime.emit_finish(None);
+        match self.do_send_message(is_first, data).await {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                error!(
+                    conversation_id = %self.runtime.conversation_id(),
+                    error = %ErrorChain(&err),
+                    "OpenClaw send_message failed, emitting Error+Finish"
+                );
+                let send_error = AgentSendError::from_app_error(err);
+                self.runtime.emit_error_data(send_error.stream_error().clone());
+                self.runtime.emit_finish(None);
+                Err(send_error)
+            }
         }
-        result
     }
 
     async fn cancel(&self) -> Result<(), AppError> {

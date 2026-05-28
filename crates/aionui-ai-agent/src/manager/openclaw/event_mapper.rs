@@ -133,10 +133,7 @@ fn map_chat_event(
         }
         ChatEventState::Error => {
             let msg = chat.error_message.unwrap_or_else(|| "Unknown chat error".into());
-            events.push(AgentStreamEvent::Error(ErrorEventData {
-                message: msg,
-                code: None,
-            }));
+            events.push(AgentStreamEvent::Error(ErrorEventData::legacy(msg, None)));
             text_state.turn_active = false;
         }
     }

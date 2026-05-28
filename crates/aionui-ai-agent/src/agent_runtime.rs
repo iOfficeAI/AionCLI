@@ -14,6 +14,7 @@ use std::sync::{Arc, RwLock};
 
 use tokio::sync::broadcast;
 
+use aionui_api_types::AgentStreamErrorData;
 use aionui_common::{ConversationStatus, TimestampMs, now_ms};
 
 use crate::protocol::events::{AgentStreamEvent, ErrorEventData, FinishEventData};
@@ -127,6 +128,12 @@ impl AgentRuntime {
     /// Atomic: set status ← Finished AND broadcast `Error { message }`.
     /// Idempotent in the Finished absorbing state (no-op).
     pub fn emit_error(&self, message: impl Into<String>) {
+        self.emit_error_data(ErrorEventData::legacy(message, None));
+    }
+
+    /// Atomic: set status ← Finished AND broadcast the structured error payload.
+    /// Idempotent in the Finished absorbing state (no-op).
+    pub fn emit_error_data(&self, data: AgentStreamErrorData) {
         let already_finished = {
             let mut guard = self.status.write().unwrap_or_else(|e| e.into_inner());
             let was_finished = matches!(*guard, Some(ConversationStatus::Finished));
@@ -138,10 +145,7 @@ impl AgentRuntime {
         if already_finished {
             return;
         }
-        let _ = self.event_tx.send(AgentStreamEvent::Error(ErrorEventData {
-            message: message.into(),
-            code: None,
-        }));
+        let _ = self.event_tx.send(AgentStreamEvent::Error(data));
     }
 }
 

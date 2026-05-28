@@ -11,6 +11,7 @@ use crate::manager::process_registry::{register_session_process, unregister_agen
 use crate::protocol::acp::AcpProtocol;
 use crate::protocol::error::{AcpError, CloseReason};
 use crate::protocol::events::{AgentStreamEvent, FinishEventData};
+use crate::protocol::send_error::AgentSendError;
 use crate::registry::CatalogSender;
 use crate::shared_kernel::{ModeId, ModelId, SessionId as DomainSessionId};
 use crate::types::SendMessageData;
@@ -605,17 +606,17 @@ impl crate::agent_task::IAgentTask for AcpAgentManager {
     }
 
     #[tracing::instrument(skip_all, fields(conversation_id = %self.params.conversation_id, msg_id = %data.msg_id))]
-    async fn send_message(&self, data: SendMessageData) -> Result<(), AppError> {
+    async fn send_message(&self, data: SendMessageData) -> Result<(), AgentSendError> {
         self.runtime.bump_activity();
 
-        let result = self.ensure_session_and_send(&data).await;
-        match &result {
+        match self.ensure_session_and_send(&data).await {
             Ok(()) => {
                 info!("ACP send_message completed");
                 // ACP pattern: Finish with session_id = None (default).
                 // If ACP later wants to include the session_id in Finish,
                 // read it from `self.session.read().await.session_id()`.
                 self.runtime.emit_finish(None);
+                Ok(())
             }
             Err(err) => {
                 // Build a CloseReason that captures whatever context we still
@@ -628,22 +629,23 @@ impl crate::agent_task::IAgentTask for AcpAgentManager {
                 //      stderr-augmentation heuristic for the SDK's "default
                 //      Internal error" shape; otherwise the user-facing form
                 //      of the AppError is the best we can do.
-                let close_reason = self.build_close_reason_from_error(err).await;
+                let close_reason = self.build_close_reason_from_error(&err).await;
 
                 // Operator log: full error chain + the (raw, pre-redaction)
                 // stderr peek so on-call can correlate. The redacted summary
                 // is what reaches the UI.
                 let summary = close_reason.user_facing_message();
-                warn!(error = %ErrorChain(err), close_reason_summary = %summary, "ACP send_message failed");
+                warn!(error = %ErrorChain(&err), close_reason_summary = %summary, "ACP send_message failed");
 
                 {
                     let mut session = self.session.write().await;
                     session.record_close_reason(Some(close_reason));
                 }
-                self.runtime.emit_error(summary);
+                let send_error = AgentSendError::from_app_error(err);
+                self.runtime.emit_error_data(send_error.stream_error().clone());
+                Err(send_error)
             }
         }
-        result
     }
 
     #[tracing::instrument(skip_all, fields(conversation_id = %self.params.conversation_id))]

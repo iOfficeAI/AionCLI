@@ -923,10 +923,12 @@ mod tests {
         fn subscribe(&self) -> broadcast::Receiver<AgentStreamEvent> {
             self.event_tx.subscribe()
         }
-        async fn send_message(&self, data: SendMessageData) -> Result<(), AppError> {
+        async fn send_message(&self, data: SendMessageData) -> Result<(), aionui_ai_agent::AgentSendError> {
             self.sent.lock().unwrap().push(data);
             match &self.fail_with {
-                Some(msg) => Err(AppError::Internal(msg.clone())),
+                Some(msg) => Err(aionui_ai_agent::AgentSendError::from_app_error(AppError::Internal(
+                    msg.clone(),
+                ))),
                 None => Ok(()),
             }
         }

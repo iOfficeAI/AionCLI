@@ -21,6 +21,7 @@ use crate::agent_runtime::AgentRuntime;
 use crate::capability::backend_output_sink::BackendOutputSink;
 use crate::capability::backend_protocol_sink::BackendProtocolSink;
 use crate::protocol::events::AgentStreamEvent;
+use crate::protocol::send_error::AgentSendError;
 use crate::types::{AionrsResolvedConfig, SendMessageData};
 
 pub struct AionrsAgentManager {
@@ -185,7 +186,7 @@ impl crate::agent_task::IAgentTask for AionrsAgentManager {
         self.runtime.subscribe()
     }
 
-    async fn send_message(&self, data: SendMessageData) -> Result<(), AppError> {
+    async fn send_message(&self, data: SendMessageData) -> Result<(), AgentSendError> {
         let started_at = now_ms();
         info!(
             conversation_id = %self.runtime.conversation_id(),
@@ -230,9 +231,10 @@ impl crate::agent_task::IAgentTask for AionrsAgentManager {
                     error = %ErrorChain(&e),
                     "Aionrs engine.run() failed, emitting Error+Finish"
                 );
-                self.runtime.emit_error(error_msg.clone());
+                let send_error = AgentSendError::from_app_error(AppError::Internal(error_msg));
+                self.runtime.emit_error_data(send_error.stream_error().clone());
                 self.runtime.emit_finish(None);
-                Err(AppError::Internal(error_msg))
+                Err(send_error)
             }
             None => {
                 self.runtime.emit_error("Stopped by user");

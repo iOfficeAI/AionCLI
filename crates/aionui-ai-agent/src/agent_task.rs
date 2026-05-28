@@ -22,6 +22,7 @@ use crate::manager::nanobot::NanobotAgentManager;
 use crate::manager::openclaw::OpenClawAgentManager;
 use crate::manager::remote::RemoteAgentManager;
 use crate::protocol::events::AgentStreamEvent;
+use crate::protocol::send_error::AgentSendError;
 use crate::types::SendMessageData;
 
 use aionui_api_types::{
@@ -62,7 +63,7 @@ pub trait IAgentTask: Send + Sync {
     /// Send a user message to the agent. Returns once the agent has
     /// accepted the turn; actual streaming proceeds on the broadcast
     /// channel returned by [`Self::subscribe`].
-    async fn send_message(&self, data: SendMessageData) -> Result<(), AppError>;
+    async fn send_message(&self, data: SendMessageData) -> Result<(), AgentSendError>;
 
     /// Stop the current streaming response without killing the agent.
     async fn cancel(&self) -> Result<(), AppError>;
@@ -220,7 +221,7 @@ impl AgentInstance {
     }
 
     /// Send a user message to the agent.
-    pub async fn send_message(&self, data: SendMessageData) -> Result<(), AppError> {
+    pub async fn send_message(&self, data: SendMessageData) -> Result<(), AgentSendError> {
         self.as_task().send_message(data).await
     }
 

@@ -3,6 +3,7 @@ mod acp;
 mod acp_prompt_hook;
 mod agent_build_extra;
 mod agent_discovery;
+mod agent_error;
 mod assistant;
 mod auth;
 mod channel;
@@ -38,6 +39,7 @@ pub use agent_build_extra::{
     SessionMcpServer, SessionMcpTransport, SlashCommandItem,
 };
 pub use agent_discovery::{AgentEnvEntry, AgentHandshake, AgentMetadata, AgentSource, AgentSourceInfo, BehaviorPolicy};
+pub use agent_error::{AgentErrorCode, AgentErrorOwnership, AgentStreamErrorData};
 pub use assistant::{
     AssistantResponse, AssistantSource, CreateAssistantRequest, ImportAssistantsRequest, ImportAssistantsResult,
     ImportError, SetAssistantStateRequest, UpdateAssistantRequest,

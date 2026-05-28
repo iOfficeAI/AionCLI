@@ -464,10 +464,7 @@ mod tests {
 
     #[test]
     fn error_event_produces_error() {
-        let event = AgentStreamEvent::Error(ErrorEventData {
-            message: "timeout".into(),
-            code: None,
-        });
+        let event = AgentStreamEvent::Error(ErrorEventData::legacy("timeout", None));
         let action = ChannelMessageService::process_stream_event(&event);
         match action {
             Some(StreamAction::Error(msg)) => assert_eq!(msg, "timeout"),

@@ -5,6 +5,8 @@ pub mod translate;
 
 use serde::{Deserialize, Serialize};
 
+pub use aionui_api_types::AgentStreamErrorData as ErrorEventData;
+
 pub use permission::{
     AcpPermissionEventData, AcpPermissionOptionData, AcpPermissionOptionKind, AcpPermissionRequestData,
     AcpPermissionToolCall,
@@ -94,14 +96,6 @@ pub enum TipType {
 pub struct FinishEventData {
     #[serde(default)]
     pub session_id: Option<String>,
-}
-
-/// Data for the `Error` event.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ErrorEventData {
-    pub message: String,
-    #[serde(default)]
-    pub code: Option<String>,
 }
 
 #[cfg(test)]
@@ -206,10 +200,7 @@ mod tests {
 
     #[test]
     fn error_event_roundtrip() {
-        let event = AgentStreamEvent::Error(ErrorEventData {
-            message: "timeout".into(),
-            code: Some("E001".into()),
-        });
+        let event = AgentStreamEvent::Error(ErrorEventData::legacy("timeout", None));
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["type"], "error");
         assert_eq!(json["data"]["message"], "timeout");

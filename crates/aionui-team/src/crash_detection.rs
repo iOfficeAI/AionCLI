@@ -30,10 +30,7 @@ mod tests {
     use aionui_ai_agent::protocol::events::{ErrorEventData, StartEventData};
 
     fn error_event(message: &str) -> AgentStreamEvent {
-        AgentStreamEvent::Error(ErrorEventData {
-            message: message.to_string(),
-            code: None,
-        })
+        AgentStreamEvent::Error(ErrorEventData::legacy(message, None))
     }
 
     #[test]
@@ -96,28 +93,19 @@ mod crash_tests {
 
     #[test]
     fn detect_crash_process_exited() {
-        let event = AgentStreamEvent::Error(ErrorEventData {
-            message: "process exited unexpectedly".into(),
-            code: None,
-        });
+        let event = AgentStreamEvent::Error(ErrorEventData::legacy("process exited unexpectedly", None));
         assert_eq!(detect_crash(&event), Some(CrashReason::ProcessExited));
     }
 
     #[test]
     fn detect_crash_session_not_found() {
-        let event = AgentStreamEvent::Error(ErrorEventData {
-            message: "Session not found".into(),
-            code: None,
-        });
+        let event = AgentStreamEvent::Error(ErrorEventData::legacy("Session not found", None));
         assert_eq!(detect_crash(&event), Some(CrashReason::SessionNotFound));
     }
 
     #[test]
     fn detect_crash_other_error() {
-        let event = AgentStreamEvent::Error(ErrorEventData {
-            message: "something else broke".into(),
-            code: None,
-        });
+        let event = AgentStreamEvent::Error(ErrorEventData::legacy("something else broke", None));
         assert_eq!(
             detect_crash(&event),
             Some(CrashReason::Unknown("something else broke".into()))

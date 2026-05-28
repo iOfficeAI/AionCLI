@@ -7,6 +7,7 @@ use crate::protocol::events::{
 use crate::shared_kernel::SessionId as DomainSessionId;
 use crate::types::SendMessageData;
 use agent_client_protocol::schema::{ContentBlock, LoadSessionRequest, PromptRequest, SessionId, StopReason};
+use aionui_api_types::{AgentErrorCode, AgentErrorOwnership};
 use aionui_common::AppError;
 use serde_json::Value;
 use tokio::sync::broadcast::error::TryRecvError;
@@ -259,13 +260,17 @@ impl AcpAgentManager {
         // user already initiated the cancel and doesn't need a second
         // notification.
         if !matches!(prompt_response.stop_reason, StopReason::Cancelled) && is_empty_turn(&mut probe_rx) {
-            self.runtime.emit(AgentStreamEvent::Error(ErrorEventData {
+            self.runtime.emit(AgentStreamEvent::Error(ErrorEventData::classified(
                 // TODO(i18n): wire to a frontend translation key once a
                 // pattern is established. For now this is the user-facing
                 // English string.
-                message: empty_finish_diagnostic_message(prompt_response.stop_reason),
-                code: Some("acp.empty_finish".into()),
-            }));
+                empty_finish_diagnostic_message(prompt_response.stop_reason),
+                AgentErrorCode::UnknownUpstreamError,
+                AgentErrorOwnership::UnknownUpstream,
+                Some("Agent completed the turn without producing visible output.".into()),
+                true,
+                true,
+            )));
         }
 
         // Emit Finish event
