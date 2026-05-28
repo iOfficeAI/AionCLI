@@ -16,8 +16,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use aionui_api_types::TryConnectCustomAgentResponse;
-use aionui_common::{CommandSpec, EnvVar};
+use aionui_api_types::{AgentHandshake, TryConnectCustomAgentResponse};
+use aionui_common::{CommandSpec, EnvVar, normalize_keys_to_snake_case};
 use aionui_runtime::resolve_command_path;
 use tokio::sync::{broadcast, mpsc};
 use tracing::debug;
@@ -52,7 +52,7 @@ pub async fn try_connect_custom_agent(
 
     // ── Step 2 — spawn + ACP initialize ─────────────────────────────
     match tokio::time::timeout(STEP2_TIMEOUT, acp_initialize(resolved, args, env, data_dir)).await {
-        Ok(Ok(())) => TryConnectCustomAgentResponse::Success,
+        Ok(Ok(_)) => TryConnectCustomAgentResponse::Success,
         Ok(Err(msg)) => TryConnectCustomAgentResponse::FailAcp { error: msg },
         Err(_) => TryConnectCustomAgentResponse::FailAcp {
             error: format!("ACP initialize did not complete within {}s", STEP2_TIMEOUT.as_secs()),
@@ -64,12 +64,12 @@ fn first_token(command: &str) -> &str {
     command.split_whitespace().next().unwrap_or(command)
 }
 
-async fn acp_initialize(
+pub(crate) async fn acp_initialize(
     resolved: PathBuf,
     args: &[String],
     env: &HashMap<String, String>,
     data_dir: &Path,
-) -> Result<(), String> {
+) -> Result<AgentHandshake, String> {
     let spec = CommandSpec {
         command: resolved,
         args: args.to_vec(),
@@ -107,11 +107,16 @@ async fn acp_initialize(
         biased;
         res = connect => {
             let protocol = res.map_err(|e| format!("ACP initialize failed: {e}"))?;
+            let handshake = AgentHandshake {
+                agent_capabilities: protocol.agent_capabilities().and_then(sdk_to_snake_value),
+                auth_methods: protocol.auth_methods().and_then(sdk_to_snake_value),
+                ..Default::default()
+            };
             // Dropping `protocol` fires the shutdown oneshot; the child
             // process was spawned with `kill_on_drop(true)` via
             // `aionui_runtime::Builder` so CPU stays clean.
             drop(protocol);
-            Ok(())
+            Ok(handshake)
         }
         exit = proc.wait_for_exit() => {
             let stderr = proc.take_stderr().await;
@@ -127,6 +132,12 @@ async fn acp_initialize(
             }
         }
     }
+}
+
+fn sdk_to_snake_value<T: serde::Serialize>(value: T) -> Option<serde_json::Value> {
+    let mut v = serde_json::to_value(value).ok()?;
+    normalize_keys_to_snake_case(&mut v);
+    Some(v)
 }
 
 #[cfg(test)]

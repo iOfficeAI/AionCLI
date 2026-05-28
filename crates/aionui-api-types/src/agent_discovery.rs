@@ -106,6 +106,49 @@ pub struct AgentHandshake {
     pub available_commands: Option<serde_json::Value>,
 }
 
+/// Reason a caller asked the backend to pre-initialize agent metadata.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentWarmupReason {
+    #[default]
+    Idle,
+    UserSelect,
+    BeforeSend,
+}
+
+/// Request body for `POST /api/agents/warmup`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AgentWarmupRequest {
+    #[serde(default)]
+    pub backends: Vec<String>,
+    #[serde(default)]
+    pub reason: AgentWarmupReason,
+}
+
+/// Per-backend result for a metadata warmup attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentWarmupStatus {
+    Ready,
+    Skipped,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentWarmupResult {
+    pub backend: String,
+    pub status: AgentWarmupStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AgentWarmupResponse {
+    pub results: Vec<AgentWarmupResult>,
+}
+
 /// The unified, decoded view of an `agent_metadata` row.
 ///
 /// Also the API response shape: `/api/agents` returns a list of these
@@ -254,6 +297,23 @@ mod tests {
         assert!(!meta.available);
         assert!(!meta.behavior_policy.supports_side_question);
         assert!(meta.handshake.agent_capabilities.is_none());
+    }
+
+    #[test]
+    fn agent_warmup_reason_uses_snake_case() {
+        let value = serde_json::to_value(AgentWarmupRequest {
+            backends: vec!["codex".into()],
+            reason: AgentWarmupReason::UserSelect,
+        })
+        .unwrap();
+        assert_eq!(value["reason"], "user_select");
+
+        let parsed: AgentWarmupRequest = serde_json::from_value(serde_json::json!({
+            "backends": ["claude"],
+            "reason": "before_send"
+        }))
+        .unwrap();
+        assert_eq!(parsed.reason, AgentWarmupReason::BeforeSend);
     }
 }
 
