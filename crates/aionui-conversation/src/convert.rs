@@ -8,7 +8,7 @@ use aionui_common::{
 use aionui_db::MessageSearchRow;
 use aionui_db::models::{ConversationArtifactRow, ConversationRow, MessageRow};
 
-const TOOL_CONTENT_COMPACT_THRESHOLD_BYTES: usize = 64 * 1024;
+pub(crate) const TOOL_CONTENT_COMPACT_THRESHOLD_BYTES: usize = 64 * 1024;
 const TOOL_CONTENT_PREVIEW_CHARS: usize = 4096;
 
 /// Convert a database row into an API response DTO.
