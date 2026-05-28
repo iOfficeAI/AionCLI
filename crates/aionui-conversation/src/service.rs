@@ -1040,14 +1040,31 @@ impl ConversationService {
         ));
 
         // Build task options from conversation row
-        let build_opts = self.build_task_options(&row)?;
+        let build_opts = match self.build_task_options(&row) {
+            Ok(opts) => opts,
+            Err(err) => {
+                self.persist_send_failure_tip(conversation_id, &err).await;
+                return Err(err);
+            }
+        };
         let stored_workspace = build_opts.workspace.clone();
-        let agent = task_manager.get_or_build_task(conversation_id, build_opts).await?;
+        let agent = match task_manager.get_or_build_task(conversation_id, build_opts).await {
+            Ok(agent) => agent,
+            Err(err) => {
+                self.persist_send_failure_tip(conversation_id, &err).await;
+                return Err(err);
+            }
+        };
 
         // If the factory resolved a different workspace (e.g. auto-created temp
         // dir for a legacy conversation with empty workspace), persist it back.
-        self.maybe_persist_workspace(conversation_id, &stored_workspace, agent.workspace())
-            .await?;
+        if let Err(err) = self
+            .maybe_persist_workspace(conversation_id, &stored_workspace, agent.workspace())
+            .await
+        {
+            self.persist_send_failure_tip(conversation_id, &err).await;
+            return Err(err);
+        }
 
         info!(agent_type = ?agent.agent_type(), "Agent task ready");
 

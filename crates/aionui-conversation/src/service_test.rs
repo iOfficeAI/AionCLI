@@ -1165,6 +1165,53 @@ impl MockTaskManager {
     }
 }
 
+struct FailingBuildTaskManager {
+    error: String,
+}
+
+impl FailingBuildTaskManager {
+    fn new(error: impl Into<String>) -> Self {
+        Self { error: error.into() }
+    }
+}
+
+#[async_trait::async_trait]
+impl IWorkerTaskManager for FailingBuildTaskManager {
+    fn get_task(&self, _conversation_id: &str) -> Option<AgentInstance> {
+        None
+    }
+
+    async fn get_or_build_task(
+        &self,
+        _conversation_id: &str,
+        _options: BuildTaskOptions,
+    ) -> Result<AgentInstance, AppError> {
+        Err(AppError::BadGateway(self.error.clone()))
+    }
+
+    fn kill(&self, _conversation_id: &str, _reason: Option<AgentKillReason>) -> Result<(), AppError> {
+        Ok(())
+    }
+
+    fn kill_and_wait(
+        &self,
+        _conversation_id: &str,
+        _reason: Option<AgentKillReason>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        Box::pin(std::future::ready(()))
+    }
+
+    fn clear(&self) {}
+
+    fn active_count(&self) -> usize {
+        0
+    }
+
+    fn collect_idle(&self, _idle_threshold_ms: TimestampMs) -> Vec<String> {
+        vec![]
+    }
+}
+
 #[async_trait::async_trait]
 impl IWorkerTaskManager for MockTaskManager {
     fn get_task(&self, conversation_id: &str) -> Option<AgentInstance> {
@@ -1462,6 +1509,41 @@ async fn send_message_persists_hidden_user_message_when_requested() {
     assert!(user_message.hidden);
     // msg_id is server-generated and must be non-empty for frontend routing.
     assert!(user_message.msg_id.as_deref().is_some_and(|s| !s.is_empty()));
+}
+
+#[tokio::test]
+async fn send_message_persists_error_tip_when_agent_build_fails() {
+    let (svc, _broadcaster, repo, _task_mgr) = make_service();
+    let task_mgr: Arc<dyn IWorkerTaskManager> =
+        Arc::new(FailingBuildTaskManager::new("ACP init failed: config file is invalid"));
+
+    let conv = svc.create("user_1", make_create_req()).await.unwrap();
+
+    let err = svc
+        .send_message("user_1", &conv.id, make_send_req(), &task_mgr)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, AppError::BadGateway(_)));
+
+    let messages = repo.get_messages(&conv.id, 1, 20, SortOrder::Asc).await.unwrap().items;
+    assert_eq!(messages.len(), 2, "user message and error tip should be persisted");
+
+    let error_tip = messages
+        .iter()
+        .find(|message| message.r#type == "tips")
+        .expect("agent build failure should persist an error tips message");
+    assert_eq!(error_tip.status.as_deref(), Some("error"));
+    assert_eq!(error_tip.position.as_deref(), Some("center"));
+
+    let content: serde_json::Value = serde_json::from_str(&error_tip.content).unwrap();
+    assert_eq!(content["type"], "error");
+    assert_eq!(content["source"], "send_failed");
+    assert_eq!(content["code"], "BAD_GATEWAY");
+    assert_eq!(
+        content["content"],
+        "Bad gateway: ACP init failed: config file is invalid"
+    );
 }
 
 #[tokio::test]
