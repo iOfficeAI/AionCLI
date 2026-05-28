@@ -20,6 +20,27 @@ pub trait IMcpServerRepository: Send + Sync {
     /// Finds an MCP server by name, or `None` if not found.
     async fn find_by_name(&self, name: &str) -> Result<Option<McpServerRow>, DbError>;
 
+    /// Finds an MCP server by ID, including soft-deleted rows.
+    async fn find_by_id_any(&self, id: &str) -> Result<Option<McpServerRow>, DbError> {
+        self.find_by_id(id).await
+    }
+
+    /// Finds an MCP server by name, including soft-deleted rows.
+    async fn find_by_name_any(&self, name: &str) -> Result<Option<McpServerRow>, DbError> {
+        self.find_by_name(name).await
+    }
+
+    /// Finds a set of MCP servers by ID, including soft-deleted rows.
+    async fn list_by_ids_any(&self, ids: &[String]) -> Result<Vec<McpServerRow>, DbError> {
+        let mut rows = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Some(row) = self.find_by_id_any(id).await? {
+                rows.push(row);
+            }
+        }
+        Ok(rows)
+    }
+
     /// Creates a new MCP server and returns the inserted row.
     /// Returns `DbError::Conflict` if the name already exists.
     async fn create(&self, params: CreateMcpServerParams<'_>) -> Result<McpServerRow, DbError>;
@@ -28,7 +49,7 @@ pub trait IMcpServerRepository: Send + Sync {
     /// doesn't exist, `DbError::Conflict` if the new name collides with another.
     async fn update(&self, id: &str, params: UpdateMcpServerParams<'_>) -> Result<McpServerRow, DbError>;
 
-    /// Deletes an MCP server by ID. Returns `DbError::NotFound` if the ID
+    /// Soft-deletes an MCP server by ID. Returns `DbError::NotFound` if the ID
     /// doesn't exist.
     async fn delete(&self, id: &str) -> Result<(), DbError>;
 
@@ -36,7 +57,8 @@ pub trait IMcpServerRepository: Send + Sync {
     /// new names are inserted. Returns the count of affected rows.
     async fn batch_upsert(&self, servers: &[CreateMcpServerParams<'_>]) -> Result<Vec<McpServerRow>, DbError>;
 
-    /// Updates only the status (and optionally last_connected).
+    /// Updates only the latest connection-test result status
+    /// (and optionally `last_connected`).
     /// Returns `DbError::NotFound` if the ID doesn't exist.
     async fn update_status(
         &self,
@@ -78,4 +100,5 @@ pub struct UpdateMcpServerParams<'a> {
     pub tools: Option<Option<&'a str>>,
     pub original_json: Option<Option<&'a str>>,
     pub builtin: Option<bool>,
+    pub deleted_at: Option<Option<aionui_common::TimestampMs>>,
 }

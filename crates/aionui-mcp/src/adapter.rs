@@ -19,6 +19,10 @@ pub struct DetectedServer {
     pub name: String,
     /// Transport configuration detected from the Agent CLI.
     pub transport: McpServerTransport,
+    /// Whether this detected MCP can be imported without extra intervention.
+    pub importable: bool,
+    /// Human-readable reason when the MCP is not currently importable.
+    pub import_skip_reason: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -120,6 +124,8 @@ mod tests {
             servers.push(DetectedServer {
                 name: name.to_owned(),
                 transport: transport.clone(),
+                importable: true,
+                import_skip_reason: None,
             });
             Ok(())
         }

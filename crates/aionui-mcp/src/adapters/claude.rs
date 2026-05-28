@@ -6,7 +6,9 @@ use crate::adapter::{DetectedServer, McpAgentAdapter};
 use crate::error::McpError;
 use crate::types::McpServerTransport;
 
-use super::cli_helpers::{DETECT_TIMEOUT, MUTATE_TIMEOUT, is_cli_installed, run_cli, strip_ansi};
+use super::cli_helpers::{
+    DETECT_TIMEOUT, MUTATE_TIMEOUT, is_cli_installed, normalize_detection_status, run_cli, strip_ansi,
+};
 
 const CLI_NAME: &str = "claude";
 
@@ -162,55 +164,65 @@ fn parse_claude_list_output(output: &str) -> Vec<DetectedServer> {
 ///
 /// Pattern: `<name>: <command_or_url> - [✓|✗] <status>`
 fn parse_claude_list_line(line: &str) -> Option<DetectedServer> {
-    // Must contain a status marker
-    let has_status =
-        line.contains('\u{2713}') || line.contains('\u{2717}') || line.contains("Connected") || line.contains("Failed");
-
-    if !has_status {
-        return None;
-    }
-
     // Split on " - " to separate "name: command" from status
     let dash_pos = line.rfind(" - ")?;
+    let status = normalize_detection_status(&line[dash_pos + 3..]);
+
     let name_cmd_part = &line[..dash_pos];
 
-    // Split name from command on first ":"
-    let colon_pos = name_cmd_part.find(':')?;
-    let name = name_cmd_part[..colon_pos].trim();
+    // Claude separates the name from command/URL with ": ". Names
+    // themselves may contain ":" (for example plugin-scoped MCP entries).
+    let separator_pos = name_cmd_part.find(": ")?;
+    let name = name_cmd_part[..separator_pos].trim();
     if name.is_empty() {
         return None;
     }
 
-    let command_or_url = name_cmd_part[colon_pos + 1..].trim();
+    let command_or_url = name_cmd_part[separator_pos + 2..].trim();
     if command_or_url.is_empty() {
         return None;
     }
 
+    let normalized_command_or_url = command_or_url
+        .strip_suffix(" (HTTP)")
+        .or_else(|| command_or_url.strip_suffix(" (SSE)"))
+        .unwrap_or(command_or_url)
+        .trim();
+
     // Heuristic: if it looks like a URL, treat as HTTP; otherwise stdio.
-    let transport = if command_or_url.starts_with("http://") || command_or_url.starts_with("https://") {
-        // SSE heuristic: URL ending with /sse
-        if command_or_url.ends_with("/sse") {
-            McpServerTransport::Sse {
-                url: command_or_url.to_owned(),
-                headers: HashMap::new(),
+    let transport =
+        if normalized_command_or_url.starts_with("http://") || normalized_command_or_url.starts_with("https://") {
+            // SSE heuristic: URL ending with /sse
+            if normalized_command_or_url.ends_with("/sse") {
+                McpServerTransport::Sse {
+                    url: normalized_command_or_url.to_owned(),
+                    headers: HashMap::new(),
+                }
+            } else {
+                McpServerTransport::Http {
+                    url: normalized_command_or_url.to_owned(),
+                    headers: HashMap::new(),
+                }
             }
         } else {
-            McpServerTransport::Http {
-                url: command_or_url.to_owned(),
-                headers: HashMap::new(),
+            McpServerTransport::Stdio {
+                command: normalized_command_or_url.to_owned(),
+                args: Vec::new(),
+                env: HashMap::new(),
             }
-        }
-    } else {
-        McpServerTransport::Stdio {
-            command: command_or_url.to_owned(),
-            args: Vec::new(),
-            env: HashMap::new(),
-        }
-    };
+        };
 
     Some(DetectedServer {
         name: name.to_owned(),
         transport,
+        importable: status.eq_ignore_ascii_case("Connected") && !name.starts_with("plugin:"),
+        import_skip_reason: if name.starts_with("plugin:") {
+            Some("Plugin-managed MCP".to_owned())
+        } else if status.eq_ignore_ascii_case("Connected") {
+            None
+        } else {
+            Some(status)
+        },
     })
 }
 
@@ -241,7 +253,8 @@ mod tests {
         let output = "broken-srv: node index.js - ✗ Failed to connect";
         let servers = parse_claude_list_output(output);
         assert_eq!(servers.len(), 1);
-        assert_eq!(servers[0].name, "broken-srv");
+        assert!(!servers[0].importable);
+        assert_eq!(servers[0].import_skip_reason.as_deref(), Some("Failed to connect"));
     }
 
     #[test]
@@ -271,6 +284,15 @@ mod tests {
     }
 
     #[test]
+    fn parse_claude_plugin_http_server_needing_auth() {
+        let output = "plugin:slack:slack: https://mcp.slack.com/mcp (HTTP) - ! Needs authentication";
+        let servers = parse_claude_list_output(output);
+        assert_eq!(servers.len(), 1);
+        assert!(!servers[0].importable);
+        assert_eq!(servers[0].import_skip_reason.as_deref(), Some("Plugin-managed MCP"));
+    }
+
+    #[test]
     fn parse_claude_multiple_servers() {
         let output = "\
 my-mcp: npx -y @test/mcp - ✓ Connected
@@ -280,6 +302,7 @@ web: https://example.com/api - ✓ Connected";
         assert_eq!(servers.len(), 3);
         assert_eq!(servers[0].name, "my-mcp");
         assert_eq!(servers[1].name, "broken");
+        assert!(!servers[1].importable);
         assert_eq!(servers[2].name, "web");
     }
 

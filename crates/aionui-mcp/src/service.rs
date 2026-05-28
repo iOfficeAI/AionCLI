@@ -1,13 +1,17 @@
 use std::sync::Arc;
 
 use aionui_api_types::{
-    BatchImportMcpServersRequest, CreateMcpServerRequest, McpServerResponse, UpdateMcpServerRequest,
+    BatchImportMcpServersRequest, CreateMcpServerRequest, McpConnectionTestResult, McpServerResponse,
+    UpdateMcpServerRequest,
 };
+use aionui_common::now_ms;
 use aionui_db::{CreateMcpServerParams, IMcpServerRepository, UpdateMcpServerParams};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::error::McpError;
 use crate::types::{McpServer, McpServerTransport};
+
+const SPLITTABLE_STDIO_LAUNCHERS: &[&str] = &["npx", "pnpx", "bunx", "uvx", "uv", "node", "python", "python3", "deno"];
 
 // ---------------------------------------------------------------------------
 // McpConfigService
@@ -19,7 +23,7 @@ use crate::types::{McpServer, McpServerTransport};
 /// delegating persistence to `IMcpServerRepository`. Business rules:
 ///
 /// - **add**: upsert by name (existing → update, new → create)
-/// - **delete**: if enabled, caller should trigger remove-from-agents
+/// - **delete**: removes the stored MCP definition
 /// - **toggle**: flips enabled state
 /// - **batch_import**: sequential upsert by name
 #[derive(Clone)]
@@ -56,36 +60,16 @@ impl McpConfigService {
     /// If a server with the same name already exists, it is updated
     /// (transport, description, original_json) rather than creating a duplicate.
     pub async fn add_server(&self, req: CreateMcpServerRequest) -> Result<McpServerResponse, McpError> {
-        let transport = McpServerTransport::from(req.transport);
-        let config_json = transport.to_config_json()?;
-
-        // Upsert: if a server with this name exists, update it
-        if let Some(existing) = self.repo.find_by_name(&req.name).await? {
-            let params = UpdateMcpServerParams {
-                description: Some(req.description.as_deref()),
-                transport_type: Some(transport.transport_type()),
-                transport_config: Some(&config_json),
-                original_json: Some(req.original_json.as_deref()),
-                ..Default::default()
-            };
-            let updated = self.repo.update(&existing.id, params).await?;
-            let server = McpServer::from_row(updated)?;
-            return Ok(server.into_response());
-        }
-
-        let params = CreateMcpServerParams {
-            name: &req.name,
-            description: req.description.as_deref(),
-            enabled: false,
-            transport_type: transport.transport_type(),
-            transport_config: &config_json,
-            tools: None,
-            original_json: req.original_json.as_deref(),
-            builtin: req.builtin,
-        };
-        let row = self.repo.create(params).await?;
-        let server = McpServer::from_row(row)?;
-        Ok(server.into_response())
+        let transport = normalize_transport(McpServerTransport::from(req.transport))?;
+        self.upsert_server(
+            &req.name,
+            req.description.as_deref(),
+            &transport,
+            req.original_json.as_deref(),
+            req.builtin,
+            false,
+        )
+        .await
     }
 
     /// Edit an existing MCP server (partial update).
@@ -98,14 +82,23 @@ impl McpConfigService {
 
         // Check name uniqueness if renaming
         if let Some(ref new_name) = req.name
-            && let Some(existing) = self.repo.find_by_name(new_name).await?
+            && let Some(existing) = self.repo.find_by_name_any(new_name).await?
             && existing.id != id
         {
+            if existing.builtin {
+                return Err(McpError::Conflict(format!(
+                    "Builtin MCP server name '{new_name}' is reserved"
+                )));
+            }
             return Err(McpError::Conflict(new_name.clone()));
         }
 
         // Build transport fields if provided
-        let transport = req.transport.map(McpServerTransport::from);
+        let transport = req
+            .transport
+            .map(McpServerTransport::from)
+            .map(normalize_transport)
+            .transpose()?;
         let config_json = transport.as_ref().map(McpServerTransport::to_config_json).transpose()?;
 
         let params = UpdateMcpServerParams {
@@ -114,6 +107,7 @@ impl McpConfigService {
             transport_type: transport.as_ref().map(McpServerTransport::transport_type),
             transport_config: config_json.as_deref(),
             original_json: req.original_json.as_ref().map(|opt| opt.as_deref()),
+            builtin: req.builtin,
             ..Default::default()
         };
 
@@ -122,10 +116,9 @@ impl McpConfigService {
         Ok(server.into_response())
     }
 
-    /// Delete an MCP server by ID.
+    /// Soft-delete an MCP server by ID.
     ///
-    /// Returns whether the deleted server was enabled (caller should trigger
-    /// remove-from-agents if `true`).
+    /// Returns whether the deleted server was enabled.
     pub async fn delete_server(&self, id: &str) -> Result<bool, McpError> {
         let row = self
             .repo
@@ -162,40 +155,186 @@ impl McpConfigService {
     /// Each server is processed individually: existing names are updated,
     /// new names are created.
     pub async fn batch_import(&self, req: BatchImportMcpServersRequest) -> Result<Vec<McpServerResponse>, McpError> {
-        let mut params_data: Vec<(McpServerTransport, String)> = Vec::new();
-        for server_req in &req.servers {
-            let transport = McpServerTransport::from(server_req.transport.clone());
-            let config_json = transport.to_config_json()?;
-            params_data.push((transport, config_json));
+        let requested_count = req.servers.len();
+        let mut rows = Vec::with_capacity(requested_count);
+        let mut skipped_reserved_count = 0usize;
+        for server_req in req.servers {
+            if let Some(existing) = self.repo.find_by_name_any(&server_req.name).await?
+                && existing.builtin
+            {
+                skipped_reserved_count += 1;
+                warn!(
+                    name = %server_req.name,
+                    "skipping batch import for builtin MCP name"
+                );
+                continue;
+            }
+
+            let transport = normalize_transport(McpServerTransport::from(server_req.transport))?;
+            let server = self
+                .upsert_server(
+                    &server_req.name,
+                    server_req.description.as_deref(),
+                    &transport,
+                    server_req.original_json.as_deref(),
+                    server_req.builtin,
+                    server_req.enabled.unwrap_or(false),
+                )
+                .await?;
+            rows.push(server);
         }
-
-        let create_params: Vec<CreateMcpServerParams<'_>> = req
-            .servers
-            .iter()
-            .zip(params_data.iter())
-            .map(|(server_req, (transport, config_json))| CreateMcpServerParams {
-                name: &server_req.name,
-                description: server_req.description.as_deref(),
-                enabled: server_req.enabled.unwrap_or(false),
-                transport_type: transport.transport_type(),
-                transport_config: config_json.as_str(),
-                tools: None,
-                original_json: server_req.original_json.as_deref(),
-                builtin: server_req.builtin,
-            })
-            .collect();
-
-        let rows = self.repo.batch_upsert(&create_params).await?;
         info!(
-            requested_count = req.servers.len(),
+            requested_count,
             imported_count = rows.len(),
+            skipped_reserved_count,
             enabled_count = rows.iter().filter(|row| row.enabled).count(),
             "batch imported MCP servers"
         );
-        rows.into_iter()
-            .map(|row| McpServer::from_row(row).map(McpServer::into_response))
-            .collect()
+        Ok(rows)
     }
+
+    /// Persist the latest connection test result for an existing MCP server.
+    pub async fn persist_test_result(&self, id: &str, result: &McpConnectionTestResult) -> Result<(), McpError> {
+        let status = if result.success { "connected" } else { "error" };
+        let last_connected = if result.success { Some(now_ms()) } else { None };
+        let tools_json = result.tools.as_ref().map(serde_json::to_string).transpose()?;
+
+        self.repo.update_status(id, status, last_connected).await?;
+        self.repo.update_tools(id, tools_json.as_deref()).await?;
+        Ok(())
+    }
+
+    async fn upsert_server(
+        &self,
+        name: &str,
+        description: Option<&str>,
+        transport: &McpServerTransport,
+        original_json: Option<&str>,
+        builtin: bool,
+        enabled: bool,
+    ) -> Result<McpServerResponse, McpError> {
+        let config_json = transport.to_config_json()?;
+
+        if let Some(existing) = self.repo.find_by_name_any(name).await? {
+            if existing.builtin {
+                return Err(McpError::Conflict(format!(
+                    "Builtin MCP server name '{name}' is reserved"
+                )));
+            }
+
+            let params = UpdateMcpServerParams {
+                description: Some(description),
+                enabled: Some(enabled),
+                transport_type: Some(transport.transport_type()),
+                transport_config: Some(&config_json),
+                original_json: Some(original_json),
+                builtin: Some(existing.builtin || builtin),
+                deleted_at: Some(None),
+                ..Default::default()
+            };
+            let updated = self.repo.update(&existing.id, params).await?;
+            let server = McpServer::from_row(updated)?;
+            return Ok(server.into_response());
+        }
+
+        let params = CreateMcpServerParams {
+            name,
+            description,
+            enabled,
+            transport_type: transport.transport_type(),
+            transport_config: &config_json,
+            tools: None,
+            original_json,
+            builtin,
+        };
+        let row = self.repo.create(params).await?;
+        let server = McpServer::from_row(row)?;
+        Ok(server.into_response())
+    }
+}
+
+fn normalize_transport(transport: McpServerTransport) -> Result<McpServerTransport, McpError> {
+    match transport {
+        McpServerTransport::Stdio { command, args, env } if args.is_empty() => {
+            let Some((normalized_command, normalized_args)) = split_stdio_command(&command)? else {
+                return Ok(McpServerTransport::Stdio { command, args, env });
+            };
+            Ok(McpServerTransport::Stdio {
+                command: normalized_command,
+                args: normalized_args,
+                env,
+            })
+        }
+        _ => Ok(transport),
+    }
+}
+
+fn split_stdio_command(command: &str) -> Result<Option<(String, Vec<String>)>, McpError> {
+    let trimmed = command.trim();
+    if trimmed.is_empty() || !trimmed.contains(char::is_whitespace) {
+        return Ok(None);
+    }
+
+    let first_token = trimmed
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .trim_matches(&['"', '\''][..]);
+    if !SPLITTABLE_STDIO_LAUNCHERS.contains(&first_token) {
+        return Ok(None);
+    }
+
+    let tokens = shell_split(trimmed).map_err(McpError::InvalidTransport)?;
+    if tokens.len() < 2 {
+        return Ok(None);
+    }
+
+    Ok(Some((tokens[0].clone(), tokens[1..].to_vec())))
+}
+
+fn shell_split(input: &str) -> Result<Vec<String>, String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut chars = input.chars().peekable();
+    let mut quote: Option<char> = None;
+
+    while let Some(ch) = chars.next() {
+        match quote {
+            Some(active) => {
+                if ch == active {
+                    quote = None;
+                } else if ch == '\\' && active == '"' {
+                    if let Some(next) = chars.next() {
+                        current.push(next);
+                    }
+                } else {
+                    current.push(ch);
+                }
+            }
+            None => match ch {
+                '"' | '\'' => quote = Some(ch),
+                '\\' => {
+                    if let Some(next) = chars.next() {
+                        current.push(next);
+                    }
+                }
+                c if c.is_whitespace() => {
+                    if !current.is_empty() {
+                        tokens.push(std::mem::take(&mut current));
+                    }
+                }
+                _ => current.push(ch),
+            },
+        }
+    }
+
+    if quote.is_some() {
+        return Err("Unterminated quoted command string".to_owned());
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    Ok(tokens)
 }
 
 // ---------------------------------------------------------------------------
@@ -243,17 +382,39 @@ mod tests {
     impl IMcpServerRepository for MockMcpServerRepo {
         async fn list(&self) -> Result<Vec<McpServerRow>, DbError> {
             let servers = self.servers.lock().unwrap();
-            Ok(servers.clone())
+            Ok(servers.iter().filter(|s| s.deleted_at.is_none()).cloned().collect())
         }
 
         async fn find_by_id(&self, id: &str) -> Result<Option<McpServerRow>, DbError> {
             let servers = self.servers.lock().unwrap();
-            Ok(servers.iter().find(|s| s.id == id).cloned())
+            Ok(servers.iter().find(|s| s.id == id && s.deleted_at.is_none()).cloned())
         }
 
         async fn find_by_name(&self, name: &str) -> Result<Option<McpServerRow>, DbError> {
             let servers = self.servers.lock().unwrap();
+            Ok(servers
+                .iter()
+                .find(|s| s.name == name && s.deleted_at.is_none())
+                .cloned())
+        }
+
+        async fn find_by_id_any(&self, id: &str) -> Result<Option<McpServerRow>, DbError> {
+            let servers = self.servers.lock().unwrap();
+            Ok(servers.iter().find(|s| s.id == id).cloned())
+        }
+
+        async fn find_by_name_any(&self, name: &str) -> Result<Option<McpServerRow>, DbError> {
+            let servers = self.servers.lock().unwrap();
             Ok(servers.iter().find(|s| s.name == name).cloned())
+        }
+
+        async fn list_by_ids_any(&self, ids: &[String]) -> Result<Vec<McpServerRow>, DbError> {
+            let servers = self.servers.lock().unwrap();
+            Ok(servers
+                .iter()
+                .filter(|server| ids.iter().any(|id| id == &server.id))
+                .cloned()
+                .collect())
         }
 
         async fn create(&self, params: CreateMcpServerParams<'_>) -> Result<McpServerRow, DbError> {
@@ -272,10 +433,11 @@ mod tests {
                 transport_type: params.transport_type.to_owned(),
                 transport_config: params.transport_config.to_owned(),
                 tools: params.tools.map(String::from),
-                status: "disconnected".to_owned(),
+                last_test_status: "disconnected".to_owned(),
                 last_connected: None,
                 original_json: params.original_json.map(String::from),
                 builtin: params.builtin,
+                deleted_at: None,
                 created_at: Self::now(),
                 updated_at: Self::now(),
             };
@@ -320,6 +482,9 @@ mod tests {
             if let Some(b) = params.builtin {
                 servers[idx].builtin = b;
             }
+            if let Some(deleted_at) = params.deleted_at {
+                servers[idx].deleted_at = deleted_at;
+            }
             servers[idx].updated_at = Self::now();
             Ok(servers[idx].clone())
         }
@@ -328,9 +493,11 @@ mod tests {
             let mut servers = self.servers.lock().unwrap();
             let idx = servers
                 .iter()
-                .position(|s| s.id == id)
+                .position(|s| s.id == id && s.deleted_at.is_none())
                 .ok_or_else(|| DbError::NotFound(format!("MCP server {id}")))?;
-            servers.remove(idx);
+            servers[idx].enabled = false;
+            servers[idx].deleted_at = Some(Self::now());
+            servers[idx].updated_at = Self::now();
             Ok(())
         }
 
@@ -356,10 +523,11 @@ mod tests {
                         transport_type: params.transport_type.to_owned(),
                         transport_config: params.transport_config.to_owned(),
                         tools: params.tools.map(String::from),
-                        status: "disconnected".to_owned(),
+                        last_test_status: "disconnected".to_owned(),
                         last_connected: None,
                         original_json: params.original_json.map(String::from),
                         builtin: params.builtin,
+                        deleted_at: None,
                         created_at: Self::now(),
                         updated_at: Self::now(),
                     };
@@ -381,7 +549,7 @@ mod tests {
                 .iter()
                 .position(|s| s.id == id)
                 .ok_or_else(|| DbError::NotFound(format!("MCP server {id}")))?;
-            servers[idx].status = status.to_owned();
+            servers[idx].last_test_status = status.to_owned();
             if let Some(lc) = last_connected {
                 servers[idx].last_connected = Some(lc);
             }
@@ -504,7 +672,7 @@ mod tests {
         let resp = svc.add_server(stdio_create_req("new-srv")).await.unwrap();
         assert_eq!(resp.name, "new-srv");
         assert!(!resp.enabled);
-        assert_eq!(resp.status, McpServerStatus::Disconnected);
+        assert_eq!(resp.last_test_status, McpServerStatus::Disconnected);
         assert_eq!(resp.description.as_deref(), Some("test server"));
     }
 
@@ -561,6 +729,7 @@ mod tests {
                     description: None,
                     transport: None,
                     original_json: None,
+                    builtin: None,
                 },
             )
             .await
@@ -583,6 +752,7 @@ mod tests {
                         headers: HashMap::new(),
                     }),
                     original_json: None,
+                    builtin: None,
                 },
             )
             .await
@@ -607,6 +777,7 @@ mod tests {
                     description: Some(None), // clear
                     transport: None,
                     original_json: None,
+                    builtin: None,
                 },
             )
             .await
@@ -625,6 +796,7 @@ mod tests {
                     description: None,
                     transport: None,
                     original_json: None,
+                    builtin: None,
                 },
             )
             .await;
@@ -645,6 +817,7 @@ mod tests {
                     description: None,
                     transport: None,
                     original_json: None,
+                    builtin: None,
                 },
             )
             .await;
@@ -665,10 +838,33 @@ mod tests {
                     description: None,
                     transport: None,
                     original_json: None,
+                    builtin: None,
                 },
             )
             .await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn edit_server_updates_builtin_flag() {
+        let svc = make_service();
+        let created = svc.add_server(stdio_create_req("chrome-devtools")).await.unwrap();
+        assert!(!created.builtin);
+
+        let updated = svc
+            .edit_server(
+                &created.id,
+                UpdateMcpServerRequest {
+                    name: None,
+                    description: None,
+                    transport: None,
+                    original_json: None,
+                    builtin: Some(true),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(updated.builtin);
     }
 
     // -- delete_server -------------------------------------------------------
@@ -682,7 +878,7 @@ mod tests {
         let was_enabled = svc.delete_server(&created.id).await.unwrap();
         assert!(!was_enabled);
 
-        // Should be gone
+        // Should be hidden from active queries
         let result = svc.get_server(&created.id).await;
         assert!(matches!(result, Err(McpError::NotFound(_))));
     }
@@ -760,6 +956,153 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn add_server_restores_soft_deleted_row() {
+        let svc = make_service();
+        let created = svc.add_server(stdio_create_req("restored")).await.unwrap();
+        svc.delete_server(&created.id).await.unwrap();
+
+        let restored = svc.add_server(http_create_req("restored")).await.unwrap();
+        assert_eq!(restored.id, created.id);
+        match restored.transport {
+            McpTransport::Http { .. } => {}
+            _ => panic!("expected Http after restore"),
+        }
+    }
+
+    #[tokio::test]
+    async fn add_server_rejects_overriding_builtin_name() {
+        let svc = make_service();
+        svc.add_server(CreateMcpServerRequest {
+            name: "chrome-devtools".into(),
+            description: Some("builtin".into()),
+            transport: McpTransport::Stdio {
+                command: "npx".into(),
+                args: vec!["-y".into(), "chrome-devtools-mcp@latest".into()],
+                env: HashMap::new(),
+            },
+            original_json: None,
+            builtin: true,
+        })
+        .await
+        .unwrap();
+
+        let err = svc.add_server(stdio_create_req("chrome-devtools")).await.unwrap_err();
+        assert!(matches!(err, McpError::Conflict(_)));
+    }
+
+    #[tokio::test]
+    async fn add_server_rejects_overriding_builtin_name_even_with_builtin_payload() {
+        let svc = make_service();
+        svc.add_server(CreateMcpServerRequest {
+            name: "chrome-devtools".into(),
+            description: Some("builtin".into()),
+            transport: McpTransport::Stdio {
+                command: "npx".into(),
+                args: vec!["-y".into(), "chrome-devtools-mcp@latest".into()],
+                env: HashMap::new(),
+            },
+            original_json: None,
+            builtin: true,
+        })
+        .await
+        .unwrap();
+
+        let err = svc
+            .add_server(CreateMcpServerRequest {
+                name: "chrome-devtools".into(),
+                description: Some("malicious override".into()),
+                transport: McpTransport::Http {
+                    url: "https://example.com/mcp".into(),
+                    headers: HashMap::new(),
+                },
+                original_json: None,
+                builtin: true,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, McpError::Conflict(_)));
+    }
+
+    #[tokio::test]
+    async fn batch_import_skips_reserved_builtin_name() {
+        let svc = make_service();
+        svc.add_server(CreateMcpServerRequest {
+            name: "chrome-devtools".into(),
+            description: Some("builtin".into()),
+            transport: McpTransport::Stdio {
+                command: "npx".into(),
+                args: vec!["-y".into(), "chrome-devtools-mcp@latest".into()],
+                env: HashMap::new(),
+            },
+            original_json: None,
+            builtin: true,
+        })
+        .await
+        .unwrap();
+
+        let results = svc
+            .batch_import(BatchImportMcpServersRequest {
+                servers: vec![
+                    ImportMcpServerRequest {
+                        name: "chrome-devtools".into(),
+                        description: Some("imported".into()),
+                        transport: McpTransport::Http {
+                            url: "https://example.com/mcp".into(),
+                            headers: HashMap::new(),
+                        },
+                        original_json: None,
+                        builtin: false,
+                        enabled: Some(false),
+                    },
+                    ImportMcpServerRequest {
+                        name: "playwright".into(),
+                        description: Some("imported".into()),
+                        transport: McpTransport::Stdio {
+                            command: "npx".into(),
+                            args: vec!["@playwright/mcp@latest".into()],
+                            env: HashMap::new(),
+                        },
+                        original_json: None,
+                        builtin: false,
+                        enabled: Some(false),
+                    },
+                ],
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "playwright");
+    }
+
+    #[tokio::test]
+    async fn add_server_normalizes_shell_style_stdio_command() {
+        let svc = make_service();
+        let created = svc
+            .add_server(CreateMcpServerRequest {
+                name: "sentry".into(),
+                description: None,
+                transport: McpTransport::Stdio {
+                    command: "npx @sentry/mcp-server@latest --organization-slug=demo".into(),
+                    args: vec![],
+                    env: HashMap::new(),
+                },
+                original_json: None,
+                builtin: false,
+            })
+            .await
+            .unwrap();
+
+        match created.transport {
+            McpTransport::Stdio { command, args, .. } => {
+                assert_eq!(command, "npx");
+                assert_eq!(args, vec!["@sentry/mcp-server@latest", "--organization-slug=demo"]);
+            }
+            _ => panic!("expected stdio transport"),
+        }
+    }
+
+    #[tokio::test]
     async fn batch_import_preserves_enabled_state() {
         let svc = make_service();
         let mut req = stdio_import_req("enabled-mcp");
@@ -779,5 +1122,65 @@ mod tests {
         let req = BatchImportMcpServersRequest { servers: vec![] };
         let results = svc.batch_import(req).await.unwrap();
         assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn persist_test_result_records_success_status_and_tools() {
+        let svc = make_service();
+        let created = svc.add_server(stdio_create_req("persist-success")).await.unwrap();
+        let result = McpConnectionTestResult {
+            success: true,
+            tools: Some(vec![aionui_api_types::McpToolResponse {
+                name: "read_file".into(),
+                description: Some("Read a file".into()),
+                input_schema: None,
+            }]),
+            error: None,
+            needs_auth: None,
+            auth_method: None,
+            www_authenticate: None,
+        };
+
+        svc.persist_test_result(&created.id, &result).await.unwrap();
+
+        let updated = svc.get_server(&created.id).await.unwrap();
+        assert_eq!(updated.last_test_status, aionui_common::McpServerStatus::Connected);
+        assert_eq!(updated.tools.unwrap().len(), 1);
+        assert!(updated.last_connected.is_some());
+    }
+
+    #[tokio::test]
+    async fn persist_test_result_records_error_and_clears_tools() {
+        let svc = make_service();
+        let created = svc.add_server(stdio_create_req("persist-error")).await.unwrap();
+
+        let success = McpConnectionTestResult {
+            success: true,
+            tools: Some(vec![aionui_api_types::McpToolResponse {
+                name: "read_file".into(),
+                description: Some("Read a file".into()),
+                input_schema: None,
+            }]),
+            error: None,
+            needs_auth: None,
+            auth_method: None,
+            www_authenticate: None,
+        };
+        svc.persist_test_result(&created.id, &success).await.unwrap();
+
+        let failure = McpConnectionTestResult {
+            success: false,
+            tools: None,
+            error: Some("boom".into()),
+            needs_auth: None,
+            auth_method: None,
+            www_authenticate: None,
+        };
+        svc.persist_test_result(&created.id, &failure).await.unwrap();
+
+        let updated = svc.get_server(&created.id).await.unwrap();
+        assert_eq!(updated.last_test_status, aionui_common::McpServerStatus::Error);
+        assert!(updated.tools.is_none());
+        assert!(updated.last_connected.is_some());
     }
 }

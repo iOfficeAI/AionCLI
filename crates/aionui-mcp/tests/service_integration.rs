@@ -160,6 +160,7 @@ async fn edit_name() {
                 description: None,
                 transport: None,
                 original_json: None,
+                builtin: None,
             },
         )
         .await
@@ -183,6 +184,7 @@ async fn edit_transport() {
                     headers: HashMap::new(),
                 }),
                 original_json: None,
+                builtin: None,
             },
         )
         .await
@@ -207,6 +209,7 @@ async fn edit_clears_description() {
                 description: Some(None),
                 transport: None,
                 original_json: None,
+                builtin: None,
             },
         )
         .await
@@ -225,6 +228,7 @@ async fn edit_not_found() {
                 description: None,
                 transport: None,
                 original_json: None,
+                builtin: None,
             },
         )
         .await
@@ -246,6 +250,7 @@ async fn edit_name_conflict() {
                 description: None,
                 transport: None,
                 original_json: None,
+                builtin: None,
             },
         )
         .await

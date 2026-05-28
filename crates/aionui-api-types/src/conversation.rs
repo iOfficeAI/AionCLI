@@ -4,6 +4,25 @@ use aionui_common::{
 };
 use serde::{Deserialize, Serialize};
 
+/// Per-MCP snapshot status stored in `conversation.extra`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationMcpStatusKind {
+    Loaded,
+    Failed,
+    Unsupported,
+}
+
+/// A single MCP item shown in the conversation-scoped MCP list.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConversationMcpStatus {
+    pub id: String,
+    pub name: String,
+    pub status: ConversationMcpStatusKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
 // ── Request types ──────────────────────────────────────────────────
 
 /// Body for `POST /api/conversations`.

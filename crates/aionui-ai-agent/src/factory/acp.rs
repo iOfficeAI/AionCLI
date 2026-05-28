@@ -7,10 +7,12 @@ use crate::factory::context::FactoryContext;
 use crate::manager::acp::{AcpAgentManager, CatalogForwarder};
 use crate::types::BuildTaskOptions;
 use agent_client_protocol::schema::{EnvVariable, HttpHeader, McpServer, McpServerHttp, McpServerSse, McpServerStdio};
-use aionui_api_types::AcpBuildExtra;
+use aionui_api_types::{AcpBuildExtra, SessionMcpServer, SessionMcpTransport};
 use aionui_common::{AppError, CommandSpec};
 use aionui_db::IMcpServerRepository;
 use aionui_db::models::McpServerRow;
+use aionui_mcp::{AcpMcpCapabilities, parse_acp_mcp_capabilities};
+use aionui_runtime::resolve_command_path;
 use tracing::{debug, info, warn};
 
 pub(super) async fn build(
@@ -120,10 +122,49 @@ pub(super) async fn build(
     // ACP `session/new` mcpServers payload. Without this the agent
     // starts with zero MCP tools even when the user configured them
     // via Settings → MCP (ELECTRON-1JG).
+    let mcp_capabilities = meta
+        .handshake
+        .agent_capabilities
+        .as_ref()
+        .map(parse_acp_mcp_capabilities)
+        .unwrap_or_default();
+
     let user_mcp_servers = match deps.mcp_server_repo.as_ref() {
-        Some(repo) => load_user_mcp_servers(repo.as_ref(), &ctx.conversation_id).await,
+        Some(repo) => {
+            load_user_mcp_servers(
+                repo.as_ref(),
+                config.mcp_server_ids.as_deref(),
+                &ctx.conversation_id,
+                &mcp_capabilities,
+            )
+            .await
+        }
         None => Vec::new(),
     };
+    let mut session_mcp_servers = user_mcp_servers;
+    for server in &config.session_mcp_servers {
+        if !session_server_supported_by_capabilities(server, &mcp_capabilities) {
+            warn!(
+                ctx.conversation_id,
+                server_id = %server.id,
+                server_name = %server.name,
+                "session_mcp: transport unsupported by ACP agent; skipping"
+            );
+            continue;
+        }
+        match session_server_to_sdk_mcp_server(server) {
+            Ok(server) => session_mcp_servers.push(server),
+            Err(err) => {
+                warn!(
+                    ctx.conversation_id,
+                    server_id = %server.id,
+                    server_name = %server.name,
+                    error = %err,
+                    "session_mcp: failed to convert session snapshot; skipping"
+                );
+            }
+        }
+    }
 
     let params = Arc::new(
         assemble_acp_params(
@@ -135,7 +176,7 @@ pub(super) async fn build(
             meta,
             command_spec,
             config,
-            user_mcp_servers,
+            session_mcp_servers,
             session_snapshot,
             deps.data_dir.clone(),
         )
@@ -185,10 +226,21 @@ pub(super) async fn build(
 /// MCP tool than fail the whole session), and return them in SDK shape ready
 /// for `NewSessionRequest::mcp_servers`.
 ///
-/// Skips disabled and builtin rows: builtins are wired through other paths
-/// (e.g. team/guide MCP) and the user can't manage them directly.
-async fn load_user_mcp_servers(repo: &dyn IMcpServerRepository, conversation_id: &str) -> Vec<McpServer> {
-    let rows = match repo.list().await {
+/// When `selected_ids` is present, those rows define the session snapshot and
+/// are injected regardless of the current global `enabled` flag. Legacy
+/// conversations without a snapshot still fall back to "all enabled rows".
+/// Builtins are wired through other paths (e.g. team/guide MCP).
+async fn load_user_mcp_servers(
+    repo: &dyn IMcpServerRepository,
+    selected_ids: Option<&[String]>,
+    conversation_id: &str,
+    capabilities: &AcpMcpCapabilities,
+) -> Vec<McpServer> {
+    let rows_result = match selected_ids {
+        Some(ids) => repo.list_by_ids_any(ids).await,
+        None => repo.list().await,
+    };
+    let rows = match rows_result {
         Ok(r) => r,
         Err(err) => {
             warn!(
@@ -202,7 +254,20 @@ async fn load_user_mcp_servers(repo: &dyn IMcpServerRepository, conversation_id:
 
     let mut servers = Vec::with_capacity(rows.len());
     for row in rows {
-        if !row.enabled || row.builtin {
+        let selected = selected_ids
+            .map(|ids| ids.iter().any(|id| id == &row.id))
+            .unwrap_or(row.enabled);
+        if !selected || row.builtin {
+            continue;
+        }
+        if !row_supported_by_capabilities(&row, capabilities) {
+            warn!(
+                conversation_id,
+                server_id = %row.id,
+                server_name = %row.name,
+                transport_type = %row.transport_type,
+                "user_mcp: transport unsupported by ACP agent; skipping"
+            );
             continue;
         }
         match row_to_sdk_mcp_server(&row) {
@@ -242,6 +307,7 @@ fn row_to_sdk_mcp_server(row: &McpServerRow) -> Result<McpServer, String> {
                 .get("command")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "stdio: missing command".to_owned())?;
+            let resolved_command = resolve_stdio_command(command);
             let args: Vec<String> = value
                 .get("args")
                 .and_then(|v| v.as_array())
@@ -261,10 +327,12 @@ fn row_to_sdk_mcp_server(row: &McpServerRow) -> Result<McpServer, String> {
                 })
                 .unwrap_or_default();
 
-            let stdio = McpServerStdio::new(row.name.clone(), command).args(args).env(env);
+            let stdio = McpServerStdio::new(row.name.clone(), resolved_command)
+                .args(args)
+                .env(env);
             Ok(McpServer::Stdio(stdio))
         }
-        "http" => {
+        "http" | "streamable_http" => {
             let url = value
                 .get("url")
                 .and_then(|v| v.as_str())
@@ -300,6 +368,83 @@ fn parse_headers(value: Option<&serde_json::Value>) -> Vec<HttpHeader> {
     entries.into_iter().map(|(k, v)| HttpHeader::new(k, v)).collect()
 }
 
+fn session_server_to_sdk_mcp_server(server: &SessionMcpServer) -> Result<McpServer, String> {
+    match &server.transport {
+        SessionMcpTransport::Stdio { command, args, env } => {
+            if command.is_empty() {
+                return Err("stdio: missing command".to_owned());
+            }
+            let mut entries: Vec<(String, String)> = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            let env = entries.into_iter().map(|(k, v)| EnvVariable::new(k, v)).collect();
+            Ok(McpServer::Stdio(
+                McpServerStdio::new(server.name.clone(), resolve_stdio_command(command))
+                    .args(args.clone())
+                    .env(env),
+            ))
+        }
+        SessionMcpTransport::Http { url, headers } | SessionMcpTransport::StreamableHttp { url, headers } => {
+            if url.is_empty() {
+                return Err("http: missing url".to_owned());
+            }
+            let mut entries: Vec<(String, String)> = headers.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            let headers = entries.into_iter().map(|(k, v)| HttpHeader::new(k, v)).collect();
+            Ok(McpServer::Http(
+                McpServerHttp::new(server.name.clone(), url).headers(headers),
+            ))
+        }
+        SessionMcpTransport::Sse { url, headers } => {
+            if url.is_empty() {
+                return Err("sse: missing url".to_owned());
+            }
+            let mut entries: Vec<(String, String)> = headers.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            let headers = entries.into_iter().map(|(k, v)| HttpHeader::new(k, v)).collect();
+            Ok(McpServer::Sse(
+                McpServerSse::new(server.name.clone(), url).headers(headers),
+            ))
+        }
+    }
+}
+
+fn resolve_stdio_command(command: &str) -> String {
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return command.to_owned();
+    }
+
+    let path = std::path::Path::new(trimmed);
+    if path.is_absolute()
+        || trimmed.contains(std::path::MAIN_SEPARATOR)
+        || trimmed.contains('/')
+        || trimmed.contains('\\')
+    {
+        return trimmed.to_owned();
+    }
+
+    resolve_command_path(trimmed)
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|| trimmed.to_owned())
+}
+
+fn row_supported_by_capabilities(row: &McpServerRow, capabilities: &AcpMcpCapabilities) -> bool {
+    match row.transport_type.as_str() {
+        "stdio" => capabilities.stdio,
+        "http" | "streamable_http" => capabilities.http,
+        "sse" => capabilities.sse,
+        _ => false,
+    }
+}
+
+fn session_server_supported_by_capabilities(server: &SessionMcpServer, capabilities: &AcpMcpCapabilities) -> bool {
+    match server.transport {
+        SessionMcpTransport::Stdio { .. } => capabilities.stdio,
+        SessionMcpTransport::Http { .. } | SessionMcpTransport::StreamableHttp { .. } => capabilities.http,
+        SessionMcpTransport::Sse { .. } => capabilities.sse,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -319,10 +464,11 @@ mod tests {
             transport_type: transport_type.into(),
             transport_config: transport_config.into(),
             tools: None,
-            status: "disconnected".into(),
+            last_test_status: "disconnected".into(),
             last_connected: None,
             original_json: None,
             builtin,
+            deleted_at: None,
             created_at: 0,
             updated_at: 0,
         }
@@ -416,6 +562,15 @@ mod tests {
         async fn find_by_name(&self, _name: &str) -> Result<Option<McpServerRow>, aionui_db::DbError> {
             unimplemented!()
         }
+        async fn list_by_ids_any(&self, ids: &[String]) -> Result<Vec<McpServerRow>, aionui_db::DbError> {
+            if self.fail {
+                return Err(aionui_db::DbError::Init("simulated".into()));
+            }
+            Ok(ids
+                .iter()
+                .filter_map(|id| self.rows.iter().find(|row| row.id == *id).cloned())
+                .collect())
+        }
         async fn create(
             &self,
             _params: aionui_db::CreateMcpServerParams<'_>,
@@ -453,6 +608,11 @@ mod tests {
 
     #[tokio::test]
     async fn load_user_mcp_servers_skips_disabled_and_builtin() {
+        let caps = AcpMcpCapabilities {
+            stdio: true,
+            http: true,
+            sse: true,
+        };
         let repo: Arc<dyn IMcpServerRepository> = Arc::new(MockRepo {
             rows: vec![
                 make_row(
@@ -479,7 +639,7 @@ mod tests {
             ],
             fail: false,
         });
-        let servers = load_user_mcp_servers(repo.as_ref(), "conv-1").await;
+        let servers = load_user_mcp_servers(repo.as_ref(), None, "conv-1", &caps).await;
         assert_eq!(servers.len(), 1);
         match &servers[0] {
             McpServer::Stdio(s) => assert_eq!(s.name, "user-enabled"),
@@ -489,16 +649,26 @@ mod tests {
 
     #[tokio::test]
     async fn load_user_mcp_servers_returns_empty_on_repo_failure() {
+        let caps = AcpMcpCapabilities {
+            stdio: true,
+            http: true,
+            sse: true,
+        };
         let repo: Arc<dyn IMcpServerRepository> = Arc::new(MockRepo {
             rows: vec![],
             fail: true,
         });
-        let servers = load_user_mcp_servers(repo.as_ref(), "conv-1").await;
+        let servers = load_user_mcp_servers(repo.as_ref(), None, "conv-1", &caps).await;
         assert!(servers.is_empty());
     }
 
     #[tokio::test]
     async fn load_user_mcp_servers_skips_malformed_rows_but_keeps_others() {
+        let caps = AcpMcpCapabilities {
+            stdio: true,
+            http: true,
+            sse: true,
+        };
         let repo: Arc<dyn IMcpServerRepository> = Arc::new(MockRepo {
             rows: vec![
                 make_row("good", "stdio", r#"{"command":"npx","args":[],"env":{}}"#, true, false),
@@ -506,11 +676,70 @@ mod tests {
             ],
             fail: false,
         });
-        let servers = load_user_mcp_servers(repo.as_ref(), "conv-1").await;
+        let servers = load_user_mcp_servers(repo.as_ref(), None, "conv-1", &caps).await;
         assert_eq!(servers.len(), 1);
         match &servers[0] {
             McpServer::Stdio(s) => assert_eq!(s.name, "good"),
             _ => panic!("expected stdio"),
         }
+    }
+
+    #[tokio::test]
+    async fn load_user_mcp_servers_uses_selected_snapshot_over_enabled_state() {
+        let caps = AcpMcpCapabilities {
+            stdio: true,
+            http: true,
+            sse: true,
+        };
+        let repo: Arc<dyn IMcpServerRepository> = Arc::new(MockRepo {
+            rows: vec![
+                make_row(
+                    "enabled",
+                    "stdio",
+                    r#"{"command":"npx","args":[],"env":{}}"#,
+                    true,
+                    false,
+                ),
+                make_row(
+                    "disabled-picked",
+                    "stdio",
+                    r#"{"command":"uvx","args":[],"env":{}}"#,
+                    false,
+                    false,
+                ),
+            ],
+            fail: false,
+        });
+
+        let selected = vec!["mcp_disabled-picked".to_owned()];
+        let servers = load_user_mcp_servers(repo.as_ref(), Some(&selected), "conv-1", &caps).await;
+
+        assert_eq!(servers.len(), 1);
+        match &servers[0] {
+            McpServer::Stdio(s) => assert_eq!(s.name, "disabled-picked"),
+            _ => panic!("expected stdio"),
+        }
+    }
+
+    #[tokio::test]
+    async fn load_user_mcp_servers_skips_rows_unsupported_by_capabilities() {
+        let caps = AcpMcpCapabilities {
+            stdio: false,
+            http: true,
+            sse: false,
+        };
+        let repo: Arc<dyn IMcpServerRepository> = Arc::new(MockRepo {
+            rows: vec![make_row(
+                "stdio-only",
+                "stdio",
+                r#"{"command":"npx","args":[],"env":{}}"#,
+                true,
+                false,
+            )],
+            fail: false,
+        });
+
+        let servers = load_user_mcp_servers(repo.as_ref(), None, "conv-1", &caps).await;
+        assert!(servers.is_empty());
     }
 }

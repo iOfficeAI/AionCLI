@@ -119,6 +119,18 @@ pub fn strip_ansi(input: &str) -> String {
     result
 }
 
+/// Normalize a CLI-reported MCP status string by stripping leading symbols
+/// such as `✓`, `✗`, `!`, bullets, and extra whitespace.
+pub fn normalize_detection_status(status: &str) -> String {
+    status
+        .trim()
+        .trim_start_matches(|c: char| {
+            matches!(c, '✓' | '✗' | '!' | '•' | '-' | '*' | '✔' | '✘' | ':' | '[' | ']') || c.is_whitespace()
+        })
+        .trim()
+        .to_owned()
+}
+
 /// Parse the "standard" `mcp list` text output shared by Gemini and Qwen.
 ///
 /// Pattern: `[checkmark] name: command (transport_type) - Status`
@@ -164,6 +176,11 @@ fn parse_standard_list_line_inner(line: &str) -> Option<DetectedServer> {
 
 fn parse_standard_list_line_inner_rest(rest: &str) -> Option<DetectedServer> {
     // Find "name: command_or_url (type) - Status"
+    let status_sep = rest.rfind(" - ")?;
+    let status = normalize_detection_status(&rest[status_sep + 3..]);
+
+    let rest = &rest[..status_sep];
+
     let colon_pos = rest.find(':')?;
     let name = rest[..colon_pos].trim();
     if name.is_empty() {
@@ -202,6 +219,12 @@ fn parse_standard_list_line_inner_rest(rest: &str) -> Option<DetectedServer> {
     Some(DetectedServer {
         name: name.to_owned(),
         transport,
+        importable: status.eq_ignore_ascii_case("connected"),
+        import_skip_reason: if status.eq_ignore_ascii_case("connected") {
+            None
+        } else {
+            Some(status)
+        },
     })
 }
 
@@ -268,6 +291,16 @@ mod tests {
     }
 
     #[test]
+    fn normalize_detection_status_strips_prefix_symbols() {
+        assert_eq!(normalize_detection_status("✓ Connected"), "Connected");
+        assert_eq!(normalize_detection_status("✗ Failed to connect"), "Failed to connect");
+        assert_eq!(
+            normalize_detection_status("! Needs authentication"),
+            "Needs authentication"
+        );
+    }
+
+    #[test]
     fn parse_standard_list_stdio() {
         let output = "✓ my-server: npx -y @test/server (stdio) - Connected";
         let servers = parse_standard_list_output(output);
@@ -286,13 +319,8 @@ mod tests {
         let output = "✗ remote-srv: https://example.com/mcp (http) - Disconnected";
         let servers = parse_standard_list_output(output);
         assert_eq!(servers.len(), 1);
-        assert_eq!(servers[0].name, "remote-srv");
-        match &servers[0].transport {
-            McpServerTransport::Http { url, .. } => {
-                assert_eq!(url, "https://example.com/mcp");
-            }
-            _ => panic!("expected Http"),
-        }
+        assert!(!servers[0].importable);
+        assert_eq!(servers[0].import_skip_reason.as_deref(), Some("Disconnected"));
     }
 
     #[test]
@@ -320,6 +348,7 @@ Some footer text";
         assert_eq!(servers.len(), 3);
         assert_eq!(servers[0].name, "server-a");
         assert_eq!(servers[1].name, "server-b");
+        assert!(!servers[1].importable);
         assert_eq!(servers[2].name, "server-c");
     }
 

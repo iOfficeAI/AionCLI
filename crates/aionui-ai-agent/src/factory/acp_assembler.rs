@@ -233,6 +233,8 @@ mod tests {
                 token: "guide-tok".into(),
                 binary_path: "/bin/backend".into(),
             }),
+            mcp_server_ids: None,
+            session_mcp_servers: vec![],
             user_id: None,
         };
         let servers = resolve_mcp_servers(&config, "conv-1", Vec::new());
@@ -263,6 +265,8 @@ mod tests {
                 token: "guide-tok".into(),
                 binary_path: "/bin/backend".into(),
             }),
+            mcp_server_ids: None,
+            session_mcp_servers: vec![],
             user_id: None,
         };
         let servers = resolve_mcp_servers(&config, "conv-1", Vec::new());
@@ -293,6 +297,8 @@ mod tests {
                 token: "guide-tok".into(),
                 binary_path: "/bin/backend".into(),
             }),
+            mcp_server_ids: None,
+            session_mcp_servers: vec![],
             user_id: None,
         };
         let servers = resolve_mcp_servers(&config, "conv-1", Vec::new());
@@ -320,6 +326,8 @@ mod tests {
             cron_job_id: None,
             team_mcp_stdio_config: None,
             guide_mcp_config: None,
+            mcp_server_ids: None,
+            session_mcp_servers: vec![],
             user_id: None,
         };
         let user = vec![user_stdio("ctx7"), user_stdio("playwright")];
@@ -359,6 +367,8 @@ mod tests {
                 binary_path: "/bin/backend".into(),
             }),
             guide_mcp_config: None,
+            mcp_server_ids: None,
+            session_mcp_servers: vec![],
             user_id: None,
         };
         let user = vec![user_stdio("ctx7")];
@@ -395,6 +405,8 @@ mod tests {
                 token: "guide-tok".into(),
                 binary_path: "/bin/backend".into(),
             }),
+            mcp_server_ids: None,
+            session_mcp_servers: vec![],
             user_id: None,
         };
         let user = vec![user_stdio("ctx7")];
@@ -429,6 +441,8 @@ mod tests {
             cron_job_id: None,
             team_mcp_stdio_config: None,
             guide_mcp_config: None,
+            mcp_server_ids: None,
+            session_mcp_servers: vec![],
             user_id: None,
         };
         let servers = resolve_mcp_servers(&config, "conv-1", Vec::new());

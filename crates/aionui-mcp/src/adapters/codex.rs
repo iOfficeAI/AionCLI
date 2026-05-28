@@ -137,6 +137,7 @@ fn parse_codex_list_json(json_str: &str) -> Result<Vec<DetectedServer>, McpError
 /// Parse a single Codex list entry.
 fn parse_codex_entry(entry: &serde_json::Value) -> Option<DetectedServer> {
     let name = entry.get("name")?.as_str()?.to_owned();
+    let enabled = entry.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
 
     let transport_obj = entry.get("transport")?;
     let transport_type = transport_obj.get("type").and_then(|v| v.as_str()).unwrap_or("stdio");
@@ -184,7 +185,12 @@ fn parse_codex_entry(entry: &serde_json::Value) -> Option<DetectedServer> {
         _ => return None,
     };
 
-    Some(DetectedServer { name, transport })
+    Some(DetectedServer {
+        name,
+        transport,
+        importable: enabled,
+        import_skip_reason: if enabled { None } else { Some("Disabled".into()) },
+    })
 }
 
 /// Parse environment variables from Codex transport.
@@ -246,6 +252,7 @@ mod tests {
         let json = r#"[
             {
                 "name": "test-mcp",
+                "enabled": true,
                 "transport": {
                     "type": "stdio",
                     "command": "npx",
@@ -272,6 +279,7 @@ mod tests {
         let json = r#"[
             {
                 "name": "test-mcp",
+                "enabled": true,
                 "transport": {
                     "type": "stdio",
                     "command": "node",
@@ -299,6 +307,7 @@ mod tests {
         let json = r#"[
             {
                 "name": "remote",
+                "enabled": true,
                 "transport": {
                     "type": "http",
                     "url": "https://example.com/mcp"
@@ -320,6 +329,7 @@ mod tests {
         let json = r#"[
             {
                 "name": "streamable",
+                "enabled": true,
                 "transport": {
                     "type": "streamable_http",
                     "url": "https://example.com/api"
@@ -336,6 +346,7 @@ mod tests {
         let json = r#"[
             {
                 "name": "sse-srv",
+                "enabled": true,
                 "transport": {
                     "type": "sse",
                     "url": "https://example.com/sse"
@@ -357,10 +368,12 @@ mod tests {
         let json = r#"[
             {
                 "name": "stdio-srv",
+                "enabled": true,
                 "transport": { "type": "stdio", "command": "node", "args": [] }
             },
             {
                 "name": "http-srv",
+                "enabled": true,
                 "transport": { "type": "http", "url": "https://a.com/mcp" }
             }
         ]"#;
@@ -371,10 +384,26 @@ mod tests {
     }
 
     #[test]
+    fn parse_disabled_server_skipped_from_import_only() {
+        let json = r#"[
+            {
+                "name": "disabled-srv",
+                "enabled": false,
+                "transport": { "type": "stdio", "command": "node", "args": [] }
+            }
+        ]"#;
+        let servers = parse_codex_list_json(json).unwrap();
+        assert_eq!(servers.len(), 1);
+        assert!(!servers[0].importable);
+        assert_eq!(servers[0].import_skip_reason.as_deref(), Some("Disabled"));
+    }
+
+    #[test]
     fn parse_unknown_transport_skipped() {
         let json = r#"[
             {
                 "name": "unknown",
+                "enabled": true,
                 "transport": { "type": "websocket", "url": "ws://localhost" }
             }
         ]"#;
@@ -386,6 +415,7 @@ mod tests {
     fn parse_missing_name_skipped() {
         let json = r#"[
             {
+                "enabled": true,
                 "transport": { "type": "stdio", "command": "node" }
             }
         ]"#;
@@ -398,6 +428,7 @@ mod tests {
         let json = r#"[
             {
                 "name": "no-type",
+                "enabled": true,
                 "transport": { "command": "node", "args": ["srv.js"] }
             }
         ]"#;
@@ -411,6 +442,7 @@ mod tests {
         let json = r#"[
             {
                 "name": "both-env",
+                "enabled": true,
                 "transport": {
                     "type": "stdio",
                     "command": "node",
@@ -428,6 +460,19 @@ mod tests {
             }
             _ => panic!("expected Stdio"),
         }
+    }
+
+    #[test]
+    fn parse_disabled_server_skipped() {
+        let json = r#"[
+            {
+                "name": "disabled-mcp",
+                "enabled": false,
+                "transport": { "type": "stdio", "command": "node", "args": ["srv.js"] }
+            }
+        ]"#;
+        let servers = parse_codex_list_json(json).unwrap();
+        assert!(servers.is_empty());
     }
 
     #[test]

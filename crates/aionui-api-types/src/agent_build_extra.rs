@@ -1,9 +1,45 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::{GuideMcpConfig, TeamMcpStdioConfig};
 
-/// ACP-specific fields extracted from `extra` in build task options.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SessionMcpTransport {
+    Stdio {
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
+        #[serde(default)]
+        env: HashMap<String, String>,
+    },
+    Http {
+        url: String,
+        #[serde(default)]
+        headers: HashMap<String, String>,
+    },
+    Sse {
+        url: String,
+        #[serde(default)]
+        headers: HashMap<String, String>,
+    },
+    StreamableHttp {
+        url: String,
+        #[serde(default)]
+        headers: HashMap<String, String>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionMcpServer {
+    pub id: String,
+    pub name: String,
+    pub transport: SessionMcpTransport,
+}
+
+/// ACP-specific fields extracted from `extra` in build task options.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AcpBuildExtra {
     #[serde(default)]
     pub agent_id: Option<String>,
@@ -31,6 +67,10 @@ pub struct AcpBuildExtra {
     pub team_mcp_stdio_config: Option<TeamMcpStdioConfig>,
     #[serde(default)]
     pub guide_mcp_config: Option<GuideMcpConfig>,
+    #[serde(default)]
+    pub mcp_server_ids: Option<Vec<String>>,
+    #[serde(default)]
+    pub session_mcp_servers: Vec<SessionMcpServer>,
     #[serde(default)]
     pub user_id: Option<String>,
 }
@@ -89,6 +129,10 @@ pub struct AionrsBuildExtra {
     pub team_mcp_stdio_config: Option<TeamMcpStdioConfig>,
     #[serde(default)]
     pub guide_mcp_config: Option<GuideMcpConfig>,
+    #[serde(default)]
+    pub mcp_server_ids: Option<Vec<String>>,
+    #[serde(default)]
+    pub session_mcp_servers: Vec<SessionMcpServer>,
     #[serde(default)]
     pub backend: Option<String>,
     #[serde(default)]

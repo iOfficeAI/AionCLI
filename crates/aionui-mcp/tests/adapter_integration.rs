@@ -55,6 +55,8 @@ impl McpAgentAdapter for InMemoryAdapter {
         servers.push(DetectedServer {
             name: name.to_owned(),
             transport: transport.clone(),
+            importable: true,
+            import_skip_reason: None,
         });
         Ok(())
     }

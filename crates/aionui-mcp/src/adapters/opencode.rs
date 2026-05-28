@@ -283,6 +283,8 @@ fn parse_server_entry(name: &str, config: &serde_json::Value) -> Option<Detected
     Some(DetectedServer {
         name: name.to_owned(),
         transport,
+        importable: true,
+        import_skip_reason: None,
     })
 }
 

@@ -189,7 +189,7 @@ pub struct McpServer {
     pub enabled: bool,
     pub transport: McpServerTransport,
     pub tools: Vec<McpTool>,
-    pub status: McpServerStatus,
+    pub last_test_status: McpServerStatus,
     pub last_connected: Option<TimestampMs>,
     pub original_json: Option<String>,
     pub builtin: bool,
@@ -210,7 +210,7 @@ impl McpServer {
             _ => Vec::new(),
         };
 
-        let status = parse_server_status(&row.status);
+        let last_test_status = parse_server_status(&row.last_test_status);
 
         Ok(Self {
             id: row.id,
@@ -219,7 +219,7 @@ impl McpServer {
             enabled: row.enabled,
             transport,
             tools,
-            status,
+            last_test_status,
             last_connected: row.last_connected,
             original_json: row.original_json,
             builtin: row.builtin,
@@ -243,7 +243,7 @@ impl McpServer {
             enabled: self.enabled,
             transport: self.transport.into(),
             tools,
-            status: self.status,
+            last_test_status: self.last_test_status,
             last_connected: self.last_connected,
             original_json: self.original_json,
             builtin: self.builtin,
@@ -448,10 +448,11 @@ mod tests {
             transport_type: transport_type.into(),
             transport_config: transport_config.into(),
             tools: tools.map(String::from),
-            status: status.into(),
+            last_test_status: status.into(),
             last_connected: Some(1000),
             original_json: None,
             builtin: false,
+            deleted_at: None,
             created_at: 500,
             updated_at: 600,
         }
@@ -470,7 +471,7 @@ mod tests {
         assert_eq!(server.id, "mcp_123");
         assert_eq!(server.name, "test-server");
         assert!(server.enabled);
-        assert_eq!(server.status, McpServerStatus::Connected);
+        assert_eq!(server.last_test_status, McpServerStatus::Connected);
         assert_eq!(server.tools.len(), 1);
         assert_eq!(server.tools[0].name, "read");
         match &server.transport {
@@ -494,7 +495,7 @@ mod tests {
         let server = McpServer::from_row(row).unwrap();
 
         assert!(server.tools.is_empty());
-        assert_eq!(server.status, McpServerStatus::Disconnected);
+        assert_eq!(server.last_test_status, McpServerStatus::Disconnected);
         match &server.transport {
             McpServerTransport::Http { url, headers } => {
                 assert_eq!(url, "https://example.com/mcp");
@@ -509,14 +510,14 @@ mod tests {
         let row = make_test_row("stdio", r#"{"command":"node"}"#, Some(""), "error");
         let server = McpServer::from_row(row).unwrap();
         assert!(server.tools.is_empty());
-        assert_eq!(server.status, McpServerStatus::Error);
+        assert_eq!(server.last_test_status, McpServerStatus::Error);
     }
 
     #[test]
     fn from_row_unknown_status_defaults_to_disconnected() {
         let row = make_test_row("stdio", r#"{"command":"node"}"#, None, "unknown_status");
         let server = McpServer::from_row(row).unwrap();
-        assert_eq!(server.status, McpServerStatus::Disconnected);
+        assert_eq!(server.last_test_status, McpServerStatus::Disconnected);
     }
 
     #[test]
@@ -552,7 +553,7 @@ mod tests {
                 description: None,
                 input_schema: None,
             }],
-            status: McpServerStatus::Connected,
+            last_test_status: McpServerStatus::Connected,
             last_connected: Some(1000),
             original_json: None,
             builtin: false,
@@ -577,7 +578,7 @@ mod tests {
                 headers: HashMap::new(),
             },
             tools: vec![],
-            status: McpServerStatus::Disconnected,
+            last_test_status: McpServerStatus::Disconnected,
             last_connected: None,
             original_json: None,
             builtin: false,

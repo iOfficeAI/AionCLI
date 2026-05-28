@@ -121,11 +121,11 @@ pub fn parse_acp_mcp_capabilities(response: &serde_json::Value) -> AcpMcpCapabil
         return AcpMcpCapabilities::default();
     };
 
-    AcpMcpCapabilities {
-        stdio: bool_field(caps, "stdio"),
-        http: bool_field(caps, "http"),
-        sse: bool_field(caps, "sse"),
-    }
+    let http = bool_field(caps, "http");
+    let sse = bool_field(caps, "sse");
+    let stdio = bool_field(caps, "stdio") || http || sse;
+
+    AcpMcpCapabilities { stdio, http, sse }
 }
 
 /// Build ACP session MCP server configs from domain servers.
@@ -257,7 +257,7 @@ mod tests {
             enabled,
             transport,
             tools: vec![],
-            status: McpServerStatus::Disconnected,
+            last_test_status: McpServerStatus::Disconnected,
             last_connected: None,
             original_json: None,
             builtin: false,
@@ -345,7 +345,7 @@ mod tests {
             "mcp": { "stdio": false, "http": true, "sse": false }
         });
         let caps = parse_acp_mcp_capabilities(&resp);
-        assert!(!caps.stdio);
+        assert!(caps.stdio);
         assert!(caps.http);
         assert!(!caps.sse);
     }
@@ -365,6 +365,17 @@ mod tests {
         let caps = parse_acp_mcp_capabilities(&resp);
         assert!(caps.stdio);
         assert!(!caps.http);
+        assert!(!caps.sse);
+    }
+
+    #[test]
+    fn parse_http_support_implies_stdio() {
+        let resp = serde_json::json!({
+            "mcp_capabilities": { "http": true, "sse": false }
+        });
+        let caps = parse_acp_mcp_capabilities(&resp);
+        assert!(caps.stdio);
+        assert!(caps.http);
         assert!(!caps.sse);
     }
 

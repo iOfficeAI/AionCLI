@@ -255,6 +255,8 @@ fn parse_toml_server_entry(name: &str, config: &toml::Value) -> Option<DetectedS
     Some(DetectedServer {
         name: name.to_owned(),
         transport,
+        importable: true,
+        import_skip_reason: None,
     })
 }
 

@@ -3,9 +3,14 @@ use std::sync::Arc;
 
 use aion_agent::session::SessionManager;
 use aion_config::config::{McpServerConfig, TransportType};
-use aionui_api_types::{AionrsBuildExtra, GuideMcpConfig, TEAM_MCP_SERVER_NAME, TeamMcpStdioConfig};
+use aionui_api_types::{
+    AionrsBuildExtra, GuideMcpConfig, SessionMcpServer, SessionMcpTransport, TEAM_MCP_SERVER_NAME, TeamMcpStdioConfig,
+};
 use aionui_common::AppError;
-use tracing::{debug, info};
+use aionui_db::IMcpServerRepository;
+use aionui_db::models::McpServerRow;
+use aionui_runtime::resolve_command_path;
+use tracing::{debug, info, warn};
 
 use crate::agent_task::AgentInstance;
 use crate::capability::team_guide_prompt;
@@ -50,7 +55,19 @@ pub(super) async fn build(
         overrides.backend.get_or_insert_with(|| "aionrs".to_owned());
     }
 
-    let extra_mcp_servers = resolve_mcp_servers(&overrides, &ctx.conversation_id);
+    let mut extra_mcp_servers = resolve_mcp_servers(&overrides, &ctx.conversation_id);
+    if let Some(repo) = deps.mcp_server_repo.as_ref() {
+        for (name, config) in
+            load_user_mcp_servers(repo.as_ref(), overrides.mcp_server_ids.as_deref(), &ctx.conversation_id).await
+        {
+            extra_mcp_servers.entry(name).or_insert(config);
+        }
+    }
+    merge_session_snapshot_mcp_servers(
+        &mut extra_mcp_servers,
+        &overrides.session_mcp_servers,
+        &ctx.conversation_id,
+    );
 
     // Inject team guide system prompt for solo sessions with guide MCP
     if overrides.team_mcp_stdio_config.is_none()
@@ -258,6 +275,255 @@ fn resolve_bedrock_config(json: Option<&str>) -> Option<aion_config::config::Bed
         session_token: None,
         profile: bc.profile,
     })
+}
+
+async fn load_user_mcp_servers(
+    repo: &dyn IMcpServerRepository,
+    selected_ids: Option<&[String]>,
+    conversation_id: &str,
+) -> HashMap<String, McpServerConfig> {
+    let rows_result = match selected_ids {
+        Some(ids) => repo.list_by_ids_any(ids).await,
+        None => repo.list().await,
+    };
+    let rows = match rows_result {
+        Ok(r) => r,
+        Err(err) => {
+            warn!(
+                conversation_id,
+                error = %err,
+                "user_mcp: list() failed; skipping injection"
+            );
+            return HashMap::new();
+        }
+    };
+
+    let mut servers = HashMap::new();
+    for row in rows {
+        let selected = selected_ids
+            .map(|ids| ids.iter().any(|id| id == &row.id))
+            .unwrap_or(row.enabled);
+        if !selected || row.builtin {
+            continue;
+        }
+
+        match row_to_mcp_server_config(&row) {
+            Ok(config) => {
+                servers.insert(row.name.clone(), config);
+            }
+            Err(err) => {
+                warn!(
+                    conversation_id,
+                    server_id = %row.id,
+                    server_name = %row.name,
+                    error = %err,
+                    "user_mcp: failed to convert row; skipping"
+                );
+            }
+        }
+    }
+
+    servers
+}
+
+fn row_to_mcp_server_config(row: &McpServerRow) -> Result<McpServerConfig, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(&row.transport_config).map_err(|e| format!("invalid transport_config JSON: {e}"))?;
+
+    match row.transport_type.as_str() {
+        "stdio" => {
+            let command = value
+                .get("command")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "stdio: missing command".to_owned())?;
+            let resolved_command = resolve_stdio_command(command);
+            let args = value
+                .get("args")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(ToOwned::to_owned)).collect())
+                .unwrap_or_default();
+            let env = value
+                .get("env")
+                .and_then(|v| v.as_object())
+                .map(|obj| {
+                    obj.iter()
+                        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_owned())))
+                        .collect::<HashMap<_, _>>()
+                })
+                .unwrap_or_default();
+
+            Ok(McpServerConfig {
+                transport: TransportType::Stdio,
+                command: Some(resolved_command),
+                args: Some(args),
+                env: Some(env),
+                url: None,
+                headers: None,
+                deferred: Some(false),
+            })
+        }
+        "http" | "streamable_http" => {
+            let url = value
+                .get("url")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "http: missing url".to_owned())?;
+            let headers = value
+                .get("headers")
+                .and_then(|v| v.as_object())
+                .map(|obj| {
+                    obj.iter()
+                        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_owned())))
+                        .collect::<HashMap<_, _>>()
+                })
+                .unwrap_or_default();
+
+            Ok(McpServerConfig {
+                transport: TransportType::StreamableHttp,
+                command: None,
+                args: None,
+                env: None,
+                url: Some(url.to_owned()),
+                headers: Some(headers),
+                deferred: Some(false),
+            })
+        }
+        "sse" => {
+            let url = value
+                .get("url")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "sse: missing url".to_owned())?;
+            let headers = value
+                .get("headers")
+                .and_then(|v| v.as_object())
+                .map(|obj| {
+                    obj.iter()
+                        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_owned())))
+                        .collect::<HashMap<_, _>>()
+                })
+                .unwrap_or_default();
+
+            Ok(McpServerConfig {
+                transport: TransportType::Sse,
+                command: None,
+                args: None,
+                env: None,
+                url: Some(url.to_owned()),
+                headers: Some(headers),
+                deferred: Some(false),
+            })
+        }
+        other => Err(format!("unsupported transport_type: {other}")),
+    }
+}
+
+fn session_server_to_mcp_server_config(server: &SessionMcpServer) -> Result<McpServerConfig, String> {
+    match &server.transport {
+        SessionMcpTransport::Stdio { command, args, env } => {
+            if command.is_empty() {
+                return Err("stdio: missing command".to_owned());
+            }
+            Ok(McpServerConfig {
+                transport: TransportType::Stdio,
+                command: Some(resolve_stdio_command(command)),
+                args: Some(args.clone()),
+                env: Some(env.clone()),
+                url: None,
+                headers: None,
+                deferred: Some(false),
+            })
+        }
+        SessionMcpTransport::Http { url, headers } => {
+            if url.is_empty() {
+                return Err("http: missing url".to_owned());
+            }
+            Ok(McpServerConfig {
+                transport: TransportType::StreamableHttp,
+                command: None,
+                args: None,
+                env: None,
+                url: Some(url.clone()),
+                headers: Some(headers.clone()),
+                deferred: Some(false),
+            })
+        }
+        SessionMcpTransport::Sse { url, headers } => {
+            if url.is_empty() {
+                return Err("sse: missing url".to_owned());
+            }
+            Ok(McpServerConfig {
+                transport: TransportType::Sse,
+                command: None,
+                args: None,
+                env: None,
+                url: Some(url.clone()),
+                headers: Some(headers.clone()),
+                deferred: Some(false),
+            })
+        }
+        SessionMcpTransport::StreamableHttp { url, headers } => {
+            if url.is_empty() {
+                return Err("streamable_http: missing url".to_owned());
+            }
+            Ok(McpServerConfig {
+                transport: TransportType::StreamableHttp,
+                command: None,
+                args: None,
+                env: None,
+                url: Some(url.clone()),
+                headers: Some(headers.clone()),
+                deferred: Some(false),
+            })
+        }
+    }
+}
+
+fn merge_session_snapshot_mcp_servers(
+    extra_mcp_servers: &mut HashMap<String, McpServerConfig>,
+    session_mcp_servers: &[SessionMcpServer],
+    conversation_id: &str,
+) {
+    for server in session_mcp_servers {
+        match session_server_to_mcp_server_config(server) {
+            Ok(config) => {
+                if extra_mcp_servers.insert(server.name.clone(), config).is_some() {
+                    debug!(
+                        conversation_id = %conversation_id,
+                        server_name = %server.name,
+                        "session_mcp: session snapshot overrides repo-backed MCP config"
+                    );
+                }
+            }
+            Err(err) => {
+                warn!(
+                    conversation_id = %conversation_id,
+                    server_id = %server.id,
+                    server_name = %server.name,
+                    error = %err,
+                    "session_mcp: failed to convert session snapshot; skipping"
+                );
+            }
+        }
+    }
+}
+
+fn resolve_stdio_command(command: &str) -> String {
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return command.to_owned();
+    }
+
+    let path = std::path::Path::new(trimmed);
+    if path.is_absolute()
+        || trimmed.contains(std::path::MAIN_SEPARATOR)
+        || trimmed.contains('/')
+        || trimmed.contains('\\')
+    {
+        return trimmed.to_owned();
+    }
+
+    resolve_command_path(trimmed)
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|| trimmed.to_owned())
 }
 
 fn resolve_mcp_servers(overrides: &AionrsBuildExtra, conversation_id: &str) -> HashMap<String, McpServerConfig> {
@@ -578,6 +844,43 @@ mod tests {
 
         let result = resolve_mcp_servers(&overrides, "conv-5");
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn session_snapshot_overrides_repo_backed_mcp_config() {
+        let mut servers = HashMap::from([(
+            "demo-mcp".to_owned(),
+            McpServerConfig {
+                transport: TransportType::Stdio,
+                command: Some("npx".into()),
+                args: Some(vec!["-y".into(), "@old/server".into()]),
+                env: Some(HashMap::new()),
+                url: None,
+                headers: None,
+                deferred: Some(false),
+            },
+        )]);
+
+        let snapshot = vec![SessionMcpServer {
+            id: "mcp_1".into(),
+            name: "demo-mcp".into(),
+            transport: SessionMcpTransport::Stdio {
+                command: "uvx".into(),
+                args: vec!["new-server".into()],
+                env: HashMap::from([("TOKEN".into(), "abc".into())]),
+            },
+        }];
+
+        merge_session_snapshot_mcp_servers(&mut servers, &snapshot, "conv-override");
+
+        let server = servers.get("demo-mcp").expect("snapshot should remain");
+        assert_eq!(server.transport, TransportType::Stdio);
+        assert_eq!(server.command.as_deref(), Some("uvx"));
+        assert_eq!(server.args.as_deref(), Some(&["new-server".to_owned()][..]));
+        assert_eq!(
+            server.env.as_ref().and_then(|env| env.get("TOKEN")),
+            Some(&"abc".to_owned())
+        );
     }
 
     #[test]

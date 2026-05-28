@@ -22,10 +22,11 @@ fn row(transport_type: &str, transport_config: &str, tools: Option<&str>, status
         transport_type: transport_type.into(),
         transport_config: transport_config.into(),
         tools: tools.map(String::from),
-        status: status.into(),
+        last_test_status: status.into(),
         last_connected: Some(9999),
         original_json: Some(r#"{"name":"integration-test"}"#.into()),
         builtin: false,
+        deleted_at: None,
         created_at: 1000,
         updated_at: 2000,
     }
@@ -51,7 +52,7 @@ fn stdio_server_full_pipeline() {
     assert_eq!(server.name, "integration-test");
     assert_eq!(server.description.as_deref(), Some("Integration test server"));
     assert!(server.enabled);
-    assert_eq!(server.status, McpServerStatus::Connected);
+    assert_eq!(server.last_test_status, McpServerStatus::Connected);
     assert_eq!(server.last_connected, Some(9999));
     assert!(!server.builtin);
 
@@ -74,7 +75,7 @@ fn stdio_server_full_pipeline() {
     // Convert to API response and verify
     let resp = server.into_response();
     assert_eq!(resp.id, "mcp_integration");
-    assert_eq!(resp.status, McpServerStatus::Connected);
+    assert_eq!(resp.last_test_status, McpServerStatus::Connected);
     assert!(resp.tools.is_some());
     assert_eq!(resp.tools.unwrap().len(), 2);
 }
@@ -109,7 +110,7 @@ fn sse_server_minimal() {
     let r = row("sse", &config.to_string(), None, "testing");
     let server = McpServer::from_row(r).unwrap();
 
-    assert_eq!(server.status, McpServerStatus::Testing);
+    assert_eq!(server.last_test_status, McpServerStatus::Testing);
     match &server.transport {
         McpServerTransport::Sse { url, headers } => {
             assert_eq!(url, "https://sse.example.com/events");

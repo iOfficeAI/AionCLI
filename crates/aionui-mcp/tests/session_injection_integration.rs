@@ -23,7 +23,7 @@ fn make_server(name: &str, enabled: bool, transport: McpServerTransport) -> McpS
         enabled,
         transport,
         tools: vec![],
-        status: McpServerStatus::Disconnected,
+        last_test_status: McpServerStatus::Disconnected,
         last_connected: None,
         original_json: None,
         builtin: false,

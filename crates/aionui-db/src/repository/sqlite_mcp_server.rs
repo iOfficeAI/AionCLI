@@ -1,4 +1,7 @@
+use std::collections::HashMap;
+
 use aionui_common::TimestampMs;
+use sqlx::QueryBuilder;
 use sqlx::SqlitePool;
 
 use crate::error::DbError;
@@ -20,15 +23,17 @@ impl SqliteMcpServerRepository {
 #[async_trait::async_trait]
 impl IMcpServerRepository for SqliteMcpServerRepository {
     async fn list(&self) -> Result<Vec<McpServerRow>, DbError> {
-        let rows = sqlx::query_as::<_, McpServerRow>("SELECT * FROM mcp_servers ORDER BY created_at ASC")
-            .fetch_all(&self.pool)
-            .await?;
+        let rows = sqlx::query_as::<_, McpServerRow>(
+            "SELECT * FROM mcp_servers WHERE deleted_at IS NULL ORDER BY created_at ASC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
 
         Ok(rows)
     }
 
     async fn find_by_id(&self, id: &str) -> Result<Option<McpServerRow>, DbError> {
-        let row = sqlx::query_as::<_, McpServerRow>("SELECT * FROM mcp_servers WHERE id = ?")
+        let row = sqlx::query_as::<_, McpServerRow>("SELECT * FROM mcp_servers WHERE id = ? AND deleted_at IS NULL")
             .bind(id)
             .fetch_optional(&self.pool)
             .await?;
@@ -37,6 +42,24 @@ impl IMcpServerRepository for SqliteMcpServerRepository {
     }
 
     async fn find_by_name(&self, name: &str) -> Result<Option<McpServerRow>, DbError> {
+        let row = sqlx::query_as::<_, McpServerRow>("SELECT * FROM mcp_servers WHERE name = ? AND deleted_at IS NULL")
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        Ok(row)
+    }
+
+    async fn find_by_id_any(&self, id: &str) -> Result<Option<McpServerRow>, DbError> {
+        let row = sqlx::query_as::<_, McpServerRow>("SELECT * FROM mcp_servers WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        Ok(row)
+    }
+
+    async fn find_by_name_any(&self, name: &str) -> Result<Option<McpServerRow>, DbError> {
         let row = sqlx::query_as::<_, McpServerRow>("SELECT * FROM mcp_servers WHERE name = ?")
             .bind(name)
             .fetch_optional(&self.pool)
@@ -45,17 +68,35 @@ impl IMcpServerRepository for SqliteMcpServerRepository {
         Ok(row)
     }
 
+    async fn list_by_ids_any(&self, ids: &[String]) -> Result<Vec<McpServerRow>, DbError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut query = QueryBuilder::new("SELECT * FROM mcp_servers WHERE id IN (");
+        let mut separated = query.separated(", ");
+        for id in ids {
+            separated.push_bind(id);
+        }
+        separated.push_unseparated(") ORDER BY created_at ASC");
+
+        let rows = query.build_query_as::<McpServerRow>().fetch_all(&self.pool).await?;
+        let rows_by_id: HashMap<_, _> = rows.into_iter().map(|row| (row.id.clone(), row)).collect();
+
+        Ok(ids.iter().filter_map(|id| rows_by_id.get(id).cloned()).collect())
+    }
+
     async fn create(&self, params: CreateMcpServerParams<'_>) -> Result<McpServerRow, DbError> {
         let id = aionui_common::generate_prefixed_id("mcp");
         let now = aionui_common::now_ms();
-        let status = "disconnected";
+        let last_test_status = "disconnected";
 
         sqlx::query(
             "INSERT INTO mcp_servers \
                 (id, name, description, enabled, transport_type, transport_config, \
-                 tools, status, last_connected, original_json, builtin, \
-                 created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 tools, last_test_status, last_connected, original_json, builtin, \
+                 deleted_at, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(params.name)
@@ -64,10 +105,11 @@ impl IMcpServerRepository for SqliteMcpServerRepository {
         .bind(params.transport_type)
         .bind(params.transport_config)
         .bind(params.tools)
-        .bind(status)
+        .bind(last_test_status)
         .bind(Option::<TimestampMs>::None)
         .bind(params.original_json)
         .bind(params.builtin)
+        .bind(Option::<TimestampMs>::None)
         .bind(now)
         .bind(now)
         .execute(&self.pool)
@@ -87,10 +129,11 @@ impl IMcpServerRepository for SqliteMcpServerRepository {
             transport_type: params.transport_type.to_string(),
             transport_config: params.transport_config.to_string(),
             tools: params.tools.map(String::from),
-            status: status.to_string(),
+            last_test_status: last_test_status.to_string(),
             last_connected: None,
             original_json: params.original_json.map(String::from),
             builtin: params.builtin,
+            deleted_at: None,
             created_at: now,
             updated_at: now,
         })
@@ -98,7 +141,7 @@ impl IMcpServerRepository for SqliteMcpServerRepository {
 
     async fn update(&self, id: &str, params: UpdateMcpServerParams<'_>) -> Result<McpServerRow, DbError> {
         let existing = self
-            .find_by_id(id)
+            .find_by_id_any(id)
             .await?
             .ok_or_else(|| DbError::NotFound(format!("MCP server '{id}' not found")))?;
 
@@ -108,7 +151,7 @@ impl IMcpServerRepository for SqliteMcpServerRepository {
             "UPDATE mcp_servers SET \
                 name = ?, description = ?, enabled = ?, transport_type = ?, \
                 transport_config = ?, tools = ?, original_json = ?, \
-                builtin = ?, updated_at = ? \
+                builtin = ?, deleted_at = ?, updated_at = ? \
              WHERE id = ?",
         )
         .bind(&merged.name)
@@ -119,6 +162,7 @@ impl IMcpServerRepository for SqliteMcpServerRepository {
         .bind(&merged.tools)
         .bind(&merged.original_json)
         .bind(merged.builtin)
+        .bind(merged.deleted_at)
         .bind(merged.updated_at)
         .bind(id)
         .execute(&self.pool)
@@ -134,10 +178,15 @@ impl IMcpServerRepository for SqliteMcpServerRepository {
     }
 
     async fn delete(&self, id: &str) -> Result<(), DbError> {
-        let result = sqlx::query("DELETE FROM mcp_servers WHERE id = ?")
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
+        let now = aionui_common::now_ms();
+        let result = sqlx::query(
+            "UPDATE mcp_servers SET enabled = 0, deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
+        )
+        .bind(now)
+        .bind(now)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
 
         if result.rows_affected() == 0 {
             return Err(DbError::NotFound(format!("MCP server '{id}' not found")));
@@ -176,9 +225,9 @@ impl IMcpServerRepository for SqliteMcpServerRepository {
         let now = aionui_common::now_ms();
 
         let result = sqlx::query(
-            "UPDATE mcp_servers SET status = ?, \
+            "UPDATE mcp_servers SET last_test_status = ?, \
              last_connected = COALESCE(?, last_connected), \
-             updated_at = ? WHERE id = ?",
+             updated_at = ? WHERE id = ? AND deleted_at IS NULL",
         )
         .bind(status)
         .bind(last_connected)
@@ -197,12 +246,13 @@ impl IMcpServerRepository for SqliteMcpServerRepository {
     async fn update_tools(&self, id: &str, tools: Option<&str>) -> Result<(), DbError> {
         let now = aionui_common::now_ms();
 
-        let result = sqlx::query("UPDATE mcp_servers SET tools = ?, updated_at = ? WHERE id = ?")
-            .bind(tools)
-            .bind(now)
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
+        let result =
+            sqlx::query("UPDATE mcp_servers SET tools = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL")
+                .bind(tools)
+                .bind(now)
+                .bind(id)
+                .execute(&self.pool)
+                .await?;
 
         if result.rows_affected() == 0 {
             return Err(DbError::NotFound(format!("MCP server '{id}' not found")));
@@ -226,12 +276,13 @@ fn merge_update(existing: McpServerRow, params: UpdateMcpServerParams<'_>) -> Mc
             .unwrap_or(&existing.transport_config)
             .to_string(),
         tools: params.tools.map_or(existing.tools, |v| v.map(String::from)),
-        status: existing.status,
+        last_test_status: existing.last_test_status,
         last_connected: existing.last_connected,
         original_json: params
             .original_json
             .map_or(existing.original_json, |v| v.map(String::from)),
         builtin: params.builtin.unwrap_or(existing.builtin),
+        deleted_at: params.deleted_at.map_or(existing.deleted_at, |v| v),
         created_at: existing.created_at,
         updated_at: now,
     }
@@ -297,7 +348,7 @@ mod tests {
         assert_eq!(server.transport_type, "stdio");
         assert!(server.transport_config.contains("npx"));
         assert!(server.tools.is_none());
-        assert_eq!(server.status, "disconnected");
+        assert_eq!(server.last_test_status, "disconnected");
         assert!(server.last_connected.is_none());
         assert!(server.original_json.is_some());
         assert!(!server.builtin);
@@ -481,7 +532,7 @@ mod tests {
         repo.update_status(&created.id, "connected", Some(ts)).await.unwrap();
 
         let found = repo.find_by_id(&created.id).await.unwrap().unwrap();
-        assert_eq!(found.status, "connected");
+        assert_eq!(found.last_test_status, "connected");
         assert_eq!(found.last_connected, Some(ts));
     }
 
@@ -496,7 +547,7 @@ mod tests {
         repo.update_status(&created.id, "error", None).await.unwrap();
 
         let found = repo.find_by_id(&created.id).await.unwrap().unwrap();
-        assert_eq!(found.status, "error");
+        assert_eq!(found.last_test_status, "error");
         assert_eq!(found.last_connected, Some(ts));
     }
 

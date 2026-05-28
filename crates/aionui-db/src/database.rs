@@ -4,6 +4,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use fs2::FileExt;
+use sqlx::migrate::Migrator;
 use sqlx::pool::PoolOptions;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
 use sqlx::{Sqlite, SqlitePool};
@@ -23,6 +24,9 @@ const STARTUP_FILE_RETRY_DELAYS: [Duration; 5] = [
     Duration::from_millis(400),
     Duration::from_millis(800),
 ];
+
+static DB_MIGRATOR: Migrator = sqlx::migrate!();
+const MCP_SCHEMA_RECONCILIATION_MIGRATION_VERSION: i64 = 7;
 
 /// Wraps a SQLite connection pool with lifecycle management.
 #[derive(Clone, Debug)]
@@ -284,11 +288,26 @@ async fn run_migrations(pool: &SqlitePool) -> Result<(), DbError> {
 /// pass sees the row that the winner committed, checksum matches (same
 /// shipped binary), and the migration is treated as already applied.
 async fn run_migrations_with_retry(conn: &mut sqlx::SqliteConnection) -> Result<(), DbError> {
-    match sqlx::migrate!().run(&mut *conn).await {
+    match DB_MIGRATOR.run(&mut *conn).await {
         Ok(()) => Ok(()),
         Err(e) if is_migrations_table_unique_conflict(&e) => {
             warn!("Concurrent migrator detected (UNIQUE conflict on _sqlx_migrations); retrying");
-            sqlx::migrate!().run(&mut *conn).await.map_err(DbError::Migration)
+            DB_MIGRATOR.run(&mut *conn).await.map_err(DbError::Migration)
+        }
+        Err(sqlx::migrate::MigrateError::VersionMismatch(version))
+            if version == MCP_SCHEMA_RECONCILIATION_MIGRATION_VERSION =>
+        {
+            if align_reconciled_mcp_migration_checksum(&mut *conn).await? {
+                warn!(
+                    "Aligned checksum for reconciled MCP migration {}; retrying",
+                    MCP_SCHEMA_RECONCILIATION_MIGRATION_VERSION
+                );
+                DB_MIGRATOR.run(&mut *conn).await.map_err(DbError::Migration)
+            } else {
+                Err(DbError::Migration(sqlx::migrate::MigrateError::VersionMismatch(
+                    version,
+                )))
+            }
         }
         Err(e) => Err(DbError::Migration(e)),
     }
@@ -343,6 +362,8 @@ impl Drop for MigrateLockGuard {
 /// added after a table was first created may be missing. This function
 /// safely adds any missing columns via `ALTER TABLE ADD COLUMN`.
 async fn ensure_schema_columns(pool: &SqlitePool) -> Result<(), DbError> {
+    reconcile_mcp_server_schema(pool).await?;
+
     let expected: &[(&str, &str, &str)] = &[
         ("cron_jobs", "skill_content", "TEXT"),
         ("cron_jobs", "description", "TEXT"),
@@ -377,6 +398,158 @@ async fn ensure_schema_columns(pool: &SqlitePool) -> Result<(), DbError> {
         }
     }
     Ok(())
+}
+
+async fn reconcile_mcp_server_schema(pool: &SqlitePool) -> Result<(), DbError> {
+    let table_exists: bool =
+        sqlx::query_scalar("SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='mcp_servers'")
+            .fetch_one(pool)
+            .await
+            .map_err(DbError::Query)?;
+    if !table_exists {
+        return Ok(());
+    }
+
+    let has_status: bool =
+        sqlx::query_scalar("SELECT COUNT(*) > 0 FROM pragma_table_info('mcp_servers') WHERE name = 'status'")
+            .fetch_one(pool)
+            .await
+            .map_err(DbError::Query)?;
+    let has_last_test_status: bool =
+        sqlx::query_scalar("SELECT COUNT(*) > 0 FROM pragma_table_info('mcp_servers') WHERE name = 'last_test_status'")
+            .fetch_one(pool)
+            .await
+            .map_err(DbError::Query)?;
+
+    let has_deleted_at: bool =
+        sqlx::query_scalar("SELECT COUNT(*) > 0 FROM pragma_table_info('mcp_servers') WHERE name = 'deleted_at'")
+            .fetch_one(pool)
+            .await
+            .map_err(DbError::Query)?;
+
+    let clean_pre_migration = has_status && !has_last_test_status && !has_deleted_at;
+    if clean_pre_migration {
+        return Ok(());
+    }
+
+    if has_status && !has_last_test_status {
+        sqlx::query("ALTER TABLE mcp_servers RENAME COLUMN status TO last_test_status")
+            .execute(pool)
+            .await
+            .map_err(DbError::Query)?;
+        info!("Renamed mcp_servers.status to last_test_status");
+    } else if !has_status && !has_last_test_status {
+        sqlx::query("ALTER TABLE mcp_servers ADD COLUMN last_test_status TEXT NOT NULL DEFAULT 'disconnected'")
+            .execute(pool)
+            .await
+            .map_err(DbError::Query)?;
+        info!("Added missing column mcp_servers.last_test_status");
+    }
+
+    if !has_deleted_at {
+        sqlx::query("ALTER TABLE mcp_servers ADD COLUMN deleted_at INTEGER")
+            .execute(pool)
+            .await
+            .map_err(DbError::Query)?;
+        info!("Added missing column mcp_servers.deleted_at");
+    }
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_mcp_servers_deleted_at ON mcp_servers(deleted_at)")
+        .execute(pool)
+        .await
+        .map_err(DbError::Query)?;
+
+    record_reconciled_mcp_migration(pool).await?;
+
+    Ok(())
+}
+
+async fn record_reconciled_mcp_migration(pool: &SqlitePool) -> Result<(), DbError> {
+    let Some(migration) = DB_MIGRATOR
+        .iter()
+        .find(|migration| migration.version == MCP_SCHEMA_RECONCILIATION_MIGRATION_VERSION)
+    else {
+        return Ok(());
+    };
+
+    sqlx::query(
+        r#"
+CREATE TABLE IF NOT EXISTS _sqlx_migrations (
+    version BIGINT PRIMARY KEY,
+    description TEXT NOT NULL,
+    installed_on TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    success BOOLEAN NOT NULL,
+    checksum BLOB NOT NULL,
+    execution_time BIGINT NOT NULL
+)
+        "#,
+    )
+    .execute(pool)
+    .await
+    .map_err(DbError::Query)?;
+
+    let already_applied: bool =
+        sqlx::query_scalar("SELECT COUNT(*) > 0 FROM _sqlx_migrations WHERE version = ? AND success = 1")
+            .bind(MCP_SCHEMA_RECONCILIATION_MIGRATION_VERSION)
+            .fetch_one(pool)
+            .await
+            .map_err(DbError::Query)?;
+    if already_applied {
+        return Ok(());
+    }
+
+    sqlx::query(
+        r#"
+INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time)
+VALUES (?, ?, TRUE, ?, 0)
+        "#,
+    )
+    .bind(migration.version)
+    .bind(&*migration.description)
+    .bind(&*migration.checksum)
+    .execute(pool)
+    .await
+    .map_err(DbError::Query)?;
+    info!("Recorded reconciled MCP schema migration {}", migration.version);
+    Ok(())
+}
+
+async fn align_reconciled_mcp_migration_checksum(conn: &mut sqlx::SqliteConnection) -> Result<bool, DbError> {
+    let has_status: bool =
+        sqlx::query_scalar("SELECT COUNT(*) > 0 FROM pragma_table_info('mcp_servers') WHERE name = 'status'")
+            .fetch_one(&mut *conn)
+            .await
+            .map_err(DbError::Query)?;
+    let has_last_test_status: bool =
+        sqlx::query_scalar("SELECT COUNT(*) > 0 FROM pragma_table_info('mcp_servers') WHERE name = 'last_test_status'")
+            .fetch_one(&mut *conn)
+            .await
+            .map_err(DbError::Query)?;
+    let has_deleted_at: bool =
+        sqlx::query_scalar("SELECT COUNT(*) > 0 FROM pragma_table_info('mcp_servers') WHERE name = 'deleted_at'")
+            .fetch_one(&mut *conn)
+            .await
+            .map_err(DbError::Query)?;
+
+    if has_status || !has_last_test_status || !has_deleted_at {
+        return Ok(false);
+    }
+
+    let Some(migration) = DB_MIGRATOR
+        .iter()
+        .find(|migration| migration.version == MCP_SCHEMA_RECONCILIATION_MIGRATION_VERSION)
+    else {
+        return Ok(false);
+    };
+
+    let updated = sqlx::query("UPDATE _sqlx_migrations SET checksum = ? WHERE version = ?")
+        .bind(&*migration.checksum)
+        .bind(MCP_SCHEMA_RECONCILIATION_MIGRATION_VERSION)
+        .execute(&mut *conn)
+        .await
+        .map_err(DbError::Query)?;
+
+    Ok(updated.rows_affected() > 0)
 }
 
 /// Ensure the system default user exists.

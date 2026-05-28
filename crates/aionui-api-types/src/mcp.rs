@@ -69,8 +69,8 @@ pub struct CreateMcpServerRequest {
 /// Request item for `POST /api/mcp/servers/import`.
 ///
 /// Import can preserve the enabled state from a legacy source. Plain create
-/// intentionally does not accept `enabled`, because enabling must also sync
-/// the server to agent configs.
+/// intentionally does not accept `enabled`; the UI persists the default
+/// enabled flag in a follow-up toggle request.
 #[derive(Debug, Deserialize)]
 pub struct ImportMcpServerRequest {
     pub name: String,
@@ -96,6 +96,8 @@ pub struct UpdateMcpServerRequest {
     pub transport: Option<McpTransport>,
     #[serde(default, deserialize_with = "deserialize_optional_nullable")]
     pub original_json: Option<Option<String>>,
+    #[serde(default)]
+    pub builtin: Option<bool>,
 }
 
 /// Request body for `POST /api/mcp/servers/import` — batch import.
@@ -119,7 +121,7 @@ pub struct McpServerResponse {
     pub transport: McpTransport,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<McpToolResponse>>,
-    pub status: McpServerStatus,
+    pub last_test_status: McpServerStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_connected: Option<TimestampMs>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -129,52 +131,32 @@ pub struct McpServerResponse {
     pub updated_at: TimestampMs,
 }
 
-// ---------------------------------------------------------------------------
-// E. Agent sync
-// ---------------------------------------------------------------------------
-
-/// Request body for `POST /api/mcp/sync-to-agents`.
-#[derive(Debug, Deserialize)]
-pub struct SyncToAgentsRequest {
-    pub servers: Vec<String>,
-}
-
-/// Request body for `POST /api/mcp/remove-from-agents`.
-#[derive(Debug, Deserialize)]
-pub struct RemoveFromAgentsRequest {
-    pub server_names: Vec<String>,
-}
-
-/// Per-agent sync result.
+/// Detected MCP server entry for one-click import.
 #[derive(Debug, Clone, Serialize)]
-pub struct McpAgentSyncResult {
-    pub agent: McpSource,
-    pub success: bool,
+pub struct DetectedMcpServerEntry {
+    #[serde(flatten)]
+    pub server: McpServerResponse,
+    pub importable: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-/// Aggregated sync result across all agents.
-#[derive(Debug, Clone, Serialize)]
-pub struct McpSyncResult {
-    pub success: bool,
-    pub results: Vec<McpAgentSyncResult>,
+    pub import_skip_reason: Option<String>,
 }
 
 /// Detected MCP servers for a single agent.
 #[derive(Debug, Clone, Serialize)]
 pub struct DetectedMcpServerResponse {
     pub source: McpSource,
-    pub servers: Vec<McpServerResponse>,
+    pub servers: Vec<DetectedMcpServerEntry>,
 }
 
 // ---------------------------------------------------------------------------
-// F. Connection test
+// E. Connection test
 // ---------------------------------------------------------------------------
 
 /// Request body for `POST /api/mcp/test-connection`.
 #[derive(Debug, Deserialize)]
 pub struct TestMcpConnectionRequest {
+    #[serde(default)]
+    pub id: Option<String>,
     pub name: String,
     pub transport: McpTransport,
 }
@@ -412,7 +394,7 @@ mod tests {
                 env: HashMap::new(),
             },
             tools: None,
-            status: McpServerStatus::Disconnected,
+            last_test_status: McpServerStatus::Disconnected,
             last_connected: None,
             original_json: None,
             builtin: false,
@@ -422,7 +404,7 @@ mod tests {
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["id"], "mcp_123");
         assert_eq!(json["enabled"], true);
-        assert_eq!(json["status"], "disconnected");
+        assert_eq!(json["last_test_status"], "disconnected");
         assert!(json.get("description").is_none()); // None skipped
         assert!(json.get("tools").is_none());
     }
@@ -446,33 +428,6 @@ mod tests {
         let json = serde_json::json!({ "servers": [] });
         let req: BatchImportMcpServersRequest = serde_json::from_value(json).unwrap();
         assert!(req.servers.is_empty());
-    }
-
-    // -- McpSyncResult --------------------------------------------------------
-
-    #[test]
-    fn test_sync_result_serialization() {
-        let result = McpSyncResult {
-            success: false,
-            results: vec![
-                McpAgentSyncResult {
-                    agent: McpSource::Claude,
-                    success: true,
-                    error: None,
-                },
-                McpAgentSyncResult {
-                    agent: McpSource::Gemini,
-                    success: false,
-                    error: Some("CLI not found".into()),
-                },
-            ],
-        };
-        let json = serde_json::to_value(&result).unwrap();
-        assert_eq!(json["success"], false);
-        assert_eq!(json["results"][0]["agent"], "claude");
-        assert_eq!(json["results"][0]["success"], true);
-        assert!(json["results"][0].get("error").is_none());
-        assert_eq!(json["results"][1]["error"], "CLI not found");
     }
 
     // -- McpConnectionTestResult ----------------------------------------------
@@ -519,10 +474,12 @@ mod tests {
     #[test]
     fn test_connection_request_deserialization() {
         let json = serde_json::json!({
+            "id": "mcp_123",
             "name": "test-server",
             "transport": { "type": "http", "url": "https://example.com/mcp" }
         });
         let req: TestMcpConnectionRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.id.as_deref(), Some("mcp_123"));
         assert_eq!(req.name, "test-server");
         match req.transport {
             McpTransport::Http { ref url, .. } => {
@@ -565,19 +522,32 @@ mod tests {
         assert_eq!(json["servers"], serde_json::json!([]));
     }
 
-    // -- SyncToAgentsRequest / RemoveFromAgentsRequest -------------------------
-
     #[test]
-    fn test_sync_to_agents_request() {
-        let json = serde_json::json!({ "servers": ["mcp_1", "mcp_2"] });
-        let req: SyncToAgentsRequest = serde_json::from_value(json).unwrap();
-        assert_eq!(req.servers, vec!["mcp_1", "mcp_2"]);
-    }
-
-    #[test]
-    fn test_remove_from_agents_request() {
-        let json = serde_json::json!({ "server_names": ["test-mcp"] });
-        let req: RemoveFromAgentsRequest = serde_json::from_value(json).unwrap();
-        assert_eq!(req.server_names, vec!["test-mcp"]);
+    fn test_detected_server_entry() {
+        let entry = DetectedMcpServerEntry {
+            server: McpServerResponse {
+                id: "detected_test".into(),
+                name: "test".into(),
+                description: None,
+                enabled: false,
+                transport: McpTransport::Http {
+                    url: "https://example.com/mcp".into(),
+                    headers: HashMap::new(),
+                },
+                tools: None,
+                last_test_status: McpServerStatus::Disconnected,
+                last_connected: None,
+                original_json: None,
+                builtin: false,
+                created_at: 0,
+                updated_at: 0,
+            },
+            importable: false,
+            import_skip_reason: Some("Needs authentication".into()),
+        };
+        let json = serde_json::to_value(&entry).unwrap();
+        assert_eq!(json["importable"], false);
+        assert_eq!(json["import_skip_reason"], "Needs authentication");
+        assert_eq!(json["name"], "test");
     }
 }

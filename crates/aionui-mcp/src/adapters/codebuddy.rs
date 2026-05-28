@@ -179,15 +179,13 @@ fn parse_codebuddy_config(content: &str) -> Result<Vec<DetectedServer>, McpError
     let mut servers = Vec::new();
 
     for (name, entry) in servers_obj {
-        // Skip disabled servers
-        if entry.get("disabled").and_then(|v| v.as_bool()).unwrap_or(false) {
-            continue;
-        }
-
         if let Some(transport) = parse_codebuddy_entry(entry) {
+            let disabled = entry.get("disabled").and_then(|v| v.as_bool()).unwrap_or(false);
             servers.push(DetectedServer {
                 name: name.clone(),
                 transport,
+                importable: !disabled,
+                import_skip_reason: if disabled { Some("Disabled".into()) } else { None },
             });
         }
     }

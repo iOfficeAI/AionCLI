@@ -86,10 +86,11 @@ mod aionui {
             transport_type: t_type.into(),
             transport_config: t_config.into(),
             tools: None,
-            status: "disconnected".into(),
+            last_test_status: "disconnected".into(),
             last_connected: None,
             original_json: None,
             builtin: false,
+            deleted_at: None,
             created_at: 1000,
             updated_at: 1000,
         }

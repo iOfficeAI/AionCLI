@@ -69,7 +69,7 @@ async fn create_stdio_server() {
     assert_eq!(server.transport_type, "stdio");
     assert!(server.transport_config.contains("npx"));
     assert!(server.tools.is_none());
-    assert_eq!(server.status, "disconnected");
+    assert_eq!(server.last_test_status, "disconnected");
     assert!(server.last_connected.is_none());
     assert!(!server.builtin);
     assert!(server.created_at > 0);
@@ -318,6 +318,9 @@ async fn delete_existing_removes_record() {
 
     r.delete(&created.id).await.unwrap();
     assert!(r.find_by_id(&created.id).await.unwrap().is_none());
+    let deleted = r.find_by_id_any(&created.id).await.unwrap().unwrap();
+    assert!(deleted.deleted_at.is_some());
+    assert!(!deleted.enabled);
 }
 
 #[tokio::test]
@@ -338,6 +341,25 @@ async fn delete_one_does_not_affect_others() {
     let remaining = r.list().await.unwrap();
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0].id, s2.id);
+}
+
+#[tokio::test]
+async fn list_by_ids_any_includes_soft_deleted_rows() {
+    let (r, _db) = repo().await;
+    let active = r.create(stdio_params()).await.unwrap();
+    let deleted = r.create(http_params()).await.unwrap();
+    r.delete(&deleted.id).await.unwrap();
+
+    let rows = r
+        .list_by_ids_any(&[deleted.id.clone(), active.id.clone()])
+        .await
+        .unwrap();
+
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].id, deleted.id);
+    assert!(rows[0].deleted_at.is_some());
+    assert_eq!(rows[1].id, active.id);
+    assert!(rows[1].deleted_at.is_none());
 }
 
 // -- B-1/B-2/B-3: Batch upsert --
@@ -405,7 +427,7 @@ async fn update_status_with_timestamp() {
     r.update_status(&created.id, "connected", Some(ts)).await.unwrap();
 
     let found = r.find_by_id(&created.id).await.unwrap().unwrap();
-    assert_eq!(found.status, "connected");
+    assert_eq!(found.last_test_status, "connected");
     assert_eq!(found.last_connected, Some(ts));
 }
 
@@ -420,7 +442,7 @@ async fn update_status_without_timestamp_preserves_existing() {
     r.update_status(&created.id, "error", None).await.unwrap();
 
     let found = r.find_by_id(&created.id).await.unwrap().unwrap();
-    assert_eq!(found.status, "error");
+    assert_eq!(found.last_test_status, "error");
     assert_eq!(found.last_connected, Some(ts));
 }
 
@@ -508,7 +530,7 @@ async fn full_crud_lifecycle() {
         .await
         .unwrap();
     let after_status = r.find_by_id(&created.id).await.unwrap().unwrap();
-    assert_eq!(after_status.status, "connected");
+    assert_eq!(after_status.last_test_status, "connected");
 
     // Delete
     r.delete(&created.id).await.unwrap();

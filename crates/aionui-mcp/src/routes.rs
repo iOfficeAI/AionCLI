@@ -3,13 +3,11 @@ use axum::extract::rejection::JsonRejection;
 use axum::extract::{Json, Path, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
-use tracing::warn;
 
 use aionui_api_types::{
     ApiResponse, BatchImportMcpServersRequest, CreateMcpServerRequest, DetectedMcpServerResponse,
-    McpConnectionTestResult, McpServerResponse, McpSyncResult, OAuthCheckStatusRequest, OAuthLoginRequest,
-    OAuthLoginResponse, OAuthLogoutRequest, OAuthStatusResponse, RemoveFromAgentsRequest, SyncToAgentsRequest,
-    TestMcpConnectionRequest, UpdateMcpServerRequest,
+    McpConnectionTestResult, McpServerResponse, OAuthCheckStatusRequest, OAuthLoginRequest, OAuthLoginResponse,
+    OAuthLogoutRequest, OAuthStatusResponse, TestMcpConnectionRequest, UpdateMcpServerRequest,
 };
 use aionui_common::AppError;
 
@@ -38,7 +36,7 @@ pub struct McpRouterState {
 
 /// Build the MCP router with all `/api/mcp/*` routes.
 ///
-/// Includes CRUD routes and agent sync routes.
+/// Includes CRUD routes, agent config detection, connection tests, and OAuth.
 /// All routes require authentication (applied by the caller).
 pub fn mcp_routes(state: McpRouterState) -> Router {
     Router::new()
@@ -51,10 +49,8 @@ pub fn mcp_routes(state: McpRouterState) -> Router {
         .route("/api/mcp/servers/{id}/toggle", post(toggle_server))
         // Connection test route
         .route("/api/mcp/test-connection", post(test_connection))
-        // Agent sync routes
+        // Agent config discovery route
         .route("/api/mcp/agent-configs", get(get_agent_configs))
-        .route("/api/mcp/sync-to-agents", post(sync_to_agents))
-        .route("/api/mcp/remove-from-agents", post(remove_from_agents))
         // OAuth routes
         .route("/api/mcp/oauth/check-status", post(oauth_check_status))
         .route("/api/mcp/oauth/login", post(oauth_login))
@@ -106,56 +102,20 @@ async fn edit_server(
 }
 
 /// `DELETE /api/mcp/servers/:id` — delete an MCP server.
-///
-/// If the deleted server was enabled, triggers remove-from-agents.
 async fn delete_server(
     State(state): State<McpRouterState>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<()>>, AppError> {
-    let server = state.config_service.get_server(&id).await?;
-    let was_enabled = server.enabled;
-    let server_name = server.name.clone();
     state.config_service.delete_server(&id).await?;
-
-    if was_enabled
-        && let Err(e) = state
-            .sync_service
-            .remove_from_agents(std::slice::from_ref(&server_name))
-            .await
-    {
-        warn!(server = %server_name, error = %e, "failed to remove deleted server from agents");
-    }
-
     Ok(Json(ApiResponse::success()))
 }
 
 /// `POST /api/mcp/servers/:id/toggle` — toggle enabled state.
-///
-/// Triggers sync or remove based on the new enabled state.
 async fn toggle_server(
     State(state): State<McpRouterState>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<McpServerResponse>>, AppError> {
     let server = state.config_service.toggle_server(&id).await?;
-
-    if server.enabled {
-        if let Err(e) = state
-            .sync_service
-            .sync_to_agents(std::slice::from_ref(&server.id))
-            .await
-        {
-            warn!(server_id = %server.id, error = %e, "failed to sync enabled server to agents");
-        }
-    } else {
-        if let Err(e) = state
-            .sync_service
-            .remove_from_agents(std::slice::from_ref(&server.name))
-            .await
-        {
-            warn!(server = %server.name, error = %e, "failed to remove disabled server from agents");
-        }
-    }
-
     Ok(Json(ApiResponse::ok(server)))
 }
 
@@ -187,6 +147,9 @@ async fn test_connection(
         .connection_test_service
         .test_connection(&req.name, &transport)
         .await;
+    if let Some(server_id) = req.id.as_deref() {
+        state.config_service.persist_test_result(server_id, &result).await?;
+    }
     Ok(Json(ApiResponse::ok(result)))
 }
 
@@ -201,26 +164,6 @@ async fn get_agent_configs(
 ) -> Result<Json<ApiResponse<Vec<DetectedMcpServerResponse>>>, AppError> {
     let configs = state.sync_service.get_agent_configs().await?;
     Ok(Json(ApiResponse::ok(configs)))
-}
-
-/// `POST /api/mcp/sync-to-agents` — sync specified servers to all agents.
-async fn sync_to_agents(
-    State(state): State<McpRouterState>,
-    body: Result<Json<SyncToAgentsRequest>, JsonRejection>,
-) -> Result<Json<ApiResponse<McpSyncResult>>, AppError> {
-    let Json(req) = body.map_err(|e| AppError::BadRequest(e.to_string()))?;
-    let result = state.sync_service.sync_to_agents(&req.servers).await?;
-    Ok(Json(ApiResponse::ok(result)))
-}
-
-/// `POST /api/mcp/remove-from-agents` — remove named servers from all agents.
-async fn remove_from_agents(
-    State(state): State<McpRouterState>,
-    body: Result<Json<RemoveFromAgentsRequest>, JsonRejection>,
-) -> Result<Json<ApiResponse<McpSyncResult>>, AppError> {
-    let Json(req) = body.map_err(|e| AppError::BadRequest(e.to_string()))?;
-    let result = state.sync_service.remove_from_agents(&req.server_names).await?;
-    Ok(Json(ApiResponse::ok(result)))
 }
 
 // ---------------------------------------------------------------------------

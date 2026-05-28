@@ -23,12 +23,15 @@ pub struct McpServerRow {
     /// JSON array of tool descriptions (populated after connection test).
     pub tools: Option<String>,
     /// One of: "connected", "disconnected", "error", "testing".
-    pub status: String,
+    /// Represents the latest test result, not a live runtime state.
+    pub last_test_status: String,
     pub last_connected: Option<TimestampMs>,
     /// Original JSON text for editing restoration.
     pub original_json: Option<String>,
     /// Whether this is a built-in server (hidden from edit/delete in UI).
     pub builtin: bool,
+    /// Soft-delete timestamp. `NULL` means active.
+    pub deleted_at: Option<TimestampMs>,
     pub created_at: TimestampMs,
     pub updated_at: TimestampMs,
 }

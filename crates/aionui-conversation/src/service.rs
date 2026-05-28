@@ -7,10 +7,10 @@ use crate::response_middleware::ICronService;
 use aionui_api_types::{
     ApprovalCheckResponse, CloneConversationRequest, ConfirmRequest, ConfirmationListResponse,
     ConversationArtifactKind, ConversationArtifactListResponse, ConversationArtifactResponse,
-    ConversationArtifactStatus, ConversationListResponse, ConversationResponse, CreateConversationRequest,
-    ListConversationsQuery, ListMessagesQuery, MessageListResponse, MessageResponse, MessageSearchResponse,
-    SearchMessagesQuery, SendMessageRequest, UpdateConversationArtifactRequest, UpdateConversationRequest,
-    WebSocketMessage,
+    ConversationArtifactStatus, ConversationListResponse, ConversationMcpStatus, ConversationMcpStatusKind,
+    ConversationResponse, CreateConversationRequest, ListConversationsQuery, ListMessagesQuery, MessageListResponse,
+    MessageResponse, MessageSearchResponse, SearchMessagesQuery, SendMessageRequest, SessionMcpServer,
+    SessionMcpTransport, UpdateConversationArtifactRequest, UpdateConversationRequest, WebSocketMessage,
 };
 use aionui_common::{
     AgentType, AppError, ConversationSource, ConversationStatus, ErrorChain, OnConversationDelete, PaginatedResult,
@@ -19,9 +19,12 @@ use aionui_common::{
 use aionui_db::models::MessageRow;
 use aionui_db::{
     ConversationFilters, ConversationRowUpdate, CreateAcpSessionParams, IAcpSessionRepository,
-    IAgentMetadataRepository, IConversationRepository, SaveRuntimeStateParams, SortOrder,
+    IAgentMetadataRepository, IConversationRepository, IMcpServerRepository, SaveRuntimeStateParams, SortOrder,
 };
+use aionui_mcp::{AcpMcpCapabilities, parse_acp_mcp_capabilities};
 use aionui_realtime::EventBroadcaster;
+use aionui_runtime::resolve_command_path;
+use std::collections::{HashMap, HashSet};
 use tracing::{debug, error, info, warn};
 
 use crate::convert::{
@@ -34,6 +37,51 @@ use crate::stream_relay::StreamRelay;
 use std::sync::RwLock;
 
 const MAX_CRON_CONTINUATIONS_PER_TURN: usize = 4;
+
+#[derive(Debug, Clone, Copy)]
+struct McpSupportPolicy {
+    stdio: bool,
+    http: bool,
+    sse: bool,
+    streamable_http: bool,
+}
+
+impl McpSupportPolicy {
+    const AIONRS: Self = Self {
+        stdio: true,
+        http: true,
+        sse: true,
+        streamable_http: true,
+    };
+
+    fn from_acp_capabilities(capabilities: AcpMcpCapabilities) -> Self {
+        Self {
+            stdio: capabilities.stdio,
+            http: capabilities.http,
+            sse: capabilities.sse,
+            streamable_http: capabilities.http,
+        }
+    }
+
+    fn supports_row_transport(self, transport_type: &str) -> bool {
+        match transport_type {
+            "stdio" => self.stdio,
+            "http" => self.http,
+            "sse" => self.sse,
+            "streamable_http" => self.streamable_http,
+            _ => false,
+        }
+    }
+
+    fn supports_session_transport(self, transport: &SessionMcpTransport) -> bool {
+        match transport {
+            SessionMcpTransport::Stdio { .. } => self.stdio,
+            SessionMcpTransport::Http { .. } => self.http,
+            SessionMcpTransport::Sse { .. } => self.sse,
+            SessionMcpTransport::StreamableHttp { .. } => self.streamable_http,
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct ConversationService {
@@ -48,6 +96,7 @@ pub struct ConversationService {
     /// mirrors the `cron_service` slot pattern below.
     delete_hooks: Arc<RwLock<Vec<Arc<dyn OnConversationDelete>>>>,
     cron_service: Arc<RwLock<Option<Arc<dyn ICronService>>>>,
+    mcp_server_repo: Arc<RwLock<Option<Arc<dyn IMcpServerRepository>>>>,
 
     // Repos for conversation, acp_session and agent_metadata access.
     conversation_repo: Arc<dyn IConversationRepository>,
@@ -75,6 +124,7 @@ impl ConversationService {
             task_manager,
             delete_hooks: Arc::new(RwLock::new(Vec::new())),
             cron_service: Arc::new(RwLock::new(None)),
+            mcp_server_repo: Arc::new(RwLock::new(None)),
 
             conversation_repo,
             agent_metadata_repo,
@@ -85,6 +135,12 @@ impl ConversationService {
     pub fn with_cron_service(&self, cron_service: Option<Arc<dyn ICronService>>) {
         if let Ok(mut guard) = self.cron_service.write() {
             *guard = cron_service;
+        }
+    }
+
+    pub fn with_mcp_server_repo(&self, repo: Arc<dyn IMcpServerRepository>) {
+        if let Ok(mut guard) = self.mcp_server_repo.write() {
+            *guard = Some(repo);
         }
     }
 
@@ -261,6 +317,104 @@ impl ConversationService {
                 "skills".to_owned(),
                 serde_json::Value::Array(initial_skills.into_iter().map(serde_json::Value::String).collect()),
             );
+        }
+
+        let selected_mcp_server_ids = match extra.as_object_mut() {
+            Some(obj) => {
+                let has_selection = obj.contains_key("selected_mcp_server_ids");
+                let ids = take_string_array(obj, &["selected_mcp_server_ids"]);
+                if has_selection { Some(ids) } else { None }
+            }
+            None => None,
+        };
+        let selected_session_mcp_servers = match extra.as_object_mut() {
+            Some(obj) => match obj.remove("selected_session_mcp_servers") {
+                Some(value) => Some(
+                    serde_json::from_value::<Vec<SessionMcpServer>>(value)
+                        .map_err(|e| AppError::BadRequest(format!("Invalid selected_session_mcp_servers: {e}")))?,
+                ),
+                None => None,
+            },
+            None => None,
+        };
+
+        let mcp_support = self.resolve_mcp_support_policy(&req.r#type, &extra).await?;
+        let mut selected_row_ids: Vec<String> = Vec::new();
+        let mut selected_mcp_names: Vec<String> = Vec::new();
+        let mut selected_mcp_statuses: Vec<ConversationMcpStatus> = Vec::new();
+        let mut seen_mcp_names = HashSet::new();
+        let mut status_index_by_name: HashMap<String, usize> = HashMap::new();
+        let repo = self
+            .mcp_server_repo
+            .read()
+            .ok()
+            .and_then(|guard| guard.as_ref().cloned());
+        if let Some(repo) = repo {
+            let rows = match selected_mcp_server_ids.as_ref() {
+                Some(ids) => repo
+                    .list_by_ids_any(ids)
+                    .await
+                    .map_err(|e| AppError::Internal(format!("Failed to load selected MCP servers: {e}")))?,
+                None => repo
+                    .list()
+                    .await
+                    .map_err(|e| AppError::Internal(format!("Failed to list MCP servers: {e}")))?,
+            };
+            let selected_rows = rows
+                .into_iter()
+                .filter(|row| !row.builtin)
+                .filter(|row| match selected_mcp_server_ids.as_ref() {
+                    Some(ids) => ids.iter().any(|id| id == &row.id),
+                    None => row.enabled,
+                })
+                .collect::<Vec<_>>();
+            selected_row_ids = selected_rows.iter().map(|row| row.id.clone()).collect();
+            for row in &selected_rows {
+                if seen_mcp_names.insert(row.name.clone()) {
+                    selected_mcp_names.push(row.name.clone());
+                }
+                upsert_conversation_mcp_status(
+                    &mut selected_mcp_statuses,
+                    &mut status_index_by_name,
+                    classify_repo_mcp_status(row, mcp_support),
+                );
+            }
+        }
+
+        if let Some(session_servers) = selected_session_mcp_servers.as_ref() {
+            for server in session_servers {
+                if seen_mcp_names.insert(server.name.clone()) {
+                    selected_mcp_names.push(server.name.clone());
+                }
+                upsert_conversation_mcp_status(
+                    &mut selected_mcp_statuses,
+                    &mut status_index_by_name,
+                    classify_session_mcp_status(server, mcp_support),
+                );
+            }
+        }
+
+        if let Some(obj) = extra.as_object_mut() {
+            obj.insert(
+                "mcp_server_ids".to_owned(),
+                serde_json::Value::Array(selected_row_ids.into_iter().map(serde_json::Value::String).collect()),
+            );
+            obj.insert(
+                "mcp_servers".to_owned(),
+                serde_json::Value::Array(selected_mcp_names.into_iter().map(serde_json::Value::String).collect()),
+            );
+            obj.insert(
+                "mcp_statuses".to_owned(),
+                serde_json::to_value(&selected_mcp_statuses)
+                    .map_err(|e| AppError::Internal(format!("Failed to serialize MCP status snapshot: {e}")))?,
+            );
+            if let Some(session_servers) = selected_session_mcp_servers.as_ref() {
+                obj.insert(
+                    "session_mcp_servers".to_owned(),
+                    serde_json::to_value(session_servers)
+                        .map_err(|e| AppError::Internal(format!("Failed to serialize session MCP snapshot: {e}")))?,
+                );
+            }
         }
 
         let row = aionui_db::models::ConversationRow {
@@ -468,9 +622,15 @@ impl ConversationService {
         // must not be re-shaped by PATCH. The frontend must clone the
         // conversation to produce a new snapshot.
         if let Some(incoming) = &req.extra
-            && incoming.get("skills").is_some()
+            && (incoming.get("skills").is_some()
+                || incoming.get("mcp_server_ids").is_some()
+                || incoming.get("mcp_servers").is_some()
+                || incoming.get("mcp_statuses").is_some()
+                || incoming.get("session_mcp_servers").is_some())
         {
-            return Err(AppError::BadRequest("extra.skills is immutable post-creation".into()));
+            return Err(AppError::BadRequest(
+                "extra.skills and MCP snapshots are immutable post-creation".into(),
+            ));
         }
 
         // Type-aware rule: top-level `model` is aionrs-only. For non-aionrs
@@ -1442,6 +1602,196 @@ async fn native_skills_dirs(
         .map(|dirs| dirs.iter().map(|s| (*s).to_owned()).collect())
 }
 
+impl ConversationService {
+    async fn resolve_mcp_support_policy(
+        &self,
+        agent_type: &AgentType,
+        extra: &serde_json::Value,
+    ) -> Result<McpSupportPolicy, AppError> {
+        match agent_type {
+            AgentType::Acp => resolve_acp_mcp_support_policy(&self.agent_metadata_repo, extra).await,
+            AgentType::Aionrs => Ok(McpSupportPolicy::AIONRS),
+            _ => Ok(McpSupportPolicy::AIONRS),
+        }
+    }
+}
+
+async fn resolve_acp_mcp_support_policy(
+    repo: &Arc<dyn IAgentMetadataRepository>,
+    extra: &serde_json::Value,
+) -> Result<McpSupportPolicy, AppError> {
+    let agent_id = extra
+        .get("agent_id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.is_empty());
+    let backend = extra
+        .get("backend")
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.is_empty());
+    let agent_source = extra
+        .get("agent_source")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("builtin");
+
+    let row = match agent_id {
+        Some(id) => repo
+            .get(id)
+            .await
+            .map_err(|e| AppError::Internal(format!("agent_metadata lookup: {e}")))?,
+        None if agent_source == "builtin" => match backend {
+            Some(vendor) => repo
+                .find_builtin_by_backend(vendor)
+                .await
+                .map_err(|e| AppError::Internal(format!("agent_metadata lookup: {e}")))?,
+            None => None,
+        },
+        None => None,
+    };
+
+    let capabilities = row
+        .as_ref()
+        .and_then(|row| row.agent_capabilities.as_deref())
+        .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+        .map(|value| parse_acp_mcp_capabilities(&value))
+        .unwrap_or_default();
+
+    Ok(McpSupportPolicy::from_acp_capabilities(capabilities))
+}
+
+fn upsert_conversation_mcp_status(
+    statuses: &mut Vec<ConversationMcpStatus>,
+    status_index_by_name: &mut HashMap<String, usize>,
+    status: ConversationMcpStatus,
+) {
+    if let Some(index) = status_index_by_name.get(&status.name).copied() {
+        statuses[index] = status;
+        return;
+    }
+    status_index_by_name.insert(status.name.clone(), statuses.len());
+    statuses.push(status);
+}
+
+fn classify_repo_mcp_status(row: &aionui_db::models::McpServerRow, support: McpSupportPolicy) -> ConversationMcpStatus {
+    if !support.supports_row_transport(&row.transport_type) {
+        return ConversationMcpStatus {
+            id: row.id.clone(),
+            name: row.name.clone(),
+            status: ConversationMcpStatusKind::Unsupported,
+            reason: Some(format!(
+                "transport '{}' is not supported by this agent",
+                row.transport_type
+            )),
+        };
+    }
+
+    match validate_repo_transport(row.transport_type.as_str(), &row.transport_config) {
+        Ok(()) => ConversationMcpStatus {
+            id: row.id.clone(),
+            name: row.name.clone(),
+            status: ConversationMcpStatusKind::Loaded,
+            reason: None,
+        },
+        Err(reason) => ConversationMcpStatus {
+            id: row.id.clone(),
+            name: row.name.clone(),
+            status: ConversationMcpStatusKind::Failed,
+            reason: Some(reason),
+        },
+    }
+}
+
+fn classify_session_mcp_status(server: &SessionMcpServer, support: McpSupportPolicy) -> ConversationMcpStatus {
+    if !support.supports_session_transport(&server.transport) {
+        let transport = match &server.transport {
+            SessionMcpTransport::Stdio { .. } => "stdio",
+            SessionMcpTransport::Http { .. } => "http",
+            SessionMcpTransport::Sse { .. } => "sse",
+            SessionMcpTransport::StreamableHttp { .. } => "streamable_http",
+        };
+        return ConversationMcpStatus {
+            id: server.id.clone(),
+            name: server.name.clone(),
+            status: ConversationMcpStatusKind::Unsupported,
+            reason: Some(format!("transport '{transport}' is not supported by this agent")),
+        };
+    }
+
+    match validate_session_transport(&server.transport) {
+        Ok(()) => ConversationMcpStatus {
+            id: server.id.clone(),
+            name: server.name.clone(),
+            status: ConversationMcpStatusKind::Loaded,
+            reason: None,
+        },
+        Err(reason) => ConversationMcpStatus {
+            id: server.id.clone(),
+            name: server.name.clone(),
+            status: ConversationMcpStatusKind::Failed,
+            reason: Some(reason),
+        },
+    }
+}
+
+fn validate_repo_transport(transport_type: &str, transport_config: &str) -> Result<(), String> {
+    let value: serde_json::Value =
+        serde_json::from_str(transport_config).map_err(|e| format!("invalid transport config: {e}"))?;
+
+    match transport_type {
+        "stdio" => {
+            let command = value
+                .get("command")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "stdio transport is missing command".to_owned())?;
+            validate_stdio_command(command)
+        }
+        "http" | "streamable_http" => validate_url_field("http", value.get("url").and_then(serde_json::Value::as_str)),
+        "sse" => validate_url_field("sse", value.get("url").and_then(serde_json::Value::as_str)),
+        other => Err(format!("unknown transport type: {other}")),
+    }
+}
+
+fn validate_session_transport(transport: &SessionMcpTransport) -> Result<(), String> {
+    match transport {
+        SessionMcpTransport::Stdio { command, .. } => validate_stdio_command(command),
+        SessionMcpTransport::Http { url, .. } => validate_url_field("http", Some(url)),
+        SessionMcpTransport::Sse { url, .. } => validate_url_field("sse", Some(url)),
+        SessionMcpTransport::StreamableHttp { url, .. } => validate_url_field("streamable_http", Some(url)),
+    }
+}
+
+fn validate_stdio_command(command: &str) -> Result<(), String> {
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return Err("stdio transport is missing command".to_owned());
+    }
+
+    let path = std::path::Path::new(trimmed);
+    let looks_like_path = path.is_absolute()
+        || trimmed.contains(std::path::MAIN_SEPARATOR)
+        || trimmed.contains('/')
+        || trimmed.contains('\\');
+
+    if looks_like_path {
+        if path.exists() {
+            return Ok(());
+        }
+        return Err(format!("command '{trimmed}' does not exist"));
+    }
+
+    if resolve_command_path(trimmed).is_some() {
+        Ok(())
+    } else {
+        Err(format!("command '{trimmed}' was not found in PATH"))
+    }
+}
+
+fn validate_url_field(transport: &str, url: Option<&str>) -> Result<(), String> {
+    match url.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(_) => Ok(()),
+        None => Err(format!("{transport} transport is missing url")),
+    }
+}
+
 /// Serialize a serde-compatible enum to its JSON string form for DB storage.
 ///
 /// e.g. `AgentType::Acp` → `"acp"`
@@ -1729,5 +2079,45 @@ mod tests {
         assert_eq!(lineage.agent_id, "");
         assert_eq!(lineage.agent_name, "");
         assert!(!lineage.has_any_identity());
+    }
+
+    #[test]
+    fn classify_session_mcp_status_marks_unsupported_transport() {
+        let status = classify_session_mcp_status(
+            &SessionMcpServer {
+                id: "mcp-http".into(),
+                name: "remote-http".into(),
+                transport: SessionMcpTransport::Http {
+                    url: "https://example.com/mcp".into(),
+                    headers: HashMap::new(),
+                },
+            },
+            McpSupportPolicy {
+                stdio: true,
+                http: false,
+                sse: false,
+                streamable_http: false,
+            },
+        );
+
+        assert_eq!(status.status, ConversationMcpStatusKind::Unsupported);
+    }
+
+    #[test]
+    fn classify_session_mcp_status_marks_missing_stdio_command_failed() {
+        let status = classify_session_mcp_status(
+            &SessionMcpServer {
+                id: "mcp-stdio".into(),
+                name: "broken-stdio".into(),
+                transport: SessionMcpTransport::Stdio {
+                    command: "__definitely_missing_aionui_mcp_command__".into(),
+                    args: Vec::new(),
+                    env: HashMap::new(),
+                },
+            },
+            McpSupportPolicy::AIONRS,
+        );
+
+        assert_eq!(status.status, ConversationMcpStatusKind::Failed);
     }
 }

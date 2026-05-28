@@ -48,6 +48,8 @@ impl McpAgentAdapter for AionuiAdapter {
             servers.push(DetectedServer {
                 name: server.name,
                 transport: server.transport,
+                importable: true,
+                import_skip_reason: None,
             });
         }
 
@@ -154,10 +156,11 @@ mod tests {
             transport_type: transport_type.into(),
             transport_config: transport_config.into(),
             tools: None,
-            status: "disconnected".into(),
+            last_test_status: "disconnected".into(),
             last_connected: None,
             original_json: None,
             builtin: false,
+            deleted_at: None,
             created_at: 1000,
             updated_at: 1000,
         }

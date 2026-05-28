@@ -35,7 +35,7 @@ pub use acp::{
 pub use acp_prompt_hook::AcpPromptHookWarningPayload;
 pub use agent_build_extra::{
     AcpBuildExtra, AcpModelInfo, AionrsBuildExtra, OpenClawBuildExtra, OpenClawGatewayConfig, RemoteBuildExtra,
-    SlashCommandItem,
+    SessionMcpServer, SessionMcpTransport, SlashCommandItem,
 };
 pub use agent_discovery::{AgentEnvEntry, AgentHandshake, AgentMetadata, AgentSource, AgentSourceInfo, BehaviorPolicy};
 pub use assistant::{
@@ -57,10 +57,11 @@ pub use confirmation::{ApprovalCheckQuery, ApprovalCheckResponse, ConfirmRequest
 pub use connection_test::TestBedrockConnectionRequest;
 pub use conversation::{
     ActiveCountResponse, CloneConversationRequest, ConversationArtifactKind, ConversationArtifactListResponse,
-    ConversationArtifactResponse, ConversationArtifactStatus, ConversationListResponse, ConversationResponse,
-    CreateConversationRequest, ListConversationsQuery, ListMessagesQuery, MessageListResponse, MessageResponse,
-    MessageSearchItem, MessageSearchResponse, SearchMessagesQuery, SendMessageRequest, SendMessageResponse,
-    UpdateConversationArtifactRequest, UpdateConversationRequest,
+    ConversationArtifactResponse, ConversationArtifactStatus, ConversationListResponse, ConversationMcpStatus,
+    ConversationMcpStatusKind, ConversationResponse, CreateConversationRequest, ListConversationsQuery,
+    ListMessagesQuery, MessageListResponse, MessageResponse, MessageSearchItem, MessageSearchResponse,
+    SearchMessagesQuery, SendMessageRequest, SendMessageResponse, UpdateConversationArtifactRequest,
+    UpdateConversationRequest,
 };
 pub use cron::{
     CreateCronJobRequest, CronAgentConfigDto, CronJobExecutedEvent, CronJobMetadataDto, CronJobPayloadDto,
@@ -86,11 +87,10 @@ pub use file::{
 };
 pub use lifecycle::{GitHubReleaseAsset, SystemInfoResponse, UpdateCheckRequest, UpdateCheckResult, UpdateReleaseInfo};
 pub use mcp::{
-    BatchImportMcpServersRequest, CreateMcpServerRequest, DetectedMcpServerResponse, ImportMcpServerRequest,
-    McpAgentSyncResult, McpAuthMethod, McpConnectionTestResult, McpServerResponse, McpSyncResult, McpToolResponse,
-    McpTransport, OAuthCheckStatusRequest, OAuthLoginRequest, OAuthLoginResponse, OAuthLogoutRequest,
-    OAuthStatusResponse, RemoveFromAgentsRequest, SyncToAgentsRequest, TestMcpConnectionRequest,
-    UpdateMcpServerRequest,
+    BatchImportMcpServersRequest, CreateMcpServerRequest, DetectedMcpServerEntry, DetectedMcpServerResponse,
+    ImportMcpServerRequest, McpAuthMethod, McpConnectionTestResult, McpServerResponse, McpToolResponse, McpTransport,
+    OAuthCheckStatusRequest, OAuthLoginRequest, OAuthLoginResponse, OAuthLogoutRequest, OAuthStatusResponse,
+    TestMcpConnectionRequest, UpdateMcpServerRequest,
 };
 pub use office::{
     CellCoord, CellRange, ConversionResultDto, ConversionTarget, DetectStarOfficeRequest, DocumentConversionRequest,
