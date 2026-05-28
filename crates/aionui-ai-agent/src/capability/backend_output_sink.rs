@@ -131,10 +131,9 @@ impl OutputSink for BackendOutputSink {
     }
 
     fn emit_error(&self, msg: &str) {
-        let _ = self.event_tx.send(AgentStreamEvent::Error(ErrorEventData {
-            message: msg.to_owned(),
-            code: None,
-        }));
+        let _ = self
+            .event_tx
+            .send(AgentStreamEvent::Error(ErrorEventData::legacy(msg, None)));
     }
 
     fn emit_info(&self, msg: &str) {
