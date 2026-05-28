@@ -1017,7 +1017,7 @@ impl crate::traits::IFileService for FileService {
         let bytes = data.to_vec();
         let dir = self.resolve_upload_directory(conv_id.as_deref()).await?;
 
-        tokio::task::spawn_blocking(move || {
+        let uploaded_path = tokio::task::spawn_blocking(move || {
             std::fs::create_dir_all(&dir)
                 .map_err(|e| AppError::Internal(format!("cannot create upload directory: {e}")))?;
             let dir = std::fs::canonicalize(&dir)
@@ -1059,7 +1059,14 @@ impl crate::traits::IFileService for FileService {
             }
         })
         .await
-        .map_err(|e| AppError::Internal(format!("create upload file task failed: {e}")))?
+        .map_err(|e| AppError::Internal(format!("create upload file task failed: {e}")))??;
+
+        // Uploads can create files inside a workspace after the file mention
+        // list has already cached an empty result. Clear all roots because an
+        // upload can affect both the exact workspace cache and ancestor roots.
+        self.workspace_files_cache.clear();
+
+        Ok(uploaded_path)
     }
 
     async fn get_image_base64(&self, path: &str, extra_root: Option<&Path>) -> Result<String, AppError> {
@@ -1978,7 +1985,7 @@ mod tests {
         };
         conversation_repo.create(&row).await.unwrap();
 
-        let service = crate::service::FileService::new(Arc::new(NullBroadcaster), vec![])
+        let service = crate::service::FileService::new(Arc::new(NullBroadcaster), vec![workspace.to_path_buf()])
             .with_upload_workspace_context(settings_repo, conversation_repo);
         (service, db)
     }
@@ -2052,6 +2059,28 @@ mod tests {
         assert_eq!(std::fs::read(path).unwrap(), br#"{"ok":true}"#);
 
         let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn create_upload_file_invalidates_workspace_file_list_cache() {
+        use crate::traits::IFileService;
+
+        let workspace = tempfile::tempdir().unwrap();
+        let conv = unique_conv_id("workspace-cache");
+        let (svc, _db) = make_service_with_upload_context(true, &conv, workspace.path()).await;
+        let workspace_str = workspace.path().to_string_lossy().into_owned();
+
+        let before = svc.list_workspace_files(&workspace_str).await.unwrap();
+        assert!(before.is_empty());
+
+        let path_str = svc
+            .create_upload_file("cached.md", b"# cached", Some(&conv))
+            .await
+            .unwrap();
+        let after = svc.list_workspace_files(&workspace_str).await.unwrap();
+
+        assert!(after.iter().any(|file| file.name == "cached.md"));
+        let _ = std::fs::remove_file(path_str);
     }
 
     #[tokio::test]
