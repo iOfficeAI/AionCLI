@@ -5,7 +5,7 @@ use tracing::warn;
 use crate::service::ConversationService;
 
 impl ConversationService {
-    pub(crate) async fn persist_send_failure_tip(&self, conversation_id: &str, err: &AppError) {
+    pub(crate) async fn persist_send_failure_tip(&self, conversation_id: &str, err: &AppError) -> Option<MessageRow> {
         let row = MessageRow {
             id: Self::mint_msg_id(),
             conversation_id: conversation_id.to_owned(),
@@ -30,6 +30,9 @@ impl ConversationService {
                 error = %ErrorChain(&store_err),
                 "Failed to persist send failure error tip"
             );
+            return None;
         }
+
+        Some(row)
     }
 }

@@ -1,5 +1,9 @@
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
+use std::time::Duration;
 
 use aionui_ai_agent::IWorkerTaskManager;
 use aionui_ai_agent::agent_task::{AgentInstance, IAgentTask, IMockAgent};
@@ -1259,6 +1263,63 @@ impl IWorkerTaskManager for MockTaskManager {
     }
 }
 
+struct SlowBuildTaskManager {
+    delay: Duration,
+    built: AtomicBool,
+}
+
+impl SlowBuildTaskManager {
+    fn new(delay: Duration) -> Self {
+        Self {
+            delay,
+            built: AtomicBool::new(false),
+        }
+    }
+
+    fn was_built(&self) -> bool {
+        self.built.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait::async_trait]
+impl IWorkerTaskManager for SlowBuildTaskManager {
+    fn get_task(&self, _conversation_id: &str) -> Option<AgentInstance> {
+        None
+    }
+
+    async fn get_or_build_task(
+        &self,
+        conversation_id: &str,
+        _options: BuildTaskOptions,
+    ) -> Result<AgentInstance, AppError> {
+        tokio::time::sleep(self.delay).await;
+        self.built.store(true, Ordering::SeqCst);
+        Ok(AgentInstance::Mock(Arc::new(MockAgent::new(conversation_id))))
+    }
+
+    fn kill(&self, _conversation_id: &str, _reason: Option<AgentKillReason>) -> Result<(), AppError> {
+        Ok(())
+    }
+
+    fn kill_and_wait(
+        &self,
+        _conversation_id: &str,
+        _reason: Option<AgentKillReason>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        Box::pin(std::future::ready(()))
+    }
+
+    fn clear(&self) {}
+
+    fn active_count(&self) -> usize {
+        usize::from(self.was_built())
+    }
+
+    fn collect_idle(&self, _idle_threshold_ms: TimestampMs) -> Vec<String> {
+        vec![]
+    }
+}
+
 /// A variant of MockTaskManager that always builds agents with a specific workspace.
 struct MockTaskManagerWithWorkspace {
     workspace: String,
@@ -1487,6 +1548,31 @@ async fn send_message_broadcasts_user_created_event() {
 }
 
 #[tokio::test]
+async fn send_message_returns_before_cold_agent_build_completes() {
+    let (svc, _broadcaster, repo, _task_mgr) = make_service();
+    let slow_task_mgr = Arc::new(SlowBuildTaskManager::new(Duration::from_millis(500)));
+    let task_mgr: Arc<dyn IWorkerTaskManager> = slow_task_mgr.clone();
+
+    let conv = svc.create("user_1", make_create_req()).await.unwrap();
+    let msg_id = tokio::time::timeout(
+        Duration::from_millis(50),
+        svc.send_message("user_1", &conv.id, make_send_req(), &task_mgr),
+    )
+    .await
+    .expect("send_message should return before cold agent build finishes")
+    .unwrap();
+
+    assert!(!msg_id.is_empty(), "msg_id must be non-empty");
+    assert!(
+        !slow_task_mgr.was_built(),
+        "cold agent build should continue in the background after send_message returns"
+    );
+
+    let updated = repo.get(&conv.id).await.unwrap().unwrap();
+    assert_eq!(updated.status.as_deref(), Some("running"));
+}
+
+#[tokio::test]
 async fn send_message_persists_hidden_user_message_when_requested() {
     let (svc, _broadcaster, repo, _task_mgr) = make_service();
     let task_mgr: Arc<dyn IWorkerTaskManager> = Arc::new(MockTaskManager::new());
@@ -1513,20 +1599,31 @@ async fn send_message_persists_hidden_user_message_when_requested() {
 
 #[tokio::test]
 async fn send_message_persists_error_tip_when_agent_build_fails() {
-    let (svc, _broadcaster, repo, _task_mgr) = make_service();
+    let (svc, broadcaster, repo, _task_mgr) = make_service();
     let task_mgr: Arc<dyn IWorkerTaskManager> =
         Arc::new(FailingBuildTaskManager::new("ACP init failed: config file is invalid"));
 
     let conv = svc.create("user_1", make_create_req()).await.unwrap();
+    broadcaster.take_events();
 
-    let err = svc
+    let msg_id = svc
         .send_message("user_1", &conv.id, make_send_req(), &task_mgr)
         .await
-        .unwrap_err();
+        .unwrap();
 
-    assert!(matches!(err, AppError::BadGateway(_)));
+    assert!(!msg_id.is_empty(), "msg_id must be non-empty");
 
-    let messages = repo.get_messages(&conv.id, 1, 20, SortOrder::Asc).await.unwrap().items;
+    let messages = tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let messages = repo.get_messages(&conv.id, 1, 20, SortOrder::Asc).await.unwrap().items;
+            if messages.iter().any(|message| message.r#type == "tips") {
+                return messages;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("agent build failure should persist an error tip");
     assert_eq!(messages.len(), 2, "user message and error tip should be persisted");
 
     let error_tip = messages
@@ -1544,6 +1641,17 @@ async fn send_message_persists_error_tip_when_agent_build_fails() {
         content["content"],
         "Bad gateway: ACP init failed: config file is invalid"
     );
+
+    let updated = repo.get(&conv.id).await.unwrap().unwrap();
+    assert_eq!(updated.status.as_deref(), Some("finished"));
+
+    let events = broadcaster.take_events();
+    let error_tip_event = events
+        .iter()
+        .find(|event| event.name == "message.stream" && event.data["type"] == "tips")
+        .expect("agent build failure should broadcast the error tips message");
+    assert_eq!(error_tip_event.data["status"], "error");
+    assert_eq!(error_tip_event.data["data"]["code"], "BAD_GATEWAY");
 }
 
 #[tokio::test]
@@ -1652,7 +1760,17 @@ async fn send_message_persists_factory_resolved_workspace() {
         .unwrap();
 
     // Verify the workspace was written back.
-    let updated = svc.get("user_1", &conv.id).await.unwrap();
+    let updated = tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let updated = svc.get("user_1", &conv.id).await.unwrap();
+            if updated.extra["workspace"] == auto_workspace {
+                return updated;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("factory-resolved workspace should be persisted in the background");
     assert_eq!(updated.extra["workspace"], auto_workspace);
 }
 

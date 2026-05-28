@@ -954,10 +954,9 @@ impl ConversationService {
     ///
     /// 1. Validates the conversation belongs to the user
     /// 2. Stores the user message (position: "right", status: "finish")
-    /// 3. Gets or builds the agent task
-    /// 4. Sends the message to the agent
-    /// 5. Spawns a background relay (agent events → WebSocket + DB)
-    /// 6. Returns immediately (202 Accepted semantics)
+    /// 3. Marks the conversation as running
+    /// 4. Spawns background agent build/send and stream relay work
+    /// 5. Returns immediately (202 Accepted semantics)
     #[tracing::instrument(skip_all, fields(user_id = %user_id, conversation_id = %conversation_id))]
     pub async fn send_message(
         &self,
@@ -969,6 +968,7 @@ impl ConversationService {
         if req.content.trim().is_empty() {
             return Err(AppError::BadRequest("Message content must not be empty".into()));
         }
+        let send_started_at = now_ms();
 
         // Verify conversation exists and belongs to user
         let row = self
@@ -1043,30 +1043,11 @@ impl ConversationService {
         let build_opts = match self.build_task_options(&row) {
             Ok(opts) => opts,
             Err(err) => {
-                self.persist_send_failure_tip(conversation_id, &err).await;
+                let _ = self.persist_send_failure_tip(conversation_id, &err).await;
                 return Err(err);
             }
         };
         let stored_workspace = build_opts.workspace.clone();
-        let agent = match task_manager.get_or_build_task(conversation_id, build_opts).await {
-            Ok(agent) => agent,
-            Err(err) => {
-                self.persist_send_failure_tip(conversation_id, &err).await;
-                return Err(err);
-            }
-        };
-
-        // If the factory resolved a different workspace (e.g. auto-created temp
-        // dir for a legacy conversation with empty workspace), persist it back.
-        if let Err(err) = self
-            .maybe_persist_workspace(conversation_id, &stored_workspace, agent.workspace())
-            .await
-        {
-            self.persist_send_failure_tip(conversation_id, &err).await;
-            return Err(err);
-        }
-
-        info!(agent_type = ?agent.agent_type(), "Agent task ready");
 
         // TODO: 好蠢的设计, status 写数据库, 最好干掉啦
         let update = ConversationRowUpdate {
@@ -1084,6 +1065,8 @@ impl ConversationService {
         let broadcaster = Arc::clone(&self.broadcaster);
         let cron_service = self.current_cron_service();
         let user_id_owned = user_id.to_owned();
+        let service = self.clone();
+        let task_manager = Arc::clone(task_manager);
 
         // Send message to the agent in a background task.
         // prompt() blocks until the PromptResponse arrives (turn completed),
@@ -1094,6 +1077,37 @@ impl ConversationService {
         // agent-internal tracing all share one identifier per turn.
         let user_msg_id_ret = user_msg_id.clone();
         tokio::spawn(async move {
+            let build_started_at = now_ms();
+            info!(conversation_id = %conv_id, "Agent task build started");
+            let agent = match task_manager.get_or_build_task(&conv_id, build_opts).await {
+                Ok(agent) => agent,
+                Err(err) => {
+                    warn!(conversation_id = %conv_id, error = %ErrorChain(&err), "Agent task build failed");
+                    service.persist_and_broadcast_send_failure_tip(&conv_id, &err).await;
+                    StreamRelay::complete_conversation(&repo, &broadcaster, &conv_id).await;
+                    return;
+                }
+            };
+
+            // If the factory resolved a different workspace (e.g. auto-created temp
+            // dir for a legacy conversation with empty workspace), persist it back.
+            if let Err(err) = service
+                .maybe_persist_workspace(&conv_id, &stored_workspace, agent.workspace())
+                .await
+            {
+                warn!(conversation_id = %conv_id, error = %ErrorChain(&err), "Failed to persist resolved workspace");
+                service.persist_and_broadcast_send_failure_tip(&conv_id, &err).await;
+                StreamRelay::complete_conversation(&repo, &broadcaster, &conv_id).await;
+                return;
+            }
+
+            info!(
+                conversation_id = %conv_id,
+                agent_type = ?agent.agent_type(),
+                elapsed_ms = now_ms().saturating_sub(build_started_at),
+                "Agent task ready"
+            );
+
             let first_turn_msg_id = Self::mint_msg_id();
             let mut pending_send = Some((
                 SendMessageData {
@@ -1161,8 +1175,35 @@ impl ConversationService {
             StreamRelay::complete_conversation(&repo, &broadcaster, &conv_id).await;
         });
 
-        info!(msg_id = %user_msg_id_ret, "Message dispatched, stream relay started");
+        info!(
+            msg_id = %user_msg_id_ret,
+            elapsed_ms = now_ms().saturating_sub(send_started_at),
+            "Message accepted, agent work scheduled"
+        );
         Ok(user_msg_id_ret)
+    }
+
+    async fn persist_and_broadcast_send_failure_tip(&self, conversation_id: &str, err: &AppError) {
+        let Some(row) = self.persist_send_failure_tip(conversation_id, err).await else {
+            return;
+        };
+
+        let msg_id = row.msg_id.clone().unwrap_or_else(|| row.id.clone());
+        let content_value: serde_json::Value =
+            serde_json::from_str(&row.content).unwrap_or_else(|_| serde_json::Value::String(row.content.clone()));
+        self.broadcaster.broadcast(WebSocketMessage::new(
+            "message.stream",
+            serde_json::json!({
+                "conversation_id": row.conversation_id,
+                "msg_id": msg_id,
+                "type": row.r#type,
+                "data": content_value,
+                "position": row.position,
+                "status": row.status,
+                "hidden": row.hidden,
+                "replace": true,
+            }),
+        ));
     }
 
     /// Insert a pre-built `MessageRow` into the conversation's message history
