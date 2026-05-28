@@ -9,7 +9,7 @@ use aion_config::config::{CliArgs, Config};
 use aion_mcp::manager::McpManager;
 use aion_protocol::commands::SessionMode;
 use aion_protocol::{ToolApprovalManager, ToolApprovalResult};
-use aionui_api_types::AgentModeResponse;
+use aionui_api_types::{AgentModeResponse, SlashCommandItem};
 use aionui_common::{
     AgentKillReason, AgentType, AppError, Confirmation, ConversationStatus, ErrorChain, TimestampMs, now_ms,
 };
@@ -26,6 +26,9 @@ use crate::types::{AionrsResolvedConfig, SendMessageData};
 pub struct AionrsAgentManager {
     runtime: AgentRuntime,
     engine: Mutex<AgentEngine>,
+    /// Static slash command metadata captured at bootstrap so UI lookups do
+    /// not wait behind an active `engine.run()` turn.
+    slash_commands: Vec<SlashCommandItem>,
     /// Holds `Arc<McpManager>` instances alive for the duration of this agent's
     /// lifetime. The managers are not accessed after construction — they exist
     /// solely so their underlying MCP connections outlive the engine's event
@@ -136,12 +139,18 @@ impl AionrsAgentManager {
         let protocol_sink = BackendProtocolSink::new(runtime.event_sender(), confirmations.clone());
         engine.set_approval_manager(approval_manager.clone());
         engine.set_protocol_writer(Arc::new(protocol_sink));
+        let slash_commands = engine
+            .slash_command_list()
+            .into_iter()
+            .map(|(command, description)| SlashCommandItem { command, description })
+            .collect();
 
         runtime.transition_to(ConversationStatus::Pending);
 
         Ok(Self {
             runtime,
             engine: Mutex::new(engine),
+            slash_commands,
             mcp_managers: result.mcp_managers,
             approval_manager,
             confirmations,
@@ -331,13 +340,8 @@ impl AionrsAgentManager {
         Ok(())
     }
 
-    pub async fn get_slash_commands(&self) -> Result<Vec<aionui_api_types::SlashCommandItem>, AppError> {
-        let engine = self.engine.lock().await;
-        Ok(engine
-            .slash_command_list()
-            .into_iter()
-            .map(|(command, description)| aionui_api_types::SlashCommandItem { command, description })
-            .collect())
+    pub async fn get_slash_commands(&self) -> Result<Vec<SlashCommandItem>, AppError> {
+        Ok(self.slash_commands.clone())
     }
 }
 
@@ -421,6 +425,21 @@ mod tests {
             .await
             .unwrap();
         assert!(agent.get_confirmations().is_empty());
+    }
+
+    #[tokio::test]
+    async fn aionrs_agent_get_slash_commands_does_not_wait_for_engine_lock() {
+        let agent = AionrsAgentManager::new("conv-1".into(), "/project".into(), make_test_config(), None)
+            .await
+            .unwrap();
+
+        let _engine_guard = agent.engine.lock().await;
+        let commands = tokio::time::timeout(std::time::Duration::from_millis(50), agent.get_slash_commands())
+            .await
+            .expect("slash command metadata should not wait for an active engine run")
+            .unwrap();
+
+        assert!(!commands.is_empty());
     }
 
     #[tokio::test]
