@@ -32,8 +32,12 @@ impl AgentSendError {
     }
 
     pub fn from_app_error(err: AppError) -> Self {
+        Self::from_app_error_ref(&err)
+    }
+
+    pub fn from_app_error_ref(err: &AppError) -> Self {
         let detail = strip_error_prefix(&err.to_string());
-        match &err {
+        match err {
             AppError::Internal(_) => Self::new(
                 "AionUI failed while sending the message",
                 AgentErrorCode::AionuiInternalError,
@@ -219,6 +223,25 @@ fn classify_upstream_detail(detail: &str) -> AgentSendError {
     let (message, code, retryable) = if contains_any(
         &lower,
         &[
+            "signable request",
+            "canonical request",
+            "signature",
+            "credential",
+            "credentials",
+            "access key",
+            "secret key",
+            "base url",
+            "base_url",
+        ],
+    ) {
+        (
+            "The model provider configuration is invalid",
+            AgentErrorCode::UserLlmProviderConfigError,
+            false,
+        )
+    } else if contains_any(
+        &lower,
+        &[
             "401",
             "403",
             "unauthorized",
@@ -270,6 +293,7 @@ fn classify_upstream_detail(detail: &str) -> AgentSendError {
             "connection reset",
             "tls",
             "certificate",
+            "connection error",
             "connect error",
         ],
     ) {
@@ -281,6 +305,12 @@ fn classify_upstream_detail(detail: &str) -> AgentSendError {
     } else if contains_any(&lower, &["500", "502", "503", "bad gateway", "service unavailable"]) {
         (
             "The model provider returned a server error",
+            AgentErrorCode::UserLlmProviderGatewayError,
+            true,
+        )
+    } else if contains_any(&lower, &["provider error"]) {
+        (
+            "The model provider returned an error",
             AgentErrorCode::UserLlmProviderGatewayError,
             true,
         )
@@ -425,6 +455,27 @@ mod tests {
         assert_eq!(err.code(), Some(AgentErrorCode::UnknownUpstreamError));
         assert_eq!(err.ownership(), Some(AgentErrorOwnership::UnknownUpstream));
         assert_eq!(err.stream_error().feedback_recommended, Some(true));
+    }
+
+    #[test]
+    fn classifies_provider_error_without_specific_signal_as_provider_gateway() {
+        let err = AgentSendError::from_app_error(AppError::BadGateway("Provider error: upstream failed".into()));
+
+        assert_eq!(err.code(), Some(AgentErrorCode::UserLlmProviderGatewayError));
+        assert_eq!(err.ownership(), Some(AgentErrorOwnership::UserLlmProvider));
+        assert_eq!(err.stream_error().feedback_recommended, Some(false));
+    }
+
+    #[test]
+    fn classifies_provider_config_errors_as_not_retryable() {
+        let err = AgentSendError::from_app_error(AppError::BadGateway(
+            "Provider error: Connection error: Signable request error: failed to create canonical request".into(),
+        ));
+
+        assert_eq!(err.code(), Some(AgentErrorCode::UserLlmProviderConfigError));
+        assert_eq!(err.ownership(), Some(AgentErrorOwnership::UserLlmProvider));
+        assert_eq!(err.stream_error().retryable, Some(false));
+        assert_eq!(err.stream_error().feedback_recommended, Some(false));
     }
 
     #[test]

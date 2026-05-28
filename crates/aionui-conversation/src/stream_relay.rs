@@ -531,7 +531,7 @@ impl StreamRelay {
             outcome.system_responses = processed.system_responses;
         } else if let AgentStreamEvent::Error(data) = event {
             // No text accumulated but got an error — store error as tips message
-            let content = json!({ "content": data.message, "type": "error" }).to_string();
+            let content = json!({ "content": &data.message, "type": "error", "error": &data }).to_string();
             let row = MessageRow {
                 id: ConversationService::mint_msg_id(),
                 conversation_id: self.conversation_id.clone(),
@@ -1104,6 +1104,11 @@ mod tests {
         let content: serde_json::Value = serde_json::from_str(&inserts[0].content).unwrap();
         assert_eq!(content["content"], "The model provider rejected the request");
         assert_eq!(content["type"], "error");
+        assert_eq!(content["error"]["code"], "USER_LLM_PROVIDER_AUTH_FAILED");
+        assert_eq!(content["error"]["ownership"], "user_llm_provider");
+        assert_eq!(content["error"]["retryable"], false);
+        assert_eq!(content["error"]["feedback_recommended"], false);
+        assert_eq!(content["error"]["detail"], "provider returned 401 invalid api key");
 
         let mut ws_events = vec![];
         while let Ok(evt) = ws_rx.try_recv() {

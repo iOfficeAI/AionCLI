@@ -24,6 +24,7 @@ pub enum AgentErrorCode {
     UserAgentUnsupportedMethod,
     UserAgentInvalidParams,
     UserLlmProviderAuthFailed,
+    UserLlmProviderConfigError,
     UserLlmProviderModelNotFound,
     UserLlmProviderRateLimited,
     UserLlmProviderTimeout,

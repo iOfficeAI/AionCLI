@@ -1,3 +1,4 @@
+use aionui_ai_agent::AgentSendError;
 use aionui_common::{AppError, ErrorChain, now_ms};
 use aionui_db::models::MessageRow;
 use tracing::warn;
@@ -6,16 +7,18 @@ use crate::service::ConversationService;
 
 impl ConversationService {
     pub(crate) async fn persist_send_failure_tip(&self, conversation_id: &str, err: &AppError) -> Option<MessageRow> {
+        let stream_error = AgentSendError::from_app_error_ref(err).into_stream_error();
         let row = MessageRow {
             id: Self::mint_msg_id(),
             conversation_id: conversation_id.to_owned(),
             msg_id: None,
             r#type: "tips".into(),
             content: serde_json::json!({
-                "content": err.to_string(),
+                "content": &stream_error.message,
                 "type": "error",
                 "source": "send_failed",
                 "code": err.error_code(),
+                "error": stream_error,
             })
             .to_string(),
             position: Some("center".into()),

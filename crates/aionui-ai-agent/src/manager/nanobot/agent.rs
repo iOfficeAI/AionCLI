@@ -209,6 +209,11 @@ impl crate::agent_task::IAgentTask for NanobotAgentManager {
         match self.process.send(&payload).await {
             Ok(()) => Ok(()),
             Err(err) => {
+                error!(
+                    conversation_id = %self.runtime.conversation_id(),
+                    error = %ErrorChain(&err),
+                    "Nanobot send_message failed, emitting Error"
+                );
                 let send_error = AgentSendError::from_app_error(err);
                 self.runtime.emit_error_data(send_error.stream_error().clone());
                 Err(send_error)

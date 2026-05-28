@@ -1637,9 +1637,14 @@ async fn send_message_persists_error_tip_when_agent_build_fails() {
     assert_eq!(content["type"], "error");
     assert_eq!(content["source"], "send_failed");
     assert_eq!(content["code"], "BAD_GATEWAY");
+    assert_eq!(content["error"]["code"], "UNKNOWN_UPSTREAM_ERROR");
+    assert_eq!(content["error"]["ownership"], "unknown_upstream");
+    assert_eq!(content["error"]["retryable"], true);
+    assert_eq!(content["error"]["feedback_recommended"], true);
+    assert_eq!(content["error"]["detail"], "ACP init failed: config file is invalid");
     assert_eq!(
         content["content"],
-        "Bad gateway: ACP init failed: config file is invalid"
+        "The upstream Agent failed while handling the request"
     );
 
     let updated = repo.get(&conv.id).await.unwrap().unwrap();

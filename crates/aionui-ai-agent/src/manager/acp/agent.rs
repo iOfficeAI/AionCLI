@@ -635,7 +635,7 @@ impl crate::agent_task::IAgentTask for AcpAgentManager {
                 // stderr peek so on-call can correlate. The redacted summary
                 // is what reaches the UI.
                 let summary = close_reason.user_facing_message();
-                warn!(error = %ErrorChain(&err), close_reason_summary = %summary, "ACP send_message failed");
+                error!(error = %ErrorChain(&err), close_reason_summary = %summary, "ACP send_message failed");
 
                 {
                     let mut session = self.session.write().await;
