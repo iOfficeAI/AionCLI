@@ -1,7 +1,7 @@
 pub mod acp_assembler;
 
 mod acp;
-mod aionrs;
+pub(crate) mod aionrs;
 mod context;
 mod nanobot;
 mod openclaw;

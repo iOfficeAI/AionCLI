@@ -15,19 +15,35 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use aionui_api_types::{AcpHealthCheckRequest, AcpHealthCheckResponse, AgentMetadata};
+use aionui_api_types::{
+    AcpHealthCheckRequest, AcpHealthCheckResponse, AgentMetadata, ProviderHealthCheckRequest,
+    ProviderHealthCheckResponse,
+};
 use aionui_common::AppError;
+use aionui_db::IProviderRepository;
 
+use super::provider_health::ProviderHealthCheckService;
 use crate::registry::AgentRegistry;
 
 pub struct AgentService {
     registry: Arc<AgentRegistry>,
     data_dir: PathBuf,
+    provider_health: ProviderHealthCheckService,
 }
 
 impl AgentService {
-    pub fn new(registry: Arc<AgentRegistry>, data_dir: PathBuf) -> Arc<Self> {
-        Arc::new(Self { registry, data_dir })
+    pub fn new(
+        registry: Arc<AgentRegistry>,
+        provider_repo: Arc<dyn IProviderRepository>,
+        encryption_key: [u8; 32],
+        data_dir: PathBuf,
+    ) -> Arc<Self> {
+        let provider_health = ProviderHealthCheckService::new(provider_repo, encryption_key, data_dir.clone());
+        Arc::new(Self {
+            registry,
+            data_dir,
+            provider_health,
+        })
     }
 
     /// Data directory used by the custom-agent probe to spawn CLI
@@ -56,5 +72,12 @@ impl AgentService {
 
     pub async fn acp_health_check(&self, req: AcpHealthCheckRequest) -> Result<AcpHealthCheckResponse, AppError> {
         Ok(crate::protocol::cli_detect::health_check(&self.registry, &req.backend).await)
+    }
+
+    pub async fn provider_health_check(
+        &self,
+        req: ProviderHealthCheckRequest,
+    ) -> Result<ProviderHealthCheckResponse, AppError> {
+        self.provider_health.health_check(req).await
     }
 }
