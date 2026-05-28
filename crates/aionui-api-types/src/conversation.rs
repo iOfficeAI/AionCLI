@@ -77,6 +77,7 @@ pub struct ListMessagesQuery {
     pub page: Option<u32>,
     pub page_size: Option<u32>,
     pub order: Option<String>,
+    pub content_mode: Option<String>,
 }
 
 /// Body for `PATCH /api/conversations/:id/artifacts/:artifact_id`.
@@ -377,15 +378,17 @@ mod tests {
         assert!(q.page.is_none());
         assert!(q.page_size.is_none());
         assert!(q.order.is_none());
+        assert!(q.content_mode.is_none());
     }
 
     #[test]
     fn deserialize_messages_query_with_values() {
-        let raw = json!({ "page": 2, "page_size": 30, "order": "ASC" });
+        let raw = json!({ "page": 2, "page_size": 30, "order": "ASC", "content_mode": "compact" });
         let q: ListMessagesQuery = serde_json::from_value(raw).unwrap();
         assert_eq!(q.page, Some(2));
         assert_eq!(q.page_size, Some(30));
         assert_eq!(q.order.as_deref(), Some("ASC"));
+        assert_eq!(q.content_mode.as_deref(), Some("compact"));
     }
 
     // ── SearchMessagesQuery ─────────────────────────────────────────

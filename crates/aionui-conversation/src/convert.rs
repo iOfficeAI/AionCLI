@@ -8,6 +8,9 @@ use aionui_common::{
 use aionui_db::MessageSearchRow;
 use aionui_db::models::{ConversationArtifactRow, ConversationRow, MessageRow};
 
+const TOOL_CONTENT_COMPACT_THRESHOLD_BYTES: usize = 64 * 1024;
+const TOOL_CONTENT_PREVIEW_CHARS: usize = 4096;
+
 /// Convert a database row into an API response DTO.
 ///
 /// Parses string enum fields and JSON text fields back into typed values.
@@ -149,6 +152,58 @@ pub fn row_to_message_response(row: MessageRow) -> Result<MessageResponse, AppEr
         hidden: row.hidden,
         created_at: row.created_at,
     })
+}
+
+/// Convert a message row for history-list use, compacting oversized tool payloads.
+pub fn row_to_message_response_compact(row: MessageRow) -> Result<MessageResponse, AppError> {
+    let original_size = row.content.len();
+    let mut response = row_to_message_response(row)?;
+    if !is_tool_message(response.r#type) || original_size <= TOOL_CONTENT_COMPACT_THRESHOLD_BYTES {
+        return Ok(response);
+    }
+
+    let mut truncated = false;
+    truncate_large_strings(&mut response.content, TOOL_CONTENT_PREVIEW_CHARS, &mut truncated);
+    if truncated && let Some(obj) = response.content.as_object_mut() {
+        obj.insert(
+            "_compact".to_string(),
+            serde_json::json!({
+                "truncated": true,
+                "original_size": original_size,
+                "preview_chars": TOOL_CONTENT_PREVIEW_CHARS
+            }),
+        );
+    }
+
+    Ok(response)
+}
+
+fn is_tool_message(msg_type: MessageType) -> bool {
+    matches!(
+        msg_type,
+        MessageType::ToolCall | MessageType::ToolGroup | MessageType::AcpToolCall
+    )
+}
+
+fn truncate_large_strings(value: &mut serde_json::Value, max_chars: usize, truncated: &mut bool) {
+    match value {
+        serde_json::Value::String(text) if text.chars().count() > max_chars => {
+            let preview: String = text.chars().take(max_chars).collect();
+            *text = format!("{preview}\n...[truncated]");
+            *truncated = true;
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                truncate_large_strings(item, max_chars, truncated);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for entry in map.values_mut() {
+                truncate_large_strings(entry, max_chars, truncated);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Convert an artifact database row into an API response DTO.

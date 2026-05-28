@@ -50,6 +50,45 @@ async fn insert_message(
         .unwrap();
 }
 
+async fn insert_acp_tool_message(
+    services: &aionui_app::AppServices,
+    conv_id: &str,
+    msg_id: &str,
+    output: &str,
+    created_at: i64,
+) {
+    let repo = aionui_db::SqliteConversationRepository::new(services.database.pool().clone());
+    let msg = aionui_db::models::MessageRow {
+        id: msg_id.into(),
+        conversation_id: conv_id.into(),
+        msg_id: Some(msg_id.into()),
+        r#type: "acp_tool_call".into(),
+        content: serde_json::json!({
+            "session_id": "session-1",
+            "update": {
+                "session_update": "tool_call",
+                "tool_call_id": msg_id,
+                "status": "completed",
+                "title": "rg",
+                "kind": "search",
+                "raw_input": { "pattern": "needle", "path": "." },
+                "content": [{
+                    "type": "content",
+                    "content": { "type": "text", "text": output }
+                }]
+            }
+        })
+        .to_string(),
+        position: Some("left".into()),
+        status: Some("finish".into()),
+        hidden: false,
+        created_at,
+    };
+    aionui_db::IConversationRepository::insert_message(&repo, &msg)
+        .await
+        .unwrap();
+}
+
 async fn upsert_artifact(services: &aionui_app::AppServices, artifact: aionui_db::ConversationArtifactRow) {
     let repo = aionui_db::SqliteConversationRepository::new(services.database.pool().clone());
     aionui_db::IConversationRepository::upsert_artifact(&repo, &artifact)
@@ -121,6 +160,132 @@ async fn t8_2_messages_pagination() {
     let json = body_json(resp).await;
     assert_eq!(json["data"]["items"].as_array().unwrap().len(), 1);
     assert_eq!(json["data"]["has_more"], false);
+}
+
+#[tokio::test]
+async fn t8_2b_messages_compact_mode_truncates_large_tool_payload() {
+    let (mut app, services) = build_app().await;
+    let (token, csrf) = setup_and_login(&mut app, &services, "admin", "StrongP@ss1").await;
+    let conv_id = create_conversation(&mut app, &token, &csrf, "Compact Tool Conv").await;
+    let large_output = "match line\n".repeat(10_000);
+
+    insert_acp_tool_message(&services, &conv_id, "tool-big", &large_output, 1000).await;
+
+    let resp = app
+        .clone()
+        .oneshot(get_with_token(
+            &format!("/api/conversations/{conv_id}/messages?content_mode=compact"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    let content = &json["data"]["items"][0]["content"];
+    let preview = content["update"]["content"][0]["content"]["text"].as_str().unwrap();
+
+    assert_eq!(content["_compact"]["truncated"], true);
+    assert!(preview.len() < large_output.len());
+    assert!(!preview.contains(&large_output));
+}
+
+#[tokio::test]
+async fn t8_2c_get_message_returns_full_tool_payload() {
+    let (mut app, services) = build_app().await;
+    let (token, csrf) = setup_and_login(&mut app, &services, "admin", "StrongP@ss1").await;
+    let conv_id = create_conversation(&mut app, &token, &csrf, "Tool Detail Conv").await;
+    let large_output = "wide rg output\n".repeat(10_000);
+
+    insert_acp_tool_message(&services, &conv_id, "tool-detail", &large_output, 1000).await;
+
+    let resp = app
+        .clone()
+        .oneshot(get_with_token(
+            &format!("/api/conversations/{conv_id}/messages/tool-detail"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+
+    assert_eq!(
+        json["data"]["content"]["update"]["content"][0]["content"]["text"]
+            .as_str()
+            .unwrap(),
+        large_output
+    );
+}
+
+#[tokio::test]
+async fn t8_2d_get_message_requires_auth() {
+    let (mut app, services) = build_app().await;
+    let (token, csrf) = setup_and_login(&mut app, &services, "admin", "StrongP@ss1").await;
+    let conv_id = create_conversation(&mut app, &token, &csrf, "Tool Detail Auth Conv").await;
+
+    let resp = app
+        .oneshot(get_request(&format!(
+            "/api/conversations/{conv_id}/messages/tool-detail"
+        )))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn t8_2e_get_message_not_found_returns_specific_error() {
+    let (mut app, services) = build_app().await;
+    let (token, csrf) = setup_and_login(&mut app, &services, "admin", "StrongP@ss1").await;
+    let conv_id = create_conversation(&mut app, &token, &csrf, "Tool Detail Missing Conv").await;
+
+    let resp = app
+        .oneshot(get_with_token(
+            &format!("/api/conversations/{conv_id}/messages/missing-message"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let json = body_json(resp).await;
+
+    assert_eq!(json["code"], "NOT_FOUND");
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap()
+            .contains("Message missing-message not found")
+    );
+}
+
+#[tokio::test]
+async fn t8_2f_get_message_does_not_leak_cross_user_conversation() {
+    let (mut app, services) = build_app().await;
+    let (owner_token, owner_csrf) = setup_and_login(&mut app, &services, "admin", "StrongP@ss1").await;
+    let owner_conv_id = create_conversation(&mut app, &owner_token, &owner_csrf, "Owner Tool Conv").await;
+    insert_acp_tool_message(&services, &owner_conv_id, "owner-tool", "private output", 1000).await;
+
+    let (other_token, _other_csrf) = setup_and_login(&mut app, &services, "other-user", "StrongP@ss2").await;
+
+    let resp = app
+        .oneshot(get_with_token(
+            &format!("/api/conversations/{owner_conv_id}/messages/owner-tool"),
+            &other_token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let json = body_json(resp).await;
+
+    assert_eq!(json["code"], "NOT_FOUND");
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("Conversation {owner_conv_id} not found"))
+    );
+    assert!(!json["error"].as_str().unwrap().contains("owner-tool"));
+    assert!(!json["error"].as_str().unwrap().contains("private output"));
 }
 
 #[tokio::test]

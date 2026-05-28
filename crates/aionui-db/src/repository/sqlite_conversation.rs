@@ -321,6 +321,21 @@ impl IConversationRepository for SqliteConversationRepository {
         })
     }
 
+    async fn get_message(&self, conv_id: &str, message_id: &str) -> Result<Option<MessageRow>, DbError> {
+        let row = sqlx::query_as::<_, MessageRow>(
+            "SELECT * FROM messages \
+             WHERE conversation_id = ? \
+               AND id = ? \
+               AND type NOT IN ('cron_trigger', 'skill_suggest')",
+        )
+        .bind(conv_id)
+        .bind(message_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row)
+    }
+
     async fn insert_message(&self, message: &MessageRow) -> Result<(), DbError> {
         sqlx::query(
             "INSERT INTO messages \

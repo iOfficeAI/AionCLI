@@ -25,8 +25,8 @@ use aionui_realtime::EventBroadcaster;
 use tracing::{debug, error, info, warn};
 
 use crate::convert::{
-    row_to_artifact_response, row_to_message_response, row_to_response, row_to_response_with_extra, search_row_to_item,
-    string_to_enum,
+    row_to_artifact_response, row_to_message_response, row_to_message_response_compact, row_to_response,
+    row_to_response_with_extra, search_row_to_item, string_to_enum,
 };
 use crate::skill_resolver::SkillResolver;
 use crate::skill_snapshot::{backfill_skills_if_missing, compute_initial_skills};
@@ -734,6 +734,7 @@ impl ConversationService {
             Some("DESC" | "desc") => SortOrder::Desc,
             _ => SortOrder::Asc,
         };
+        let compact_content = matches!(query.content_mode.as_deref(), Some("compact"));
 
         let result = self
             .conversation_repo
@@ -743,7 +744,13 @@ impl ConversationService {
         let items: Vec<MessageResponse> = result
             .items
             .into_iter()
-            .map(row_to_message_response)
+            .map(|row| {
+                if compact_content {
+                    row_to_message_response_compact(row)
+                } else {
+                    row_to_message_response(row)
+                }
+            })
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(PaginatedResult {
@@ -751,6 +758,28 @@ impl ConversationService {
             total: result.total,
             has_more: result.has_more,
         })
+    }
+
+    /// Return one full message for a conversation after verifying ownership.
+    pub async fn get_message(
+        &self,
+        user_id: &str,
+        conversation_id: &str,
+        message_id: &str,
+    ) -> Result<MessageResponse, AppError> {
+        self.conversation_repo
+            .get(conversation_id)
+            .await?
+            .filter(|r| r.user_id == user_id)
+            .ok_or_else(|| AppError::NotFound(format!("Conversation {conversation_id} not found")))?;
+
+        let row = self
+            .conversation_repo
+            .get_message(conversation_id, message_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("Message {message_id} not found")))?;
+
+        row_to_message_response(row)
     }
 
     /// List artifacts for a conversation with durable status state.

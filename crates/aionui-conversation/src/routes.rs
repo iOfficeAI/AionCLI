@@ -8,8 +8,8 @@ use aionui_api_types::{
     ActiveCountResponse, ApiResponse, ApprovalCheckQuery, ApprovalCheckResponse, CloneConversationRequest,
     ConfirmRequest, ConfirmationListResponse, ConversationArtifactListResponse, ConversationArtifactResponse,
     ConversationListResponse, ConversationResponse, CreateConversationRequest, ListConversationsQuery,
-    ListMessagesQuery, MessageListResponse, MessageSearchResponse, SearchMessagesQuery, SendMessageRequest,
-    SendMessageResponse, UpdateConversationArtifactRequest, UpdateConversationRequest,
+    ListMessagesQuery, MessageListResponse, MessageResponse, MessageSearchResponse, SearchMessagesQuery,
+    SendMessageRequest, SendMessageResponse, UpdateConversationArtifactRequest, UpdateConversationRequest,
 };
 use aionui_auth::CurrentUser;
 use aionui_common::AppError;
@@ -26,6 +26,7 @@ pub fn conversation_routes(state: ConversationRouterState) -> Router {
         .route("/api/conversations/{id}/reset", post(reset))
         .route("/api/conversations/{id}/associated", get(associated))
         .route("/api/conversations/{id}/messages", get(list_msg).post(send_msg))
+        .route("/api/conversations/{id}/messages/{messageId}", get(get_msg))
         .route("/api/conversations/{id}/artifacts", get(list_artifacts))
         .route("/api/conversations/{id}/artifacts/{artifactId}", patch(update_artifact))
         .route("/api/conversations/{id}/cancel", post(cancel))
@@ -125,6 +126,25 @@ async fn list_msg(
     Query(query): Query<ListMessagesQuery>,
 ) -> Result<Json<ApiResponse<MessageListResponse>>, AppError> {
     let result = state.service.list_messages(&user.id, &id, query).await?;
+    Ok(Json(ApiResponse::ok(result)))
+}
+
+#[derive(serde::Deserialize)]
+struct MessagePathParams {
+    id: String,
+    #[serde(rename = "messageId")]
+    message_id: String,
+}
+
+async fn get_msg(
+    State(state): State<ConversationRouterState>,
+    Extension(user): Extension<CurrentUser>,
+    Path(params): Path<MessagePathParams>,
+) -> Result<Json<ApiResponse<MessageResponse>>, AppError> {
+    let result = state
+        .service
+        .get_message(&user.id, &params.id, &params.message_id)
+        .await?;
     Ok(Json(ApiResponse::ok(result)))
 }
 

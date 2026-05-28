@@ -137,6 +137,35 @@ fn make_message(conv_id: &str, content: &str, offset_ms: i64) -> MessageRow {
     }
 }
 
+fn make_acp_tool_message(conv_id: &str, id: &str, output: &str, offset_ms: i64) -> MessageRow {
+    MessageRow {
+        id: id.to_string(),
+        conversation_id: conv_id.to_string(),
+        msg_id: Some(id.to_string()),
+        r#type: "acp_tool_call".to_string(),
+        content: json!({
+            "session_id": "session-1",
+            "update": {
+                "session_update": "tool_call",
+                "tool_call_id": id,
+                "status": "completed",
+                "title": "rg",
+                "kind": "search",
+                "raw_input": { "pattern": "needle", "path": "." },
+                "content": [{
+                    "type": "content",
+                    "content": { "type": "text", "text": output }
+                }]
+            }
+        })
+        .to_string(),
+        position: Some("left".to_string()),
+        status: Some("finish".to_string()),
+        hidden: false,
+        created_at: now_ms() + offset_ms,
+    }
+}
+
 // ── T6: Clone conversation ─────────────────────────────────────────
 
 #[tokio::test]
@@ -222,6 +251,7 @@ async fn t8_2_pagination() {
         page: Some(1),
         page_size: Some(3),
         order: None,
+        content_mode: None,
     };
     let result = svc.list_messages(USER_ID, &conv.id, query).await.unwrap();
     assert_eq!(result.items.len(), 3);
@@ -280,6 +310,81 @@ async fn t8_5_conversation_not_found() {
 }
 
 // ── T9: Message search ─────────────────────────────────────────────
+
+#[tokio::test]
+async fn t8_6_compact_mode_truncates_large_tool_content_only_for_list_response() {
+    let (svc, repo, _b) = setup().await;
+    let conv = svc.create(USER_ID, make_create_req()).await.unwrap();
+    let large_output = "match line\n".repeat(10_000);
+
+    repo.insert_message(&make_acp_tool_message(&conv.id, "tool-big", &large_output, 0))
+        .await
+        .unwrap();
+
+    let full = svc
+        .list_messages(USER_ID, &conv.id, ListMessagesQuery::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        full.items[0].content["update"]["content"][0]["content"]["text"]
+            .as_str()
+            .unwrap(),
+        large_output
+    );
+
+    let compact = svc
+        .list_messages(
+            USER_ID,
+            &conv.id,
+            ListMessagesQuery {
+                content_mode: Some("compact".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let compact_content = &compact.items[0].content;
+    let preview = compact_content["update"]["content"][0]["content"]["text"]
+        .as_str()
+        .unwrap();
+
+    assert!(compact_content["_compact"]["truncated"].as_bool().unwrap());
+    assert!(compact_content["_compact"]["original_size"].as_u64().unwrap() > preview.len() as u64);
+    assert!(preview.len() < large_output.len());
+    assert!(!preview.contains(&large_output));
+}
+
+#[tokio::test]
+async fn t8_7_get_message_returns_full_tool_content_after_compact_list() {
+    let (svc, repo, _b) = setup().await;
+    let conv = svc.create(USER_ID, make_create_req()).await.unwrap();
+    let large_output = "wide rg output\n".repeat(10_000);
+
+    repo.insert_message(&make_acp_tool_message(&conv.id, "tool-detail", &large_output, 0))
+        .await
+        .unwrap();
+
+    let _ = svc
+        .list_messages(
+            USER_ID,
+            &conv.id,
+            ListMessagesQuery {
+                content_mode: Some("compact".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let detail = svc.get_message(USER_ID, &conv.id, "tool-detail").await.unwrap();
+
+    assert_eq!(
+        detail.content["update"]["content"][0]["content"]["text"]
+            .as_str()
+            .unwrap(),
+        large_output
+    );
+}
 
 #[tokio::test]
 async fn t9_1_keyword_match() {
