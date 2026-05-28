@@ -106,103 +106,132 @@ impl StreamRelay {
         let mut active_text: Option<TextSegmentState> = None;
         let mut active_thinking: Option<ThinkingSegmentState> = None;
         let mut used_primary_segment_msg_id = false;
+        let mut first_agent_event_logged = false;
+        let mut first_visible_output_logged = false;
 
         loop {
             match rx.recv().await {
-                Ok(event) => match &event {
-                    AgentStreamEvent::Thinking(data) => {
-                        if data.status.as_deref() == Some("done") {
-                            self.complete_active_thinking(&mut active_thinking).await;
-                            continue;
-                        }
-
-                        self.close_active_text_segment(&mut active_text, &mut text_segments, "finish")
-                            .await;
-
-                        let segment = active_thinking.get_or_insert_with(|| ThinkingSegmentState {
-                            id: Self::mint_segment_msg_id(&mut used_primary_segment_msg_id, &self.msg_id),
-                            buffer: String::new(),
-                            started_at: now_ms(),
-                        });
-                        segment.buffer.push_str(&data.content);
-                        self.forward_to_websocket_with_msg_id(&segment.id, &event);
-                    }
-                    AgentStreamEvent::Text(data) => {
-                        self.complete_active_thinking(&mut active_thinking).await;
-
-                        let segment = active_text.get_or_insert_with(|| TextSegmentState {
-                            id: Self::mint_segment_msg_id(&mut used_primary_segment_msg_id, &self.msg_id),
-                            buffer: String::new(),
-                            created_at: now_ms(),
-                            record_created: false,
-                            flush_counter: 0,
-                        });
-                        self.forward_to_websocket_with_msg_id(&segment.id, &event);
-                        segment.buffer.push_str(&data.content);
-                        full_text_buffer.push_str(&data.content);
-                        segment.flush_counter += 1;
-                        if segment.flush_counter >= FLUSH_INTERVAL {
-                            self.flush_text_segment(segment).await;
-                            segment.flush_counter = 0;
-                        }
-                    }
-                    AgentStreamEvent::Finish(_) | AgentStreamEvent::Error(_) => {
-                        let elapsed_ms = now_ms() - started_at;
-                        let event_type = if matches!(event, AgentStreamEvent::Finish(_)) {
-                            "Finish"
-                        } else {
-                            "Error"
-                        };
+                Ok(event) => {
+                    if !first_agent_event_logged {
+                        first_agent_event_logged = true;
                         info!(
-                            event_type,
-                            elapsed_ms,
-                            text_len = full_text_buffer.len(),
-                            "StreamRelay received terminal event"
+                            event_type = Self::event_kind(&event),
+                            elapsed_ms = now_ms().saturating_sub(started_at),
+                            "StreamRelay received first agent event"
                         );
+                    }
 
-                        self.complete_active_thinking(&mut active_thinking).await;
-                        self.close_active_text_segment(
-                            &mut active_text,
-                            &mut text_segments,
-                            if matches!(event, AgentStreamEvent::Error(_)) {
-                                "error"
-                            } else {
-                                "finish"
-                            },
-                        )
-                        .await;
-                        self.forward_to_websocket(&event);
-                        let outcome = self.finalize(&full_text_buffer, &text_segments, &event).await;
-                        if self.complete_turn {
-                            Self::complete_conversation(&self.repo, &self.broadcaster, &self.conversation_id).await;
+                    match &event {
+                        AgentStreamEvent::Thinking(data) => {
+                            if data.status.as_deref() == Some("done") {
+                                self.complete_active_thinking(&mut active_thinking).await;
+                                continue;
+                            }
+
+                            self.close_active_text_segment(&mut active_text, &mut text_segments, "finish")
+                                .await;
+                            if !first_visible_output_logged && !data.content.is_empty() {
+                                first_visible_output_logged = true;
+                                info!(
+                                    event_type = "Thinking",
+                                    elapsed_ms = now_ms().saturating_sub(started_at),
+                                    "StreamRelay received first visible output"
+                                );
+                            }
+
+                            let segment = active_thinking.get_or_insert_with(|| ThinkingSegmentState {
+                                id: Self::mint_segment_msg_id(&mut used_primary_segment_msg_id, &self.msg_id),
+                                buffer: String::new(),
+                                started_at: now_ms(),
+                            });
+                            segment.buffer.push_str(&data.content);
+                            self.forward_to_websocket_with_msg_id(&segment.id, &event);
                         }
-                        break outcome;
-                    }
-                    AgentStreamEvent::ToolCall(data) => {
-                        self.complete_active_thinking(&mut active_thinking).await;
-                        self.close_active_text_segment(&mut active_text, &mut text_segments, "finish")
+                        AgentStreamEvent::Text(data) => {
+                            self.complete_active_thinking(&mut active_thinking).await;
+                            if !first_visible_output_logged && !data.content.is_empty() {
+                                first_visible_output_logged = true;
+                                info!(
+                                    event_type = "Text",
+                                    elapsed_ms = now_ms().saturating_sub(started_at),
+                                    "StreamRelay received first visible output"
+                                );
+                            }
+
+                            let segment = active_text.get_or_insert_with(|| TextSegmentState {
+                                id: Self::mint_segment_msg_id(&mut used_primary_segment_msg_id, &self.msg_id),
+                                buffer: String::new(),
+                                created_at: now_ms(),
+                                record_created: false,
+                                flush_counter: 0,
+                            });
+                            self.forward_to_websocket_with_msg_id(&segment.id, &event);
+                            segment.buffer.push_str(&data.content);
+                            full_text_buffer.push_str(&data.content);
+                            segment.flush_counter += 1;
+                            if segment.flush_counter >= FLUSH_INTERVAL {
+                                self.flush_text_segment(segment).await;
+                                segment.flush_counter = 0;
+                            }
+                        }
+                        AgentStreamEvent::Finish(_) | AgentStreamEvent::Error(_) => {
+                            let elapsed_ms = now_ms() - started_at;
+                            let event_type = if matches!(event, AgentStreamEvent::Finish(_)) {
+                                "Finish"
+                            } else {
+                                "Error"
+                            };
+                            info!(
+                                event_type,
+                                elapsed_ms,
+                                text_len = full_text_buffer.len(),
+                                "StreamRelay received terminal event"
+                            );
+
+                            self.complete_active_thinking(&mut active_thinking).await;
+                            self.close_active_text_segment(
+                                &mut active_text,
+                                &mut text_segments,
+                                if matches!(event, AgentStreamEvent::Error(_)) {
+                                    "error"
+                                } else {
+                                    "finish"
+                                },
+                            )
                             .await;
-                        self.forward_to_websocket(&event);
-                        self.persist_tool_call(data).await;
+                            self.forward_to_websocket(&event);
+                            let outcome = self.finalize(&full_text_buffer, &text_segments, &event).await;
+                            if self.complete_turn {
+                                Self::complete_conversation(&self.repo, &self.broadcaster, &self.conversation_id).await;
+                            }
+                            break outcome;
+                        }
+                        AgentStreamEvent::ToolCall(data) => {
+                            self.complete_active_thinking(&mut active_thinking).await;
+                            self.close_active_text_segment(&mut active_text, &mut text_segments, "finish")
+                                .await;
+                            self.forward_to_websocket(&event);
+                            self.persist_tool_call(data).await;
+                        }
+                        AgentStreamEvent::AcpToolCall(data) => {
+                            self.complete_active_thinking(&mut active_thinking).await;
+                            self.close_active_text_segment(&mut active_text, &mut text_segments, "finish")
+                                .await;
+                            self.forward_to_websocket(&event);
+                            self.persist_acp_tool_call(data).await;
+                        }
+                        AgentStreamEvent::ToolGroup(entries) => {
+                            self.complete_active_thinking(&mut active_thinking).await;
+                            self.close_active_text_segment(&mut active_text, &mut text_segments, "finish")
+                                .await;
+                            self.forward_to_websocket(&event);
+                            self.persist_tool_group(entries).await;
+                        }
+                        _ => {
+                            self.forward_to_websocket(&event);
+                        }
                     }
-                    AgentStreamEvent::AcpToolCall(data) => {
-                        self.complete_active_thinking(&mut active_thinking).await;
-                        self.close_active_text_segment(&mut active_text, &mut text_segments, "finish")
-                            .await;
-                        self.forward_to_websocket(&event);
-                        self.persist_acp_tool_call(data).await;
-                    }
-                    AgentStreamEvent::ToolGroup(entries) => {
-                        self.complete_active_thinking(&mut active_thinking).await;
-                        self.close_active_text_segment(&mut active_text, &mut text_segments, "finish")
-                            .await;
-                        self.forward_to_websocket(&event);
-                        self.persist_tool_group(entries).await;
-                    }
-                    _ => {
-                        self.forward_to_websocket(&event);
-                    }
-                },
+                }
                 Err(broadcast::error::RecvError::Closed) => {
                     let elapsed_ms = now_ms() - started_at;
                     warn!(
@@ -231,6 +260,37 @@ impl StreamRelay {
                     warn!(lagged = n, "Stream relay lagged, some events dropped");
                 }
             }
+        }
+    }
+
+    fn event_kind(event: &AgentStreamEvent) -> &'static str {
+        match event {
+            AgentStreamEvent::Start(_) => "Start",
+            AgentStreamEvent::Text(_) => "Text",
+            AgentStreamEvent::Tips(_) => "Tips",
+            AgentStreamEvent::Thinking(_) => "Thinking",
+            AgentStreamEvent::ToolCall(_) => "ToolCall",
+            AgentStreamEvent::AcpToolCall(_) => "AcpToolCall",
+            AgentStreamEvent::ToolGroup(_) => "ToolGroup",
+            AgentStreamEvent::AgentStatus(_) => "AgentStatus",
+            AgentStreamEvent::Plan(_) => "Plan",
+            AgentStreamEvent::Permission(_) => "Permission",
+            AgentStreamEvent::AcpPermission(_) => "AcpPermission",
+            AgentStreamEvent::SkillSuggest(_) => "SkillSuggest",
+            AgentStreamEvent::CronTrigger(_) => "CronTrigger",
+            AgentStreamEvent::AcpModelInfo(_) => "AcpModelInfo",
+            AgentStreamEvent::AcpModeInfo(_) => "AcpModeInfo",
+            AgentStreamEvent::AcpConfigOption(_) => "AcpConfigOption",
+            AgentStreamEvent::AcpSessionInfo(_) => "AcpSessionInfo",
+            AgentStreamEvent::AcpContextUsage(_) => "AcpContextUsage",
+            AgentStreamEvent::AcpPromptHookWarning(_) => "AcpPromptHookWarning",
+            AgentStreamEvent::SlashCommandsUpdated(_) => "SlashCommandsUpdated",
+            AgentStreamEvent::AvailableCommands(_) => "AvailableCommands",
+            AgentStreamEvent::Finish(_) => "Finish",
+            AgentStreamEvent::Error(_) => "Error",
+            AgentStreamEvent::System(_) => "System",
+            AgentStreamEvent::RequestTrace(_) => "RequestTrace",
+            AgentStreamEvent::SessionAssigned(_) => "SessionAssigned",
         }
     }
 

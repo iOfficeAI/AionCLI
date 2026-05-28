@@ -1,5 +1,6 @@
 //! Conversation and message CRUD with streaming relay and event emission.
 mod convert;
+mod message_persistence;
 pub mod response_middleware;
 pub mod routes;
 pub mod routes_aux;
