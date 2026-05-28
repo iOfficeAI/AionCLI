@@ -1284,6 +1284,64 @@ struct ScriptedAgent {
     sent_contents: Mutex<Vec<String>>,
 }
 
+struct FailingAgent {
+    conversation_id: String,
+    event_tx: broadcast::Sender<AgentStreamEvent>,
+    message: String,
+}
+
+impl FailingAgent {
+    fn new(conversation_id: &str, message: &str) -> Self {
+        let (event_tx, _) = broadcast::channel(64);
+        Self {
+            conversation_id: conversation_id.to_owned(),
+            event_tx,
+            message: message.to_owned(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl IAgentTask for FailingAgent {
+    fn agent_type(&self) -> AgentType {
+        AgentType::Acp
+    }
+
+    fn conversation_id(&self) -> &str {
+        &self.conversation_id
+    }
+
+    fn workspace(&self) -> &str {
+        "/tmp/test"
+    }
+
+    fn status(&self) -> Option<ConversationStatus> {
+        Some(ConversationStatus::Finished)
+    }
+
+    fn last_activity_at(&self) -> TimestampMs {
+        0
+    }
+
+    fn subscribe(&self) -> broadcast::Receiver<AgentStreamEvent> {
+        self.event_tx.subscribe()
+    }
+
+    async fn send_message(&self, _data: SendMessageData) -> Result<(), AppError> {
+        Err(AppError::BadGateway(self.message.clone()))
+    }
+
+    async fn cancel(&self) -> Result<(), AppError> {
+        Ok(())
+    }
+
+    fn kill(&self, _reason: Option<AgentKillReason>) -> Result<(), AppError> {
+        Ok(())
+    }
+}
+
+impl IMockAgent for FailingAgent {}
+
 impl ScriptedAgent {
     fn new(conversation_id: &str, scripts: Vec<Vec<AgentStreamEvent>>) -> Self {
         let (event_tx, _) = broadcast::channel(64);
@@ -1637,6 +1695,64 @@ async fn send_message_continues_cron_system_responses() {
     let events = broadcaster.take_events();
     let turn_completed = events.iter().filter(|evt| evt.name == "turn.completed").count();
     assert_eq!(turn_completed, 1);
+}
+
+#[tokio::test]
+async fn send_message_agent_failure_broadcasts_error_without_waiting_for_watchdog() {
+    let (svc, broadcaster, repo, _default_task_mgr) = make_service();
+    let task_mgr = Arc::new(MockTaskManager::new());
+    let conv = svc.create("user_1", make_create_req()).await.unwrap();
+    task_mgr.insert_agent(
+        &conv.id,
+        AgentInstance::Mock(Arc::new(FailingAgent::new(&conv.id, "Provider unavailable"))),
+    );
+    let task_mgr_dyn: Arc<dyn IWorkerTaskManager> = task_mgr.clone();
+    let _ = broadcaster.take_events();
+
+    svc.send_message("user_1", &conv.id, make_send_req(), &task_mgr_dyn)
+        .await
+        .unwrap();
+
+    let events = tokio::time::timeout(std::time::Duration::from_millis(500), async {
+        loop {
+            let events = broadcaster.take_events();
+            let saw_stream_error = events
+                .iter()
+                .any(|evt| evt.name == "message.stream" && evt.data["type"] == "error");
+            let saw_turn_completed = events
+                .iter()
+                .any(|evt| evt.name == "turn.completed" && evt.data["status"] == "finished");
+            if saw_stream_error && saw_turn_completed {
+                break events;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("send_message failure should surface promptly");
+
+    let stream_error = events
+        .iter()
+        .find(|evt| evt.name == "message.stream" && evt.data["type"] == "error")
+        .expect("stream error event should be present");
+    assert_eq!(stream_error.data["data"]["code"], "AGENT_SEND_MESSAGE_FAILED");
+    assert!(
+        stream_error.data["data"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("Provider unavailable"))
+    );
+
+    let messages = repo.get_messages(&conv.id, 1, 20, SortOrder::Asc).await.unwrap().items;
+    let tips = messages
+        .iter()
+        .find(|message| message.r#type == "tips" && message.status.as_deref() == Some("error"))
+        .expect("error tips message should be persisted");
+    let content: serde_json::Value = serde_json::from_str(&tips.content).unwrap();
+    assert!(
+        content["content"]
+            .as_str()
+            .is_some_and(|message| message.contains("Provider unavailable"))
+    );
 }
 
 // ── stop_stream tests ───────────────────────────────────────────

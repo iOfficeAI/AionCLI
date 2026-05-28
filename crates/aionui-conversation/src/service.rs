@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
+use aionui_ai_agent::protocol::events::ErrorEventData;
 use aionui_ai_agent::types::{BuildTaskOptions, SendMessageData};
-use aionui_ai_agent::{AgentInstance, IWorkerTaskManager};
+use aionui_ai_agent::{AgentInstance, AgentStreamEvent, IWorkerTaskManager};
 
 use crate::response_middleware::ICronService;
 use aionui_api_types::{
@@ -34,6 +35,8 @@ use crate::stream_relay::StreamRelay;
 use std::sync::RwLock;
 
 const MAX_CRON_CONTINUATIONS_PER_TURN: usize = 4;
+const RELAY_BRIDGE_CHANNEL_CAPACITY: usize = 64;
+const AGENT_SEND_MESSAGE_FAILED_CODE: &str = "AGENT_SEND_MESSAGE_FAILED";
 
 #[derive(Clone)]
 pub struct ConversationService {
@@ -1101,7 +1104,7 @@ impl ConversationService {
 
                 let relay = StreamRelay::new(
                     conv_id.clone(),
-                    msg_id,
+                    msg_id.clone(),
                     user_id_owned.clone(),
                     Arc::clone(&repo),
                     Arc::clone(&broadcaster),
@@ -1109,17 +1112,23 @@ impl ConversationService {
                 )
                 .with_turn_completion(false);
 
-                let rx = agent.subscribe();
+                let (relay_tx, rx) = tokio::sync::broadcast::channel(RELAY_BRIDGE_CHANNEL_CAPACITY);
+                let bridge_handle =
+                    spawn_agent_stream_bridge(agent.subscribe(), relay_tx.clone(), conv_id.clone(), msg_id.clone());
                 let send_agent = agent.clone();
                 let conv_id_send = conv_id.clone();
+                let send_error_tx = relay_tx.clone();
+                drop(relay_tx);
                 // 1. Send the message to the agent and concurrently run the relay to stream events.
                 tokio::spawn(async move {
                     if let Err(e) = send_agent.send_message(current_send).await {
                         error!(conversation_id = %conv_id_send, error = %ErrorChain(&e), "Agent send_message failed");
+                        let _ = send_error_tx.send(agent_send_failure_event(&e));
                     }
                 });
                 // 2. Wait for the agent to process the message and complete the turn, while the relay streams events in real time.
                 let outcome = relay.consume(rx).await;
+                bridge_handle.abort();
 
                 if let Some(session_key) = agent.get_session_key() {
                     persist_session_key(&repo, &conv_id, &session_key).await;
@@ -1452,6 +1461,46 @@ fn enum_to_db<T: serde::Serialize>(val: &T) -> Result<String, AppError> {
         .as_str()
         .map(|s| s.to_owned())
         .ok_or_else(|| AppError::Internal("Expected string enum value".into()))
+}
+
+fn spawn_agent_stream_bridge(
+    mut source_rx: tokio::sync::broadcast::Receiver<AgentStreamEvent>,
+    relay_tx: tokio::sync::broadcast::Sender<AgentStreamEvent>,
+    conversation_id: String,
+    msg_id: String,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            match source_rx.recv().await {
+                Ok(event) => {
+                    let terminal = matches!(event, AgentStreamEvent::Finish(_) | AgentStreamEvent::Error(_));
+                    if relay_tx.send(event).is_err() {
+                        debug!(conversation_id, msg_id, "Agent stream bridge receiver closed");
+                        break;
+                    }
+                    if terminal {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    warn!(
+                        conversation_id,
+                        msg_id,
+                        lagged = n,
+                        "Agent stream bridge lagged, forwarding will resume with latest events"
+                    );
+                }
+            }
+        }
+    })
+}
+
+fn agent_send_failure_event(error: &AppError) -> AgentStreamEvent {
+    AgentStreamEvent::Error(ErrorEventData {
+        message: error.to_string(),
+        code: Some(AGENT_SEND_MESSAGE_FAILED_CODE.to_owned()),
+    })
 }
 
 /// Persist the agent's session key into `conversation.extra.sessionKey`.

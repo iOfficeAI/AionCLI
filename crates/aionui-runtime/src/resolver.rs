@@ -223,6 +223,13 @@ mod tests {
     use super::*;
     use crate::embed::FakeEmbed;
     use std::io::Write as _;
+    use std::sync::{Mutex, MutexGuard};
+
+    static BUN_PATH_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock_bun_path_env() -> MutexGuard<'static, ()> {
+        BUN_PATH_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
 
     fn make_blob(payload: &[u8]) -> Vec<u8> {
         let mut out = Vec::new();
@@ -241,6 +248,7 @@ mod tests {
 
     #[test]
     fn no_embed_falls_back_to_which() {
+        let _guard = lock_bun_path_env();
         // Safety: unset to avoid env override winning.
         // SAFETY: single-threaded test, `cargo test` default is per-process.
         unsafe {
@@ -264,6 +272,7 @@ mod tests {
 
     #[test]
     fn env_override_wins_over_embed() {
+        let _guard = lock_bun_path_env();
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let path = tmp.path().to_path_buf();
         // SAFETY: single-threaded test.
@@ -312,6 +321,7 @@ mod tests {
 
     #[test]
     fn bad_env_override_falls_through_to_embed() {
+        let _guard = lock_bun_path_env();
         // SAFETY: single-threaded test.
         unsafe {
             std::env::set_var("AIONUI_BUN_PATH", "/definitely/does/not/exist");

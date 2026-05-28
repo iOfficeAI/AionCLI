@@ -1,9 +1,9 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use aionui_ai_agent::{
     AgentStreamEvent,
     protocol::events::{
-        ThinkingEventData,
+        ErrorEventData, ThinkingEventData,
         tool_call::{AcpToolCallSessionUpdateKind, AcpToolCallStatus, ToolCallStatus},
     },
 };
@@ -22,6 +22,7 @@ use tracing::{debug, error, info, warn};
 
 /// Number of text chunks to accumulate before flushing to the database.
 const FLUSH_INTERVAL: u32 = 20;
+const STREAM_RELAY_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(90);
 
 #[derive(Debug, Clone)]
 struct TextSegmentState {
@@ -108,8 +109,8 @@ impl StreamRelay {
         let mut used_primary_segment_msg_id = false;
 
         loop {
-            match rx.recv().await {
-                Ok(event) => match &event {
+            match tokio::time::timeout(STREAM_RELAY_INACTIVITY_TIMEOUT, rx.recv()).await {
+                Ok(Ok(event)) => match &event {
                     AgentStreamEvent::Thinking(data) => {
                         if data.status.as_deref() == Some("done") {
                             self.complete_active_thinking(&mut active_thinking).await;
@@ -203,7 +204,7 @@ impl StreamRelay {
                         self.forward_to_websocket(&event);
                     }
                 },
-                Err(broadcast::error::RecvError::Closed) => {
+                Ok(Err(broadcast::error::RecvError::Closed)) => {
                     let elapsed_ms = now_ms() - started_at;
                     warn!(
                         elapsed_ms,
@@ -227,8 +228,35 @@ impl StreamRelay {
                     }
                     break outcome;
                 }
-                Err(broadcast::error::RecvError::Lagged(n)) => {
+                Ok(Err(broadcast::error::RecvError::Lagged(n))) => {
                     warn!(lagged = n, "Stream relay lagged, some events dropped");
+                }
+                Err(_) => {
+                    let elapsed_ms = now_ms() - started_at;
+                    warn!(
+                        elapsed_ms,
+                        timeout_secs = STREAM_RELAY_INACTIVITY_TIMEOUT.as_secs(),
+                        text_len = full_text_buffer.len(),
+                        "StreamRelay timed out waiting for agent event"
+                    );
+
+                    let event = AgentStreamEvent::Error(ErrorEventData {
+                        message: format!(
+                            "Agent stream timed out after {} seconds without updates",
+                            STREAM_RELAY_INACTIVITY_TIMEOUT.as_secs()
+                        ),
+                        code: Some("STREAM_INACTIVITY_TIMEOUT".into()),
+                    });
+
+                    self.complete_active_thinking(&mut active_thinking).await;
+                    self.close_active_text_segment(&mut active_text, &mut text_segments, "error")
+                        .await;
+                    self.forward_to_websocket(&event);
+                    let outcome = self.finalize(&full_text_buffer, &text_segments, &event).await;
+                    if self.complete_turn {
+                        Self::complete_conversation(&self.repo, &self.broadcaster, &self.conversation_id).await;
+                    }
+                    break outcome;
                 }
             }
         }
@@ -1120,6 +1148,55 @@ mod tests {
         assert_eq!(inserts.len(), 1);
         let content: serde_json::Value = serde_json::from_str(&inserts[0].content).unwrap();
         assert_eq!(content["content"], "partial");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn run_inactivity_timeout_finalizes_with_error() {
+        let repo = Arc::new(RecordingRepo::new());
+        let bus = Arc::new(aionui_realtime::BroadcastEventBus::new(64));
+        let (_tx, _) = broadcast::channel(64);
+
+        let relay = StreamRelay::new(
+            "conv-1".into(),
+            "asst-1".into(),
+            "user-1".into(),
+            repo.clone(),
+            bus.clone(),
+            None,
+        );
+
+        let mut ws_rx = bus.subscribe();
+        let rx = _tx.subscribe();
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(95), relay.consume(rx)).await;
+        assert!(result.is_ok(), "relay should finalize before the outer timeout");
+
+        let inserts = repo.take_inserts();
+        assert_eq!(inserts.len(), 1);
+        assert_eq!(inserts[0].r#type, "tips");
+        assert_eq!(inserts[0].status.as_deref(), Some("error"));
+        let content: serde_json::Value = serde_json::from_str(&inserts[0].content).unwrap();
+        assert_eq!(content["type"], "error");
+        assert!(
+            content["content"]
+                .as_str()
+                .is_some_and(|message| message.contains("timed out")),
+            "expected timeout error message, got {content}"
+        );
+
+        let mut saw_stream_error = false;
+        let mut saw_turn_completed = false;
+        while let Ok(evt) = ws_rx.try_recv() {
+            if evt.name == "message.stream" && evt.data["type"] == "error" {
+                saw_stream_error = true;
+            }
+            if evt.name == "turn.completed" && evt.data["status"] == "finished" {
+                saw_turn_completed = true;
+            }
+        }
+
+        assert!(saw_stream_error, "stream error event should be broadcast");
+        assert!(saw_turn_completed, "turn should complete so UI can stop loading");
     }
 
     #[tokio::test]
