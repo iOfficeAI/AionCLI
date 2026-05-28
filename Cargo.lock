@@ -622,6 +622,7 @@ version = "0.1.14"
 dependencies = [
  "aionui-api-types",
  "aionui-common",
+ "aionui-db",
  "aionui-realtime",
  "async-trait",
  "axum",
