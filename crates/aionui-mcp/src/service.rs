@@ -831,7 +831,7 @@ mod tests {
                 },
             )
             .await;
-        assert!(matches!(result, Err(McpError::Conflict(_))));
+        assert!(matches!(result, Err(McpError::InvalidEdit(_))));
     }
 
     #[tokio::test]

@@ -255,7 +255,7 @@ async fn edit_name_conflict() {
         )
         .await
         .unwrap_err();
-    assert!(matches!(err, McpError::Conflict(_)));
+    assert!(matches!(err, McpError::InvalidEdit(_)));
 }
 
 // ---------------------------------------------------------------------------

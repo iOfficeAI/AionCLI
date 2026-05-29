@@ -472,7 +472,10 @@ mod tests {
             }
         ]"#;
         let servers = parse_codex_list_json(json).unwrap();
-        assert!(servers.is_empty());
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].name, "disabled-mcp");
+        assert!(!servers[0].importable);
+        assert_eq!(servers[0].import_skip_reason.as_deref(), Some("Disabled"));
     }
 
     #[test]

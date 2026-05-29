@@ -326,8 +326,12 @@ mod tests {
             }
         }"#;
         let servers = parse_codebuddy_config(config).unwrap();
-        assert_eq!(servers.len(), 1);
+        assert_eq!(servers.len(), 2);
         assert_eq!(servers[0].name, "active");
+        assert!(servers[0].importable);
+        assert_eq!(servers[1].name, "disabled");
+        assert!(!servers[1].importable);
+        assert_eq!(servers[1].import_skip_reason.as_deref(), Some("Disabled"));
     }
 
     #[test]
