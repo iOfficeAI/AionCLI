@@ -134,7 +134,7 @@ impl AgentSendError {
                 AgentErrorOwnership::UserAgent,
                 Some(detail),
                 false,
-                false,
+                true,
                 resolution(
                     AgentErrorResolutionKind::SendFeedback,
                     Some(AgentErrorResolutionTarget::Feedback),
@@ -287,7 +287,7 @@ impl From<AcpError> for AgentSendError {
                 AgentErrorOwnership::UserAgent,
                 Some(detail),
                 false,
-                false,
+                true,
                 resolution(
                     AgentErrorResolutionKind::SendFeedback,
                     Some(AgentErrorResolutionTarget::Feedback),
@@ -589,6 +589,8 @@ fn classify_provider_api(lower: &str) -> Option<ClassifiedError> {
         lower,
         &[
             "invalid request",
+            "invalid_request",
+            "invalid_request_error",
             "invalid assistant message",
             "content is required",
             "invalid input",
@@ -1021,6 +1023,7 @@ mod tests {
             "API error 400: Invalid request: Invalid input",
             "API error 400: Invalid assistant message: content or tool calls must be set",
             "API error 400: content is required",
+            "Provider error: API error 400: {\"type\":\"invalid_request_error\",\"message\":\"bad payload\"}",
         ] {
             assert_classification(
                 detail,
@@ -1039,6 +1042,7 @@ mod tests {
             AgentSendError::from_app_error(AppError::BadRequest("Invalid parameters: malformed request".into()));
         assert_eq!(app_err.code(), Some(AgentErrorCode::UserAgentInvalidParams));
         assert_eq!(app_err.stream_error().retryable, Some(false));
+        assert_eq!(app_err.stream_error().feedback_recommended, Some(true));
         assert_eq!(
             app_err.stream_error().resolution.map(|value| value.kind),
             Some(AgentErrorResolutionKind::SendFeedback)
@@ -1049,6 +1053,7 @@ mod tests {
         });
         assert_eq!(acp_err.code(), Some(AgentErrorCode::UserAgentInvalidParams));
         assert_eq!(acp_err.stream_error().retryable, Some(false));
+        assert_eq!(acp_err.stream_error().feedback_recommended, Some(true));
         assert_eq!(
             acp_err.stream_error().resolution.map(|value| value.kind),
             Some(AgentErrorResolutionKind::SendFeedback)
