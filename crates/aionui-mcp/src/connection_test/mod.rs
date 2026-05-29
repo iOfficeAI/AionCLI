@@ -4,10 +4,10 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use aionui_api_types::McpConnectionTestResult;
-use aionui_runtime::Builder as CmdBuilder;
+use aionui_runtime::{Builder as CmdBuilder, kill_process_tree};
 use serde::Serialize;
 use tokio::sync::mpsc;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::types::McpServerTransport;
 use protocol::{
@@ -72,10 +72,7 @@ impl McpConnectionTestService {
         args: &[String],
         env: &HashMap<String, String>,
     ) -> McpConnectionTestResult {
-        match tokio::time::timeout(self.timeout, self.test_stdio_inner(command, args, env)).await {
-            Ok(r) => r,
-            Err(_) => timeout_result(self.timeout),
-        }
+        self.test_stdio_inner(command, args, env).await
     }
 
     async fn test_stdio_inner(
@@ -98,8 +95,13 @@ impl McpConnectionTestService {
 
         let stdin = child.stdin.take().expect("stdin was piped");
         let stdout = child.stdout.take().expect("stdout was piped");
-        let result = run_stdio_protocol(stdin, stdout).await;
-        kill_child_tree(&mut child).await;
+        let result = match tokio::time::timeout(self.timeout, run_stdio_protocol(stdin, stdout)).await {
+            Ok(r) => r,
+            Err(_) => timeout_result(self.timeout),
+        };
+        if let Err(error) = kill_process_tree(&mut child).await {
+            warn!(%error, "failed to clean up MCP stdio connection test process tree");
+        }
         result
     }
 
@@ -316,36 +318,6 @@ struct HttpMcpResponse {
     session_id: Option<String>,
 }
 
-async fn kill_child_tree(child: &mut tokio::process::Child) {
-    if let Some(pid) = child.id() {
-        #[cfg(unix)]
-        {
-            let process_group = format!("-{pid}");
-            let _ = tokio::process::Command::new("kill")
-                .args(["-KILL", &process_group])
-                .status()
-                .await;
-        }
-
-        #[cfg(windows)]
-        {
-            let _ = tokio::process::Command::new("taskkill")
-                .args(["/PID", &pid.to_string(), "/T", "/F"])
-                .status()
-                .await;
-        }
-
-        #[cfg(not(any(unix, windows)))]
-        {
-            let _ = child.kill().await;
-        }
-    } else {
-        let _ = child.kill().await;
-    }
-
-    let _ = child.wait().await;
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,5 +332,83 @@ mod tests {
     fn service_with_timeout() {
         let svc = McpConnectionTestService::new(reqwest::Client::new()).with_timeout(Duration::from_secs(5));
         assert_eq!(svc.timeout, Duration::from_secs(5));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stdio_timeout_cleans_up_process_group() {
+        let marker_path = std::env::temp_dir().join(format!(
+            "aionui-mcp-timeout-pid-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let transport = McpServerTransport::Stdio {
+            command: "sh".into(),
+            args: vec![
+                "-c".into(),
+                "printf '%s\n' \"$$\" > \"$1\"; sleep 30".into(),
+                "mcp-timeout-child".into(),
+                marker_path.to_string_lossy().into_owned(),
+            ],
+            env: HashMap::new(),
+        };
+        let svc = McpConnectionTestService::new(reqwest::Client::new()).with_timeout(Duration::from_millis(100));
+
+        let result = svc.test_connection("timeout-cleanup", &transport).await;
+        assert!(!result.success);
+        assert!(
+            result.error.as_deref().unwrap_or_default().contains("timed out"),
+            "expected timeout result, got {result:?}"
+        );
+
+        let pid: i32 = std::fs::read_to_string(&marker_path)
+            .expect("stdio child should write its pid")
+            .trim()
+            .parse()
+            .expect("pid marker should be numeric");
+
+        let group_alive = wait_for_process_group_exit(pid, Duration::from_secs(1)).await;
+        if group_alive {
+            let _ = kill_process_group(pid, libc_sigkill());
+        }
+        let _ = std::fs::remove_file(marker_path);
+
+        assert!(
+            !group_alive,
+            "stdio timeout should terminate the spawned process group for pid={pid}"
+        );
+    }
+
+    #[cfg(unix)]
+    async fn wait_for_process_group_exit(pid: i32, timeout: Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + timeout;
+        while tokio::time::Instant::now() < deadline {
+            if !is_process_group_alive(pid) {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        is_process_group_alive(pid)
+    }
+
+    #[cfg(unix)]
+    fn is_process_group_alive(pid: i32) -> bool {
+        kill_process_group(pid, 0)
+    }
+
+    #[cfg(unix)]
+    fn kill_process_group(pid: i32, signal: i32) -> bool {
+        unsafe extern "C" {
+            fn kill(pid: i32, sig: i32) -> i32;
+        }
+        unsafe { kill(-pid, signal) == 0 }
+    }
+
+    #[cfg(unix)]
+    fn libc_sigkill() -> i32 {
+        9
     }
 }
