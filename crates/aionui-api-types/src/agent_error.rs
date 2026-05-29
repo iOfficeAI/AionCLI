@@ -78,6 +78,7 @@ pub enum AgentErrorResolutionTarget {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct AgentErrorResolution {
     pub kind: AgentErrorResolutionKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]

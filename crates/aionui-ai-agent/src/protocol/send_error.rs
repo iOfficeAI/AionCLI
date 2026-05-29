@@ -27,6 +27,7 @@ impl AgentSendError {
                 detail.map(|d| sanitize_error_detail(&d)),
                 retryable,
                 feedback_recommended,
+                None,
             ),
         }
     }

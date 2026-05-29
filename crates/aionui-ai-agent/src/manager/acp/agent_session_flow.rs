@@ -270,6 +270,7 @@ impl AcpAgentManager {
                 Some("Agent completed the turn without producing visible output.".into()),
                 true,
                 true,
+                None,
             )));
         }
 
