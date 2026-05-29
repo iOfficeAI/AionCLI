@@ -194,7 +194,7 @@ pub(super) async fn build(
 /// Mirrors the frontend `src/process/agent/aionrs/envBuilder.ts` mapping.
 /// For `new-api` platform, per-model protocol overrides from `model_protocols`
 /// JSON take precedence.
-fn map_aionrs_provider(platform: &str, model_id: &str, model_protocols: Option<&str>) -> String {
+pub(crate) fn map_aionrs_provider(platform: &str, model_id: &str, model_protocols: Option<&str>) -> String {
     if platform == "new-api"
         && let Some(protocols_json) = model_protocols
         && let Ok(map) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(protocols_json)
@@ -219,7 +219,7 @@ fn map_aionrs_provider(platform: &str, model_id: &str, model_protocols: Option<&
 /// - Strips trailing `/v1` from base_url (aionrs appends its own path)
 /// - Gemini: prepends `/v1beta/openai` and overrides `api_path`
 /// - OpenAI official (`api.openai.com`): sets `max_completion_tokens`
-fn resolve_aionrs_url_and_compat(
+pub(crate) fn resolve_aionrs_url_and_compat(
     platform: &str,
     raw_base_url: &str,
     mapped_provider: &str,
@@ -266,7 +266,7 @@ fn normalize_aionrs_base_url(url: &str) -> String {
     trimmed.strip_suffix("/v1").unwrap_or(trimmed).to_owned()
 }
 
-fn resolve_bedrock_config(json: Option<&str>) -> Option<aion_config::config::BedrockConfig> {
+pub(crate) fn resolve_bedrock_config(json: Option<&str>) -> Option<aion_config::config::BedrockConfig> {
     let bc: aionui_api_types::BedrockConfig = serde_json::from_str(json?).ok()?;
     Some(aion_config::config::BedrockConfig {
         region: Some(bc.region),

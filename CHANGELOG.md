@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.15](https://github.com/iOfficeAI/AionCore/compare/v0.1.14...v0.1.15) (2026-05-28)
+
+
+### Bug Fixes
+
+* **agent:** add provider health check probe ([#358](https://github.com/iOfficeAI/AionCore/issues/358)) ([d3a8702](https://github.com/iOfficeAI/AionCore/commit/d3a8702c2c98a78085a24860bb20a15b1682dfda))
+
 ## [0.1.14](https://github.com/iOfficeAI/AionCore/compare/v0.1.13...v0.1.14) (2026-05-27)
 
 

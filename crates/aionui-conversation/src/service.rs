@@ -13,8 +13,8 @@ use aionui_api_types::{
     SessionMcpTransport, UpdateConversationArtifactRequest, UpdateConversationRequest, WebSocketMessage,
 };
 use aionui_common::{
-    AgentType, AppError, ConversationSource, ConversationStatus, ErrorChain, OnConversationDelete, PaginatedResult,
-    generate_short_id, now_ms,
+    AgentType, AppError, ConversationSource, ConversationStatus, ErrorChain, MessageType, OnConversationDelete,
+    PaginatedResult, generate_short_id, now_ms,
 };
 use aionui_db::models::MessageRow;
 use aionui_db::{
@@ -28,8 +28,8 @@ use std::collections::{HashMap, HashSet};
 use tracing::{debug, error, info, warn};
 
 use crate::convert::{
-    row_to_artifact_response, row_to_message_response, row_to_response, row_to_response_with_extra, search_row_to_item,
-    string_to_enum,
+    TOOL_CONTENT_COMPACT_THRESHOLD_BYTES, row_to_artifact_response, row_to_message_response,
+    row_to_message_response_compact, row_to_response, row_to_response_with_extra, search_row_to_item, string_to_enum,
 };
 use crate::skill_resolver::SkillResolver;
 use crate::skill_snapshot::{backfill_skills_if_missing, compute_initial_skills};
@@ -894,23 +894,95 @@ impl ConversationService {
             Some("DESC" | "desc") => SortOrder::Desc,
             _ => SortOrder::Asc,
         };
+        let compact_content = matches!(query.content_mode.as_deref(), Some("compact"));
 
         let result = self
             .conversation_repo
             .get_messages(conversation_id, page, page_size, order)
             .await?;
 
-        let items: Vec<MessageResponse> = result
-            .items
-            .into_iter()
-            .map(row_to_message_response)
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut compacted_count = 0usize;
+        let mut total_original_content_bytes = 0usize;
+        let mut total_response_content_bytes = 0usize;
+        let mut items = Vec::with_capacity(result.items.len());
+        for row in result.items {
+            let original_content_bytes = row.content.len();
+            total_original_content_bytes += original_content_bytes;
+            let response = if compact_content {
+                row_to_message_response_compact(row)?
+            } else {
+                row_to_message_response(row)?
+            };
+
+            if compact_content {
+                if response
+                    .content
+                    .get("_compact")
+                    .and_then(|compact| compact.get("truncated"))
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    compacted_count += 1;
+                }
+                total_response_content_bytes += response.content.to_string().len();
+            }
+            items.push(response);
+        }
+
+        if compact_content && compacted_count > 0 {
+            info!(
+                conversation_id,
+                page,
+                page_size,
+                order = ?order,
+                items = items.len(),
+                total = result.total,
+                compacted = compacted_count,
+                total_original_content_bytes,
+                total_response_content_bytes,
+                "Compacted tool message list response"
+            );
+        }
 
         Ok(PaginatedResult {
             items,
             total: result.total,
             has_more: result.has_more,
         })
+    }
+
+    /// Return one full message for a conversation after verifying ownership.
+    pub async fn get_message(
+        &self,
+        user_id: &str,
+        conversation_id: &str,
+        message_id: &str,
+    ) -> Result<MessageResponse, AppError> {
+        self.conversation_repo
+            .get(conversation_id)
+            .await?
+            .filter(|r| r.user_id == user_id)
+            .ok_or_else(|| AppError::NotFound(format!("Conversation {conversation_id} not found")))?;
+
+        let row = self
+            .conversation_repo
+            .get_message(conversation_id, message_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("Message {message_id} not found")))?;
+
+        let content_bytes = row.content.len();
+        let response = row_to_message_response(row)?;
+        if is_tool_message_type(response.r#type) || content_bytes > TOOL_CONTENT_COMPACT_THRESHOLD_BYTES {
+            info!(
+                conversation_id,
+                message_id,
+                message_type = ?response.r#type,
+                content_bytes,
+                "Loaded full message content"
+            );
+        }
+
+        Ok(response)
     }
 
     /// List artifacts for a conversation with durable status state.
@@ -1989,6 +2061,13 @@ fn log_conversation_created(response: &ConversationResponse, extra: &serde_json:
             "Conversation created (no assistant)"
         );
     }
+}
+
+fn is_tool_message_type(message_type: MessageType) -> bool {
+    matches!(
+        message_type,
+        MessageType::ToolCall | MessageType::ToolGroup | MessageType::AcpToolCall
+    )
 }
 
 #[cfg(test)]

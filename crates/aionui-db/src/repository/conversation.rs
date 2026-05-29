@@ -64,6 +64,11 @@ pub trait IConversationRepository: Send + Sync {
         order: SortOrder,
     ) -> Result<PaginatedResult<MessageRow>, DbError>;
 
+    /// Returns a single message scoped to a conversation.
+    async fn get_message(&self, _conv_id: &str, _message_id: &str) -> Result<Option<MessageRow>, DbError> {
+        Ok(None)
+    }
+
     /// Inserts a new message row.
     async fn insert_message(&self, message: &MessageRow) -> Result<(), DbError>;
 

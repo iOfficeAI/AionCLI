@@ -50,6 +50,49 @@ pub struct ModelHealthStatus {
     pub error: Option<String>,
 }
 
+/// Coarse failure category for provider/model health checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderHealthCheckErrorKind {
+    Timeout,
+    InvalidAuthorizationHeader,
+    Unauthorized,
+    Forbidden,
+    NotFound,
+    InsufficientQuota,
+    AwsCredentials,
+    InvalidRequest,
+    RateLimited,
+    ConnectionError,
+    ApiError,
+    Unknown,
+}
+
+/// Request body for `POST /api/agents/provider-health-check`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderHealthCheckRequest {
+    pub provider_id: String,
+    pub model: String,
+}
+
+/// Response body for `POST /api/agents/provider-health-check`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderHealthCheckResponse {
+    pub provider_id: String,
+    pub platform: String,
+    pub model: String,
+    pub status: HealthStatus,
+    pub elapsed_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_kind: Option<ProviderHealthCheckErrorKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub http_status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_stage: Option<String>,
+}
+
 /// AWS Bedrock authentication method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -883,5 +926,37 @@ mod tests {
         });
         let req: CreateProviderRequest = serde_json::from_value(raw).unwrap();
         assert!(!req.is_full_url);
+    }
+
+    #[test]
+    fn test_provider_health_check_request_serde() {
+        let raw = json!({
+            "provider_id": "anthropic",
+            "model": "claude-sonnet-4-20250514"
+        });
+        let req: ProviderHealthCheckRequest = serde_json::from_value(raw).unwrap();
+        assert_eq!(req.provider_id, "anthropic");
+        assert_eq!(req.model, "claude-sonnet-4-20250514");
+    }
+
+    #[test]
+    fn test_provider_health_check_response_serde() {
+        let resp = ProviderHealthCheckResponse {
+            provider_id: "anthropic".into(),
+            platform: "anthropic".into(),
+            model: "claude-sonnet-4-20250514".into(),
+            status: HealthStatus::Unhealthy,
+            elapsed_ms: 1234,
+            message: Some("API error 401: invalid key".into()),
+            error_kind: Some(ProviderHealthCheckErrorKind::Unauthorized),
+            http_status: Some(401),
+            timeout_stage: None,
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["provider_id"], "anthropic");
+        assert_eq!(json["status"], "unhealthy");
+        assert_eq!(json["error_kind"], "unauthorized");
+        assert_eq!(json["http_status"], 401);
+        assert!(json.get("timeout_stage").is_none());
     }
 }

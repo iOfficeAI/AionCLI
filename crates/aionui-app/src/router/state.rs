@@ -145,7 +145,15 @@ pub async fn build_module_states(services: &AppServices) -> (ModuleStates, Chann
             .unwrap_or_else(|| std::path::PathBuf::from("aioncore")),
     );
 
-    let agent_service = AgentService::new(services.agent_registry.clone(), services.data_dir.clone());
+    let pool = services.database.pool().clone();
+    let provider_repo: Arc<dyn IProviderRepository> = Arc::new(SqliteProviderRepository::new(pool));
+    let encryption_key = derive_encryption_key(&services.jwt_secret_raw);
+    let agent_service = AgentService::new(
+        services.agent_registry.clone(),
+        provider_repo,
+        encryption_key,
+        services.data_dir.clone(),
+    );
 
     let states = ModuleStates {
         system: build_system_state(services),
