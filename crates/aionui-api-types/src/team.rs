@@ -117,6 +117,8 @@ pub struct TeamAgentResponse {
     pub custom_agent_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
+    #[serde(default)]
+    pub pending_confirmations: usize,
 }
 
 /// Full team response returned by create, get, and list endpoints.
@@ -450,6 +452,7 @@ mod tests {
             model: "claude".into(),
             custom_agent_id: Some("agent-x".into()),
             status: Some("idle".into()),
+            pending_confirmations: 2,
         };
         let json = serde_json::to_value(&agent).unwrap();
         assert_eq!(json["slot_id"], "slot-1");
@@ -461,6 +464,7 @@ mod tests {
         assert_eq!(json["model"], "claude");
         assert_eq!(json["custom_agent_id"], "agent-x");
         assert_eq!(json["status"], "idle");
+        assert_eq!(json["pending_confirmations"], 2);
     }
 
     #[test]
@@ -475,6 +479,7 @@ mod tests {
             model: "claude".into(),
             custom_agent_id: None,
             status: None,
+            pending_confirmations: 0,
         };
         let json = serde_json::to_value(&agent).unwrap();
         assert!(json.get("icon").is_none());
@@ -497,6 +502,7 @@ mod tests {
                 model: "claude".into(),
                 custom_agent_id: None,
                 status: None,
+                pending_confirmations: 0,
             }],
             lead_agent_id: Some("slot-1".into()),
             created_at: 1700000000000,
@@ -556,6 +562,7 @@ mod tests {
                 model: "opus".into(),
                 custom_agent_id: None,
                 status: Some("idle".into()),
+                pending_confirmations: 0,
             },
         };
         let json = serde_json::to_value(&payload).unwrap();
@@ -604,6 +611,7 @@ mod tests {
             model: "claude".into(),
             custom_agent_id: Some("custom-1".into()),
             status: Some("working".into()),
+            pending_confirmations: 1,
         };
         let json = serde_json::to_string(&agent).unwrap();
         let parsed: TeamAgentResponse = serde_json::from_str(&json).unwrap();
@@ -626,6 +634,7 @@ mod tests {
                     model: "claude".into(),
                     custom_agent_id: None,
                     status: None,
+                    pending_confirmations: 0,
                 },
                 TeamAgentResponse {
                     slot_id: "s2".into(),
@@ -637,6 +646,7 @@ mod tests {
                     model: "claude".into(),
                     custom_agent_id: Some("x".into()),
                     status: Some("idle".into()),
+                    pending_confirmations: 3,
                 },
             ],
             lead_agent_id: Some("s1".into()),
@@ -674,6 +684,7 @@ mod tests {
                 model: "sonnet".into(),
                 custom_agent_id: None,
                 status: None,
+                pending_confirmations: 0,
             },
         };
         let json = serde_json::to_string(&payload).unwrap();
@@ -736,6 +747,7 @@ mod tests {
         assert_eq!(agent.conversation_id, "c1");
         assert_eq!(agent.custom_agent_id.as_deref(), Some("cust-1"));
         assert_eq!(agent.status.as_deref(), Some("idle"));
+        assert_eq!(agent.pending_confirmations, 0);
     }
 
     #[test]
