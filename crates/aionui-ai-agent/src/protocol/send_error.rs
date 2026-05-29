@@ -1,4 +1,7 @@
-use aionui_api_types::{AgentErrorCode, AgentErrorOwnership, AgentStreamErrorData};
+use aionui_api_types::{
+    AgentErrorCode, AgentErrorOwnership, AgentErrorResolution, AgentErrorResolutionKind, AgentErrorResolutionTarget,
+    AgentStreamErrorData,
+};
 use aionui_common::AppError;
 
 use super::error::AcpError;
@@ -10,6 +13,31 @@ pub struct AgentSendError {
     stream_error: AgentStreamErrorData,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ClassifiedError {
+    message: &'static str,
+    code: AgentErrorCode,
+    ownership: AgentErrorOwnership,
+    retryable: bool,
+    feedback_recommended: bool,
+    resolution_kind: AgentErrorResolutionKind,
+    resolution_target: Option<AgentErrorResolutionTarget>,
+}
+
+impl ClassifiedError {
+    fn into_send_error(self, detail: String) -> AgentSendError {
+        AgentSendError::new(
+            self.message,
+            self.code,
+            self.ownership,
+            Some(detail),
+            self.retryable,
+            self.feedback_recommended,
+            resolution(self.resolution_kind, self.resolution_target),
+        )
+    }
+}
+
 impl AgentSendError {
     pub fn new(
         message: impl Into<String>,
@@ -18,6 +46,7 @@ impl AgentSendError {
         detail: Option<String>,
         retryable: bool,
         feedback_recommended: bool,
+        resolution: Option<AgentErrorResolution>,
     ) -> Self {
         Self {
             stream_error: AgentStreamErrorData::classified(
@@ -27,7 +56,7 @@ impl AgentSendError {
                 detail.map(|d| sanitize_error_detail(&d)),
                 retryable,
                 feedback_recommended,
-                None,
+                resolution,
             ),
         }
     }
@@ -46,6 +75,10 @@ impl AgentSendError {
                 Some(detail),
                 true,
                 true,
+                resolution(
+                    AgentErrorResolutionKind::SendFeedback,
+                    Some(AgentErrorResolutionTarget::Feedback),
+                ),
             ),
             AppError::Forbidden(_) => Self::new(
                 "AionUI blocked the request before it reached the Agent",
@@ -54,6 +87,10 @@ impl AgentSendError {
                 Some(detail),
                 false,
                 true,
+                resolution(
+                    AgentErrorResolutionKind::SendFeedback,
+                    Some(AgentErrorResolutionTarget::Feedback),
+                ),
             ),
             AppError::Unauthorized(_) => Self::new(
                 "The selected Agent requires authentication",
@@ -62,6 +99,10 @@ impl AgentSendError {
                 Some(detail),
                 false,
                 false,
+                resolution(
+                    AgentErrorResolutionKind::CheckAgentLogin,
+                    Some(AgentErrorResolutionTarget::AgentSettings),
+                ),
             ),
             AppError::NotFound(msg) if msg.starts_with("Session not found") => Self::new(
                 "The Agent session was not found",
@@ -70,6 +111,10 @@ impl AgentSendError {
                 Some(detail),
                 true,
                 false,
+                resolution(
+                    AgentErrorResolutionKind::StartNewSession,
+                    Some(AgentErrorResolutionTarget::NewConversation),
+                ),
             ),
             AppError::BadRequest(msg) if msg.contains("Method not supported") => Self::new(
                 "The selected Agent does not support this operation",
@@ -78,6 +123,10 @@ impl AgentSendError {
                 Some(detail),
                 false,
                 false,
+                resolution(
+                    AgentErrorResolutionKind::CheckAgentVersion,
+                    Some(AgentErrorResolutionTarget::AgentSettings),
+                ),
             ),
             AppError::BadRequest(msg) if msg.contains("Invalid parameters") => Self::new(
                 "The selected Agent rejected the request parameters",
@@ -86,6 +135,7 @@ impl AgentSendError {
                 Some(detail),
                 false,
                 false,
+                resolution(AgentErrorResolutionKind::Retry, None),
             ),
             AppError::Timeout(_) => Self::new(
                 "The model provider did not respond in time",
@@ -94,6 +144,7 @@ impl AgentSendError {
                 Some(detail),
                 true,
                 false,
+                resolution(AgentErrorResolutionKind::Retry, None),
             ),
             AppError::RateLimited => Self::new(
                 "The model provider rate limited the request",
@@ -102,6 +153,7 @@ impl AgentSendError {
                 Some(detail),
                 true,
                 false,
+                resolution(AgentErrorResolutionKind::Retry, None),
             ),
             AppError::BadGateway(_) => classify_upstream_detail(&detail),
             _ => Self::new(
@@ -111,6 +163,10 @@ impl AgentSendError {
                 Some(detail),
                 true,
                 true,
+                resolution(
+                    AgentErrorResolutionKind::SendFeedback,
+                    Some(AgentErrorResolutionTarget::Feedback),
+                ),
             ),
         }
     }
@@ -157,6 +213,10 @@ impl From<AcpError> for AgentSendError {
                 Some(detail),
                 false,
                 false,
+                resolution(
+                    AgentErrorResolutionKind::CheckAgentInstallation,
+                    Some(AgentErrorResolutionTarget::AgentSettings),
+                ),
             ),
             AcpError::StartupCrash { .. } | AcpError::InitTimeout { .. } => Self::new(
                 "The selected Agent failed to start",
@@ -165,6 +225,10 @@ impl From<AcpError> for AgentSendError {
                 Some(detail),
                 true,
                 false,
+                resolution(
+                    AgentErrorResolutionKind::CheckAgentInstallation,
+                    Some(AgentErrorResolutionTarget::AgentSettings),
+                ),
             ),
             AcpError::Disconnected { .. } => Self::new(
                 "The selected Agent disconnected",
@@ -173,6 +237,10 @@ impl From<AcpError> for AgentSendError {
                 Some(detail),
                 true,
                 false,
+                resolution(
+                    AgentErrorResolutionKind::ReconnectAgent,
+                    Some(AgentErrorResolutionTarget::AgentSettings),
+                ),
             ),
             AcpError::AuthRequired => Self::new(
                 "The selected Agent requires authentication",
@@ -181,6 +249,10 @@ impl From<AcpError> for AgentSendError {
                 Some(detail),
                 false,
                 false,
+                resolution(
+                    AgentErrorResolutionKind::CheckAgentLogin,
+                    Some(AgentErrorResolutionTarget::AgentSettings),
+                ),
             ),
             AcpError::SessionNotFound { .. } => Self::new(
                 "The Agent session was not found",
@@ -189,6 +261,10 @@ impl From<AcpError> for AgentSendError {
                 Some(detail),
                 true,
                 false,
+                resolution(
+                    AgentErrorResolutionKind::StartNewSession,
+                    Some(AgentErrorResolutionTarget::NewConversation),
+                ),
             ),
             AcpError::MethodNotFound { .. } => Self::new(
                 "The selected Agent does not support this operation",
@@ -197,6 +273,10 @@ impl From<AcpError> for AgentSendError {
                 Some(detail),
                 false,
                 false,
+                resolution(
+                    AgentErrorResolutionKind::CheckAgentVersion,
+                    Some(AgentErrorResolutionTarget::AgentSettings),
+                ),
             ),
             AcpError::InvalidParams { .. } => Self::new(
                 "The selected Agent rejected the request parameters",
@@ -205,6 +285,7 @@ impl From<AcpError> for AgentSendError {
                 Some(detail),
                 false,
                 false,
+                resolution(AgentErrorResolutionKind::Retry, None),
             ),
             AcpError::NotConnected => Self::new(
                 "AionUI lost its Agent protocol connection",
@@ -213,6 +294,10 @@ impl From<AcpError> for AgentSendError {
                 Some(detail),
                 true,
                 true,
+                resolution(
+                    AgentErrorResolutionKind::SendFeedback,
+                    Some(AgentErrorResolutionTarget::Feedback),
+                ),
             ),
             AcpError::AgentInternal { .. } => classify_upstream_detail(&detail),
         }
@@ -221,8 +306,100 @@ impl From<AcpError> for AgentSendError {
 
 fn classify_upstream_detail(detail: &str) -> AgentSendError {
     let lower = detail.to_ascii_lowercase();
-    let (message, code, retryable) = if contains_any(
-        &lower,
+    let classified = classify_agent_lifecycle(&lower)
+        .or_else(|| classify_provider_api(&lower))
+        .or_else(|| classify_aionui_state(&lower))
+        .unwrap_or(ClassifiedError {
+            message: "The upstream Agent failed while handling the request",
+            code: AgentErrorCode::UnknownUpstreamError,
+            ownership: AgentErrorOwnership::UnknownUpstream,
+            retryable: true,
+            feedback_recommended: true,
+            resolution_kind: AgentErrorResolutionKind::SendFeedback,
+            resolution_target: Some(AgentErrorResolutionTarget::Feedback),
+        });
+
+    classified.into_send_error(detail.to_owned())
+}
+
+fn classify_agent_lifecycle(lower: &str) -> Option<ClassifiedError> {
+    if lower.contains("agent process exited before initialize handshake completed") {
+        return Some(agent_error(
+            "The selected Agent exited before it finished starting",
+            AgentErrorCode::UserAgentHandshakeFailed,
+            true,
+            AgentErrorResolutionKind::CheckAgentInstallation,
+        ));
+    }
+    if lower.contains("initialize handshake timed out") {
+        return Some(agent_error(
+            "The selected Agent did not finish starting in time",
+            AgentErrorCode::UserAgentHandshakeTimeout,
+            true,
+            AgentErrorResolutionKind::ReconnectAgent,
+        ));
+    }
+    if lower.contains("cli found but acp initialization failed") || lower.contains("找到 cli 但 acp 初始化失败")
+    {
+        return Some(agent_error(
+            "The selected Agent CLI was found but could not initialize ACP",
+            AgentErrorCode::UserAgentAcpInitFailed,
+            false,
+            AgentErrorResolutionKind::CheckAgentInstallation,
+        ));
+    }
+    if lower.contains("protocol mismatch") || lower.contains("max reconnect attempts") {
+        return Some(agent_error(
+            "The selected Agent protocol is incompatible",
+            AgentErrorCode::UserAgentProtocolMismatch,
+            false,
+            AgentErrorResolutionKind::CheckAgentVersion,
+        ));
+    }
+    if lower.contains("no previous sessions found") {
+        return Some(agent_session_error(
+            "No previous Agent session was found for this project",
+            AgentErrorCode::UserAgentNoPreviousSession,
+        ));
+    }
+    if lower.contains("session not found") {
+        return Some(agent_session_error(
+            "The Agent session was not found",
+            AgentErrorCode::UserAgentSessionNotFound,
+        ));
+    }
+    if lower.contains("command not found") {
+        return Some(agent_error(
+            "The selected Agent command was not found",
+            AgentErrorCode::UserAgentCommandNotFound,
+            false,
+            AgentErrorResolutionKind::CheckLocalCommand,
+        ));
+    }
+    if lower.contains("missing environment variable") {
+        return Some(agent_error(
+            "The selected Agent is missing a required environment variable",
+            AgentErrorCode::UserAgentMissingEnv,
+            false,
+            AgentErrorResolutionKind::CheckAgentInstallation,
+        ));
+    }
+
+    None
+}
+
+fn classify_provider_api(lower: &str) -> Option<ClassifiedError> {
+    if contains_any(lower, &["402", "insufficient balance"]) {
+        return Some(provider_error(
+            "The model provider account requires billing attention",
+            AgentErrorCode::UserLlmProviderBillingRequired,
+            false,
+            AgentErrorResolutionKind::CheckProviderBilling,
+            Some(AgentErrorResolutionTarget::ProviderSettings),
+        ));
+    }
+    if contains_any(
+        lower,
         &[
             "signable request",
             "canonical request",
@@ -235,13 +412,16 @@ fn classify_upstream_detail(detail: &str) -> AgentSendError {
             "base_url",
         ],
     ) {
-        (
+        return Some(provider_error(
             "The model provider configuration is invalid",
             AgentErrorCode::UserLlmProviderConfigError,
             false,
-        )
-    } else if contains_any(
-        &lower,
+            AgentErrorResolutionKind::CheckProviderBaseUrl,
+            Some(AgentErrorResolutionTarget::ProviderSettings),
+        ));
+    }
+    if contains_any(
+        lower,
         &[
             "401",
             "403",
@@ -249,15 +429,81 @@ fn classify_upstream_detail(detail: &str) -> AgentSendError {
             "forbidden",
             "invalid api key",
             "invalid_api_key",
+            "invalid x-api-key",
         ],
     ) {
-        (
+        return Some(provider_error(
             "The model provider rejected the request",
             AgentErrorCode::UserLlmProviderAuthFailed,
             false,
-        )
-    } else if contains_any(
-        &lower,
+            AgentErrorResolutionKind::CheckProviderCredentials,
+            Some(AgentErrorResolutionTarget::ProviderSettings),
+        ));
+    }
+    if contains_any(
+        lower,
+        &[
+            "function calling is not enabled",
+            "function calling disabled",
+            "unsupported model",
+        ],
+    ) {
+        return Some(provider_error(
+            "The configured model does not support this request",
+            AgentErrorCode::UserLlmProviderUnsupportedModel,
+            false,
+            AgentErrorResolutionKind::ChangeModel,
+            Some(AgentErrorResolutionTarget::ProviderSettings),
+        ));
+    }
+    if contains_any(
+        lower,
+        &[
+            "context window exceeds",
+            "context length",
+            "context too large",
+            "maximum context",
+            "prompt is too long",
+        ],
+    ) {
+        return Some(provider_error(
+            "The request is too large for the configured model context window",
+            AgentErrorCode::UserLlmProviderContextTooLarge,
+            false,
+            AgentErrorResolutionKind::ReduceContext,
+            None,
+        ));
+    }
+    if contains_any(
+        lower,
+        &[
+            "invalid schema",
+            "schema for function",
+            "tool schema",
+            "function schema",
+        ],
+    ) {
+        return Some(provider_error(
+            "The model provider rejected an internal tool schema",
+            AgentErrorCode::UserLlmProviderInvalidToolSchema,
+            true,
+            AgentErrorResolutionKind::Retry,
+            None,
+        ));
+    }
+    if (lower.contains("404") || lower.contains("not found"))
+        && contains_any(lower, &["/chat/completions", "\"path\"", "endpoint", "base url"])
+    {
+        return Some(provider_error(
+            "The model provider endpoint was not found",
+            AgentErrorCode::UserLlmProviderEndpointNotFound,
+            false,
+            AgentErrorResolutionKind::CheckProviderBaseUrl,
+            Some(AgentErrorResolutionTarget::ProviderSettings),
+        ));
+    }
+    if contains_any(
+        lower,
         &[
             "model not found",
             "model does not exist",
@@ -266,28 +512,46 @@ fn classify_upstream_detail(detail: &str) -> AgentSendError {
             "model_not_found",
         ],
     ) {
-        (
+        return Some(provider_error(
             "The configured model was not found by the provider",
             AgentErrorCode::UserLlmProviderModelNotFound,
             false,
-        )
-    } else if contains_any(
-        &lower,
-        &["429", "rate limit", "rate_limit", "quota", "insufficient balance"],
-    ) {
-        (
+            AgentErrorResolutionKind::ChangeModel,
+            Some(AgentErrorResolutionTarget::ProviderSettings),
+        ));
+    }
+    if contains_any(lower, &["429", "rate limit", "rate_limit", "quota"]) {
+        return Some(provider_error(
             "The model provider rate limited the request",
             AgentErrorCode::UserLlmProviderRateLimited,
             true,
-        )
-    } else if contains_any(&lower, &["504", "timeout", "deadline exceeded", "gateway timeout"]) {
-        (
+            AgentErrorResolutionKind::Retry,
+            None,
+        ));
+    }
+    if contains_any(
+        lower,
+        &["empty response from llm", "empty response", "response body was empty"],
+    ) {
+        return Some(provider_error(
+            "The model provider returned an empty response",
+            AgentErrorCode::UserLlmProviderEmptyResponse,
+            true,
+            AgentErrorResolutionKind::Retry,
+            None,
+        ));
+    }
+    if contains_any(lower, &["504", "timeout", "deadline exceeded", "gateway timeout"]) {
+        return Some(provider_error(
             "The model provider did not respond in time",
             AgentErrorCode::UserLlmProviderTimeout,
             true,
-        )
-    } else if contains_any(
-        &lower,
+            AgentErrorResolutionKind::Retry,
+            None,
+        ));
+    }
+    if contains_any(
+        lower,
         &[
             "dns",
             "connection refused",
@@ -296,48 +560,109 @@ fn classify_upstream_detail(detail: &str) -> AgentSendError {
             "certificate",
             "connection error",
             "connect error",
+            "error decoding response body",
+            "decoding response body",
+            "error sending request",
         ],
     ) {
-        (
+        return Some(provider_error(
             "The model provider could not be reached",
             AgentErrorCode::UserLlmProviderNetworkError,
             true,
-        )
-    } else if contains_any(&lower, &["500", "502", "503", "bad gateway", "service unavailable"]) {
-        (
+            AgentErrorResolutionKind::CheckProviderBaseUrl,
+            Some(AgentErrorResolutionTarget::ProviderSettings),
+        ));
+    }
+    if contains_any(lower, &["500", "502", "503", "bad gateway", "service unavailable"]) {
+        return Some(provider_error(
             "The model provider returned a server error",
             AgentErrorCode::UserLlmProviderGatewayError,
             true,
-        )
-    } else if contains_any(&lower, &["provider error"]) {
-        (
+            AgentErrorResolutionKind::Retry,
+            None,
+        ));
+    }
+    if lower.contains("provider error") {
+        return Some(provider_error(
             "The model provider returned an error",
             AgentErrorCode::UserLlmProviderGatewayError,
             true,
-        )
-    } else {
-        (
-            "The upstream Agent failed while handling the request",
-            AgentErrorCode::UnknownUpstreamError,
-            true,
-        )
-    };
+            AgentErrorResolutionKind::Retry,
+            None,
+        ));
+    }
 
-    let ownership = if code == AgentErrorCode::UnknownUpstreamError {
-        AgentErrorOwnership::UnknownUpstream
-    } else {
-        AgentErrorOwnership::UserLlmProvider
-    };
-    let feedback_recommended = ownership != AgentErrorOwnership::UserLlmProvider;
+    None
+}
 
-    AgentSendError::new(
+fn classify_aionui_state(lower: &str) -> Option<ClassifiedError> {
+    if lower.contains("conversation is already processing") {
+        return Some(ClassifiedError {
+            message: "The current response is still running",
+            code: AgentErrorCode::AionuiConversationBusy,
+            ownership: AgentErrorOwnership::Aionui,
+            retryable: true,
+            feedback_recommended: false,
+            resolution_kind: AgentErrorResolutionKind::WaitForCurrentResponse,
+            resolution_target: Some(AgentErrorResolutionTarget::NewConversation),
+        });
+    }
+
+    None
+}
+
+fn agent_error(
+    message: &'static str,
+    code: AgentErrorCode,
+    retryable: bool,
+    resolution_kind: AgentErrorResolutionKind,
+) -> ClassifiedError {
+    ClassifiedError {
         message,
         code,
-        ownership,
-        Some(detail.to_owned()),
+        ownership: AgentErrorOwnership::UserAgent,
         retryable,
-        feedback_recommended,
-    )
+        feedback_recommended: false,
+        resolution_kind,
+        resolution_target: Some(AgentErrorResolutionTarget::AgentSettings),
+    }
+}
+
+fn agent_session_error(message: &'static str, code: AgentErrorCode) -> ClassifiedError {
+    ClassifiedError {
+        message,
+        code,
+        ownership: AgentErrorOwnership::UserAgent,
+        retryable: true,
+        feedback_recommended: false,
+        resolution_kind: AgentErrorResolutionKind::StartNewSession,
+        resolution_target: Some(AgentErrorResolutionTarget::NewConversation),
+    }
+}
+
+fn provider_error(
+    message: &'static str,
+    code: AgentErrorCode,
+    retryable: bool,
+    resolution_kind: AgentErrorResolutionKind,
+    resolution_target: Option<AgentErrorResolutionTarget>,
+) -> ClassifiedError {
+    ClassifiedError {
+        message,
+        code,
+        ownership: AgentErrorOwnership::UserLlmProvider,
+        retryable,
+        feedback_recommended: false,
+        resolution_kind,
+        resolution_target,
+    }
+}
+
+fn resolution(
+    kind: AgentErrorResolutionKind,
+    target: Option<AgentErrorResolutionTarget>,
+) -> Option<AgentErrorResolution> {
+    Some(AgentErrorResolution::new(kind, target))
 }
 
 fn contains_any(haystack: &str, needles: &[&str]) -> bool {
@@ -439,6 +764,27 @@ fn truncate_chars(value: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aionui_api_types::{AgentErrorResolutionKind, AgentErrorResolutionTarget};
+
+    fn assert_classification(
+        detail: &str,
+        code: AgentErrorCode,
+        ownership: AgentErrorOwnership,
+        resolution: AgentErrorResolutionKind,
+    ) {
+        let err = AgentSendError::from_app_error(AppError::BadGateway(detail.into()));
+        assert_eq!(err.code(), Some(code));
+        assert_eq!(err.ownership(), Some(ownership));
+        assert_eq!(err.stream_error().resolution.map(|value| value.kind), Some(resolution));
+    }
+
+    fn assert_resolution_target(detail: &str, target: AgentErrorResolutionTarget) {
+        let err = AgentSendError::from_app_error(AppError::BadGateway(detail.into()));
+        assert_eq!(
+            err.stream_error().resolution.and_then(|value| value.target),
+            Some(target)
+        );
+    }
 
     #[test]
     fn classifies_provider_auth_failure() {
@@ -491,6 +837,158 @@ mod tests {
         assert_eq!(
             redact_url_queries("GET https://example.com/v1?api_key=sk-secret"),
             "GET https://example.com/v1?<redacted>"
+        );
+    }
+
+    #[test]
+    fn classifies_agent_lifecycle_before_bad_gateway_wrapper() {
+        assert_classification(
+            "Bad gateway: Agent process exited before initialize handshake completed (exit code 1)",
+            AgentErrorCode::UserAgentHandshakeFailed,
+            AgentErrorOwnership::UserAgent,
+            AgentErrorResolutionKind::CheckAgentInstallation,
+        );
+        assert_classification(
+            "Bad gateway: Initialize handshake timed out after 30s",
+            AgentErrorCode::UserAgentHandshakeTimeout,
+            AgentErrorOwnership::UserAgent,
+            AgentErrorResolutionKind::ReconnectAgent,
+        );
+    }
+
+    #[test]
+    fn classifies_agent_protocol_and_session_failures() {
+        assert_classification(
+            "Connection error: protocol mismatch Connection error: Max reconnect attempts (10) reached",
+            AgentErrorCode::UserAgentProtocolMismatch,
+            AgentErrorOwnership::UserAgent,
+            AgentErrorResolutionKind::CheckAgentVersion,
+        );
+        assert_classification(
+            "Agent internal error (code -32603) {\"details\":\"Session not found\"}",
+            AgentErrorCode::UserAgentSessionNotFound,
+            AgentErrorOwnership::UserAgent,
+            AgentErrorResolutionKind::StartNewSession,
+        );
+        assert_classification(
+            "Bad gateway: Agent internal error (code -32603) {\"details\":\"No previous sessions found for this project\"}",
+            AgentErrorCode::UserAgentNoPreviousSession,
+            AgentErrorOwnership::UserAgent,
+            AgentErrorResolutionKind::StartNewSession,
+        );
+    }
+
+    #[test]
+    fn classifies_agent_setup_failures() {
+        assert_classification(
+            "CLI found but ACP initialization failed.",
+            AgentErrorCode::UserAgentAcpInitFailed,
+            AgentErrorOwnership::UserAgent,
+            AgentErrorResolutionKind::CheckAgentInstallation,
+        );
+        assert_classification(
+            "找到 CLI 但 ACP 初始化失败",
+            AgentErrorCode::UserAgentAcpInitFailed,
+            AgentErrorOwnership::UserAgent,
+            AgentErrorResolutionKind::CheckAgentInstallation,
+        );
+        assert_classification(
+            "filesystem: Command not found: npx",
+            AgentErrorCode::UserAgentCommandNotFound,
+            AgentErrorOwnership::UserAgent,
+            AgentErrorResolutionKind::CheckLocalCommand,
+        );
+        assert_classification(
+            "Agent internal error (code -32603) {\"message\":\"Missing environment variable: 'OMLX API KEY'\"}",
+            AgentErrorCode::UserAgentMissingEnv,
+            AgentErrorOwnership::UserAgent,
+            AgentErrorResolutionKind::CheckAgentInstallation,
+        );
+    }
+
+    #[test]
+    fn classifies_provider_billing_auth_and_rate_limit() {
+        assert_classification(
+            "Aionrs agent error: Provider error: API error 402: {\"error\":{\"message\":\"Insufficient Balance\"}}",
+            AgentErrorCode::UserLlmProviderBillingRequired,
+            AgentErrorOwnership::UserLlmProvider,
+            AgentErrorResolutionKind::CheckProviderBilling,
+        );
+        assert_classification(
+            "Aionrs agent error: Provider error: API error 401: invalid x-api-key",
+            AgentErrorCode::UserLlmProviderAuthFailed,
+            AgentErrorOwnership::UserLlmProvider,
+            AgentErrorResolutionKind::CheckProviderCredentials,
+        );
+        assert_classification(
+            "Aionrs agent error: Provider error: Rate limited, retry after 5000ms",
+            AgentErrorCode::UserLlmProviderRateLimited,
+            AgentErrorOwnership::UserLlmProvider,
+            AgentErrorResolutionKind::Retry,
+        );
+    }
+
+    #[test]
+    fn classifies_provider_request_model_and_context_errors() {
+        assert_classification(
+            "API error 400: Function calling is not enabled for this model",
+            AgentErrorCode::UserLlmProviderUnsupportedModel,
+            AgentErrorOwnership::UserLlmProvider,
+            AgentErrorResolutionKind::ChangeModel,
+        );
+        assert_classification(
+            "API error 400: invalid params, context window exceeds limit",
+            AgentErrorCode::UserLlmProviderContextTooLarge,
+            AgentErrorOwnership::UserLlmProvider,
+            AgentErrorResolutionKind::ReduceContext,
+        );
+        assert_classification(
+            "API error 400: Invalid schema for function 'aion_list_models': None is not of type 'array'",
+            AgentErrorCode::UserLlmProviderInvalidToolSchema,
+            AgentErrorOwnership::UserLlmProvider,
+            AgentErrorResolutionKind::Retry,
+        );
+    }
+
+    #[test]
+    fn classifies_provider_endpoint_network_timeout_and_empty_response() {
+        assert_classification(
+            "API error 404: {\"status\":404,\"error\":\"Not Found\",\"path\":\"/v4/v1/chat/completions\"}",
+            AgentErrorCode::UserLlmProviderEndpointNotFound,
+            AgentErrorOwnership::UserLlmProvider,
+            AgentErrorResolutionKind::CheckProviderBaseUrl,
+        );
+        assert_resolution_target(
+            "API error 404: {\"status\":404,\"error\":\"Not Found\",\"path\":\"/v4/v1/chat/completions\"}",
+            AgentErrorResolutionTarget::ProviderSettings,
+        );
+        assert_classification(
+            "Aionrs agent error: API error: Connection error: error decoding response body",
+            AgentErrorCode::UserLlmProviderNetworkError,
+            AgentErrorOwnership::UserLlmProvider,
+            AgentErrorResolutionKind::CheckProviderBaseUrl,
+        );
+        assert_classification(
+            "Aionrs agent error: API error: error sending request for url",
+            AgentErrorCode::UserLlmProviderNetworkError,
+            AgentErrorOwnership::UserLlmProvider,
+            AgentErrorResolutionKind::CheckProviderBaseUrl,
+        );
+        assert_classification(
+            "Autocompact failed: Empty response from LLM",
+            AgentErrorCode::UserLlmProviderEmptyResponse,
+            AgentErrorOwnership::UserLlmProvider,
+            AgentErrorResolutionKind::Retry,
+        );
+    }
+
+    #[test]
+    fn classifies_aionui_conversation_busy_after_agent_and_provider_checks() {
+        assert_classification(
+            "Conflict: Conversation is already processing a message",
+            AgentErrorCode::AionuiConversationBusy,
+            AgentErrorOwnership::Aionui,
+            AgentErrorResolutionKind::WaitForCurrentResponse,
         );
     }
 }
