@@ -134,6 +134,7 @@ impl StreamRelay {
         let mut first_agent_event_logged = false;
         let mut first_visible_output_logged = false;
         let mut send_error_done = send_error_rx.is_none();
+        let mut error_finalized = false;
 
         loop {
             let recv_result = if send_error_done {
@@ -145,6 +146,14 @@ impl StreamRelay {
                         send_error_done = true;
                         match send_error {
                             Ok(send_error) => {
+                                if error_finalized {
+                                    debug!(
+                                        code = ?send_error.code(),
+                                        ownership = ?send_error.ownership(),
+                                        "Skipping send error injection because a stream error was already handled"
+                                    );
+                                    continue;
+                                }
                                 warn!(
                                     code = ?send_error.code(),
                                     ownership = ?send_error.ownership(),
@@ -223,6 +232,12 @@ impl StreamRelay {
                             }
                         }
                         AgentStreamEvent::Finish(_) | AgentStreamEvent::Error(_) => {
+                            if matches!(event, AgentStreamEvent::Error(_))
+                                && std::mem::replace(&mut error_finalized, true)
+                            {
+                                debug!("Skipping duplicate stream error event");
+                                continue;
+                            }
                             let elapsed_ms = now_ms() - started_at;
                             let event_type = if matches!(event, AgentStreamEvent::Finish(_)) {
                                 "Finish"
@@ -1109,6 +1124,8 @@ mod tests {
         assert_eq!(content["error"]["retryable"], false);
         assert_eq!(content["error"]["feedback_recommended"], false);
         assert_eq!(content["error"]["detail"], "provider returned 401 invalid api key");
+        assert_eq!(content["error"]["resolution"]["kind"], "check_provider_credentials");
+        assert_eq!(content["error"]["resolution"]["target"], "provider_settings");
 
         let mut ws_events = vec![];
         while let Ok(evt) = ws_rx.try_recv() {
@@ -1122,6 +1139,45 @@ mod tests {
         assert_eq!(error_event.data["data"]["code"], "USER_LLM_PROVIDER_AUTH_FAILED");
         assert_eq!(error_event.data["data"]["ownership"], "user_llm_provider");
         assert!(ws_events.iter().any(|evt| evt.name == "turn.completed"));
+    }
+
+    #[tokio::test]
+    async fn run_send_error_does_not_duplicate_existing_stream_error() {
+        let repo = Arc::new(RecordingRepo::new());
+        let bus = Arc::new(aionui_realtime::BroadcastEventBus::new(64));
+        let (tx, _) = broadcast::channel(64);
+
+        let relay = StreamRelay::new(
+            "conv-1".into(),
+            "asst-1".into(),
+            "user-1".into(),
+            repo.clone(),
+            bus.clone(),
+            None,
+        );
+
+        let rx = tx.subscribe();
+        let send_error = AgentSendError::from_app_error(aionui_common::AppError::BadGateway(
+            "provider returned 401 invalid api key".into(),
+        ));
+        tx.send(AgentStreamEvent::Error(send_error.stream_error().clone()))
+            .unwrap();
+        let (send_error_tx, send_error_rx) = tokio::sync::oneshot::channel();
+        send_error_tx.send(send_error).unwrap();
+
+        let outcome = relay.consume_with_send_error(rx, send_error_rx).await;
+        assert!(outcome.system_responses.is_empty());
+
+        let inserts = repo.take_inserts();
+        let error_tips_count = inserts
+            .iter()
+            .filter(|msg| {
+                msg.r#type == "tips"
+                    && serde_json::from_str::<serde_json::Value>(&msg.content)
+                        .is_ok_and(|content| content["type"] == "error")
+            })
+            .count();
+        assert_eq!(error_tips_count, 1);
     }
 
     #[tokio::test]
