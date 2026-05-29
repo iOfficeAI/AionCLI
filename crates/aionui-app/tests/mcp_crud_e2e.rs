@@ -69,7 +69,7 @@ async fn create_stdio_server() {
     assert!(!data["enabled"].as_bool().unwrap());
     assert_eq!(data["transport"]["type"], "stdio");
     assert_eq!(data["transport"]["command"], "npx");
-    assert_eq!(data["status"], "disconnected");
+    assert_eq!(data["last_test_status"], "disconnected");
     assert!(!data["builtin"].as_bool().unwrap());
 }
 
@@ -319,7 +319,7 @@ async fn list_servers_empty() {
 // ===========================================================================
 
 #[tokio::test]
-async fn update_server_name() {
+async fn update_server_name_is_rejected() {
     let (mut app, services) = build_app().await;
     let (token, csrf) = setup_and_login(&mut app, &services, "admin", "StrongP@ss1").await;
 
@@ -329,7 +329,7 @@ async fn update_server_name() {
     let json = body_json(resp).await;
     let id = json["data"]["id"].as_str().unwrap().to_string();
 
-    // Update name
+    // Renaming an MCP is not allowed because historical conversations reference its name.
     let req = json_with_token(
         "PUT",
         &format!("/api/mcp/servers/{id}"),
@@ -338,9 +338,9 @@ async fn update_server_name() {
         &csrf,
     );
     let resp = app.clone().oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let json = body_json(resp).await;
-    assert_eq!(json["data"]["name"], "new-name");
+    assert_eq!(json["success"], false);
 }
 
 #[tokio::test]
@@ -421,7 +421,7 @@ async fn update_nonexistent_server_returns_404() {
 }
 
 #[tokio::test]
-async fn update_name_to_existing_returns_409() {
+async fn update_name_to_existing_is_rejected() {
     let (mut app, services) = build_app().await;
     let (token, csrf) = setup_and_login(&mut app, &services, "admin", "StrongP@ss1").await;
 
@@ -434,7 +434,7 @@ async fn update_name_to_existing_returns_409() {
     let json = body_json(resp).await;
     let b_id = json["data"]["id"].as_str().unwrap().to_string();
 
-    // Rename B to A — should conflict
+    // Renaming is rejected before name conflict handling.
     let req = json_with_token(
         "PUT",
         &format!("/api/mcp/servers/{b_id}"),
@@ -443,7 +443,7 @@ async fn update_name_to_existing_returns_409() {
         &csrf,
     );
     let resp = app.clone().oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
 // ===========================================================================
