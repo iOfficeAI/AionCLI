@@ -569,35 +569,35 @@ fn log_client_request(method: &str, body: &str) {
 /// `session/prompt` reply is large; stays at debug.
 fn log_agent_response(method: &str, body: &str) {
     if method == "session/prompt" {
-        debug!(direction = "agent_response", method, body, "[ACP] <-");
+        debug!(direction = "agent_response", method, body, "[ACP] <- ${method}");
     } else {
-        info!(direction = "agent_response", method, body, "[ACP] <-");
+        info!(direction = "agent_response", method, body, "[ACP] <- ${method}");
     }
 }
 
 /// Log a fire-and-forget notification from AionUi to the agent.
 fn log_client_notify(method: &str, body: &str) {
-    info!(direction = "client_notify", method, body, "[ACP] ->");
+    info!(direction = "client_notify", method, body, "[ACP] -> ${method}");
 }
 
 /// Log an inbound notification from the agent.
 /// `session/update` requires per-kind filtering — streaming chunks stay at debug.
 fn log_agent_notify(method: &str, body: &str) {
     if method == "session/update" && is_streaming_chunk(body) {
-        debug!(direction = "agent_notify", method, body, "[ACP] <-");
+        debug!(direction = "agent_notify", method, body, "[ACP] <- ${method}");
     } else {
-        info!(direction = "agent_notify", method, body, "[ACP] <-");
+        info!(direction = "agent_notify", method, body, "[ACP] <- ${method}");
     }
 }
 
 /// Log an inbound request from the agent (e.g. session/request_permission).
 fn log_agent_request(method: &str, body: &str) {
-    info!(direction = "agent_request", method, body, "[ACP] <-");
+    info!(direction = "agent_request", method, body, "[ACP] <- ${method}");
 }
 
 /// Log a JSON-RPC response from AionUi back to the agent.
 fn log_client_response(method: &str, body: &str) {
-    info!(direction = "client_response", method, body, "[ACP] ->");
+    info!(direction = "client_response", method, body, "[ACP] -> ${method}");
 }
 
 impl std::fmt::Debug for AcpProtocol {

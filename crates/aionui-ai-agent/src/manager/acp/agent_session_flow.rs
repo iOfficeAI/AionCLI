@@ -7,7 +7,9 @@ use crate::protocol::events::{
 use crate::shared_kernel::SessionId as DomainSessionId;
 use crate::types::SendMessageData;
 use agent_client_protocol::schema::{ContentBlock, LoadSessionRequest, PromptRequest, SessionId, StopReason};
-use aionui_api_types::{AgentErrorCode, AgentErrorOwnership};
+use aionui_api_types::{
+    AgentErrorCode, AgentErrorOwnership, AgentErrorResolution, AgentErrorResolutionKind, AgentErrorResolutionTarget,
+};
 use aionui_common::AppError;
 use serde_json::Value;
 use tokio::sync::broadcast::error::TryRecvError;
@@ -260,17 +262,8 @@ impl AcpAgentManager {
         // user already initiated the cancel and doesn't need a second
         // notification.
         if !matches!(prompt_response.stop_reason, StopReason::Cancelled) && is_empty_turn(&mut probe_rx) {
-            self.runtime.emit(AgentStreamEvent::Error(ErrorEventData::classified(
-                // TODO(i18n): wire to a frontend translation key once a
-                // pattern is established. For now this is the user-facing
-                // English string.
-                empty_finish_diagnostic_message(prompt_response.stop_reason),
-                AgentErrorCode::UnknownUpstreamError,
-                AgentErrorOwnership::UnknownUpstream,
-                Some("Agent completed the turn without producing visible output.".into()),
-                true,
-                true,
-                None,
+            self.runtime.emit(AgentStreamEvent::Error(empty_finish_diagnostic_error(
+                prompt_response.stop_reason,
             )));
         }
 
@@ -380,6 +373,24 @@ fn event_is_user_visible_output(event: &AgentStreamEvent) -> bool {
             | AgentStreamEvent::Plan(_)
             | AgentStreamEvent::Permission(_)
             | AgentStreamEvent::AcpPermission(_)
+    )
+}
+
+fn empty_finish_diagnostic_error(stop_reason: StopReason) -> ErrorEventData {
+    ErrorEventData::classified(
+        // TODO(i18n): wire to a frontend translation key once a
+        // pattern is established. For now this is the user-facing
+        // English string.
+        empty_finish_diagnostic_message(stop_reason),
+        AgentErrorCode::UnknownUpstreamError,
+        AgentErrorOwnership::UnknownUpstream,
+        Some("Agent completed the turn without producing visible output.".into()),
+        true,
+        true,
+        Some(AgentErrorResolution::new(
+            AgentErrorResolutionKind::SendFeedback,
+            Some(AgentErrorResolutionTarget::Feedback),
+        )),
     )
 }
 
@@ -586,6 +597,7 @@ mod tests {
         ToolCallStatus,
     };
     use agent_client_protocol::schema::StopReason;
+    use aionui_api_types::{AgentErrorResolutionKind, AgentErrorResolutionTarget};
     use tokio::sync::broadcast;
 
     /// Lifecycle-only events (`Start`/`Finish`) must NOT count as
@@ -676,5 +688,16 @@ mod tests {
 
         let refusal = super::empty_finish_diagnostic_message(StopReason::Refusal);
         assert!(refusal.to_lowercase().contains("refused"));
+    }
+
+    #[test]
+    fn empty_finish_diagnostic_error_has_feedback_resolution() {
+        let error = super::empty_finish_diagnostic_error(StopReason::EndTurn);
+
+        let resolution = error
+            .resolution
+            .expect("empty-finish classified errors must include a resolution");
+        assert_eq!(resolution.kind, AgentErrorResolutionKind::SendFeedback);
+        assert_eq!(resolution.target, Some(AgentErrorResolutionTarget::Feedback));
     }
 }
