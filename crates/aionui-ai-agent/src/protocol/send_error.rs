@@ -135,7 +135,10 @@ impl AgentSendError {
                 Some(detail),
                 false,
                 false,
-                resolution(AgentErrorResolutionKind::Retry, None),
+                resolution(
+                    AgentErrorResolutionKind::SendFeedback,
+                    Some(AgentErrorResolutionTarget::Feedback),
+                ),
             ),
             AppError::Timeout(_) => Self::new(
                 "The model provider did not respond in time",
@@ -285,7 +288,10 @@ impl From<AcpError> for AgentSendError {
                 Some(detail),
                 false,
                 false,
-                resolution(AgentErrorResolutionKind::Retry, None),
+                resolution(
+                    AgentErrorResolutionKind::SendFeedback,
+                    Some(AgentErrorResolutionTarget::Feedback),
+                ),
             ),
             AcpError::NotConnected => Self::new(
                 "AionUI lost its Agent protocol connection",
@@ -398,14 +404,40 @@ fn classify_provider_api(lower: &str) -> Option<ClassifiedError> {
             Some(AgentErrorResolutionTarget::ProviderSettings),
         ));
     }
+    if contains_any(lower, &["403", "forbidden", "permission denied"]) {
+        return Some(provider_error(
+            "The model provider denied access to the request",
+            AgentErrorCode::UserLlmProviderPermissionDenied,
+            false,
+            AgentErrorResolutionKind::CheckProviderCredentials,
+            Some(AgentErrorResolutionTarget::ProviderSettings),
+        ));
+    }
+    if contains_any(
+        lower,
+        &[
+            "401",
+            "unauthorized",
+            "invalid api key",
+            "invalid_api_key",
+            "invalid x-api-key",
+            "invalid authentication credentials",
+        ],
+    ) {
+        return Some(provider_error(
+            "The model provider rejected the request",
+            AgentErrorCode::UserLlmProviderAuthFailed,
+            false,
+            AgentErrorResolutionKind::CheckProviderCredentials,
+            Some(AgentErrorResolutionTarget::ProviderSettings),
+        ));
+    }
     if contains_any(
         lower,
         &[
             "signable request",
             "canonical request",
             "signature",
-            "credential",
-            "credentials",
             "access key",
             "secret key",
             "base url",
@@ -417,26 +449,6 @@ fn classify_provider_api(lower: &str) -> Option<ClassifiedError> {
             AgentErrorCode::UserLlmProviderConfigError,
             false,
             AgentErrorResolutionKind::CheckProviderBaseUrl,
-            Some(AgentErrorResolutionTarget::ProviderSettings),
-        ));
-    }
-    if contains_any(
-        lower,
-        &[
-            "401",
-            "403",
-            "unauthorized",
-            "forbidden",
-            "invalid api key",
-            "invalid_api_key",
-            "invalid x-api-key",
-        ],
-    ) {
-        return Some(provider_error(
-            "The model provider rejected the request",
-            AgentErrorCode::UserLlmProviderAuthFailed,
-            false,
-            AgentErrorResolutionKind::CheckProviderCredentials,
             Some(AgentErrorResolutionTarget::ProviderSettings),
         ));
     }
@@ -491,17 +503,6 @@ fn classify_provider_api(lower: &str) -> Option<ClassifiedError> {
             None,
         ));
     }
-    if (lower.contains("404") || lower.contains("not found"))
-        && contains_any(lower, &["/chat/completions", "\"path\"", "endpoint", "base url"])
-    {
-        return Some(provider_error(
-            "The model provider endpoint was not found",
-            AgentErrorCode::UserLlmProviderEndpointNotFound,
-            false,
-            AgentErrorResolutionKind::CheckProviderBaseUrl,
-            Some(AgentErrorResolutionTarget::ProviderSettings),
-        ));
-    }
     if contains_any(
         lower,
         &[
@@ -517,6 +518,17 @@ fn classify_provider_api(lower: &str) -> Option<ClassifiedError> {
             AgentErrorCode::UserLlmProviderModelNotFound,
             false,
             AgentErrorResolutionKind::ChangeModel,
+            Some(AgentErrorResolutionTarget::ProviderSettings),
+        ));
+    }
+    if (lower.contains("404") || lower.contains("not found"))
+        && contains_any(lower, &["/chat/completions", "\"path\"", "endpoint", "base url"])
+    {
+        return Some(provider_error(
+            "The model provider endpoint was not found",
+            AgentErrorCode::UserLlmProviderEndpointNotFound,
+            false,
+            AgentErrorResolutionKind::CheckProviderBaseUrl,
             Some(AgentErrorResolutionTarget::ProviderSettings),
         ));
     }
@@ -571,6 +583,23 @@ fn classify_provider_api(lower: &str) -> Option<ClassifiedError> {
             true,
             AgentErrorResolutionKind::CheckProviderBaseUrl,
             Some(AgentErrorResolutionTarget::ProviderSettings),
+        ));
+    }
+    if contains_any(
+        lower,
+        &[
+            "invalid request",
+            "invalid assistant message",
+            "content is required",
+            "invalid input",
+        ],
+    ) {
+        return Some(provider_error(
+            "The model provider rejected the request",
+            AgentErrorCode::UserLlmProviderInvalidRequest,
+            false,
+            AgentErrorResolutionKind::SendFeedback,
+            Some(AgentErrorResolutionTarget::Feedback),
         ));
     }
     if contains_any(lower, &["500", "502", "503", "bad gateway", "service unavailable"]) {
@@ -929,6 +958,32 @@ mod tests {
     }
 
     #[test]
+    fn classifies_provider_auth_credentials_before_config() {
+        assert_classification(
+            "API error 401: Invalid authentication credentials",
+            AgentErrorCode::UserLlmProviderAuthFailed,
+            AgentErrorOwnership::UserLlmProvider,
+            AgentErrorResolutionKind::CheckProviderCredentials,
+        );
+    }
+
+    #[test]
+    fn classifies_provider_permission_denied_separately_from_auth() {
+        for detail in [
+            "API error 403: forbidden",
+            "Provider error: permission denied",
+            "API error 403: You do not have permission to access this resource",
+        ] {
+            assert_classification(
+                detail,
+                AgentErrorCode::UserLlmProviderPermissionDenied,
+                AgentErrorOwnership::UserLlmProvider,
+                AgentErrorResolutionKind::CheckProviderCredentials,
+            );
+        }
+    }
+
+    #[test]
     fn classifies_provider_request_model_and_context_errors() {
         assert_classification(
             "API error 400: Function calling is not enabled for this model",
@@ -947,6 +1002,56 @@ mod tests {
             AgentErrorCode::UserLlmProviderInvalidToolSchema,
             AgentErrorOwnership::UserLlmProvider,
             AgentErrorResolutionKind::Retry,
+        );
+    }
+
+    #[test]
+    fn classifies_model_not_found_before_endpoint_404() {
+        assert_classification(
+            "API error 404: model not found for path /v1/chat/completions",
+            AgentErrorCode::UserLlmProviderModelNotFound,
+            AgentErrorOwnership::UserLlmProvider,
+            AgentErrorResolutionKind::ChangeModel,
+        );
+    }
+
+    #[test]
+    fn classifies_generic_provider_invalid_requests() {
+        for detail in [
+            "API error 400: Invalid request: Invalid input",
+            "API error 400: Invalid assistant message: content or tool calls must be set",
+            "API error 400: content is required",
+        ] {
+            assert_classification(
+                detail,
+                AgentErrorCode::UserLlmProviderInvalidRequest,
+                AgentErrorOwnership::UserLlmProvider,
+                AgentErrorResolutionKind::SendFeedback,
+            );
+            let err = AgentSendError::from_app_error(AppError::BadGateway(detail.into()));
+            assert_eq!(err.stream_error().retryable, Some(false));
+        }
+    }
+
+    #[test]
+    fn non_retryable_agent_invalid_params_do_not_suggest_retry() {
+        let app_err =
+            AgentSendError::from_app_error(AppError::BadRequest("Invalid parameters: malformed request".into()));
+        assert_eq!(app_err.code(), Some(AgentErrorCode::UserAgentInvalidParams));
+        assert_eq!(app_err.stream_error().retryable, Some(false));
+        assert_eq!(
+            app_err.stream_error().resolution.map(|value| value.kind),
+            Some(AgentErrorResolutionKind::SendFeedback)
+        );
+
+        let acp_err = AgentSendError::from(AcpError::InvalidParams {
+            message: "malformed request".into(),
+        });
+        assert_eq!(acp_err.code(), Some(AgentErrorCode::UserAgentInvalidParams));
+        assert_eq!(acp_err.stream_error().retryable, Some(false));
+        assert_eq!(
+            acp_err.stream_error().resolution.map(|value| value.kind),
+            Some(AgentErrorResolutionKind::SendFeedback)
         );
     }
 
