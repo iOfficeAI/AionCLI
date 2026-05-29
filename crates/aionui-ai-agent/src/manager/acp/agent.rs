@@ -7,6 +7,7 @@ use crate::factory::acp_assembler::AcpSessionParams;
 use crate::manager::acp::{
     AcpSession, AcpSessionEvent, ModelIdentityReminderHook, PermissionRouter, SessionNewPreludeHook,
 };
+use crate::manager::process_registry::{register_session_process, unregister_agent_process};
 use crate::protocol::acp::AcpProtocol;
 use crate::protocol::error::{AcpError, CloseReason};
 use crate::protocol::events::{AgentStreamEvent, FinishEventData};
@@ -189,9 +190,22 @@ impl AcpAgentManager {
         ),
         AppError,
     > {
-        let process = CliAgentProcess::spawn_for_sdk(params.command_spec.clone(), &params.data_dir).await?;
+        let process = Arc::new(CliAgentProcess::spawn_for_sdk(params.command_spec.clone(), &params.data_dir).await?);
+        register_session_process(
+            &params.data_dir,
+            Arc::clone(&process),
+            params.conversation_id.clone(),
+            AgentType::Acp,
+            params.metadata.backend.clone(),
+            Some(format!(
+                "{} {}",
+                params.command_spec.command.display(),
+                params.command_spec.args.join(" ")
+            )),
+        )?;
         let (stdin, stdout) = process.take_stdio().await.ok_or_else(|| {
             error!(conversation_id = %params.conversation_id, "Failed to take stdio from CLI process");
+            let _ = unregister_agent_process(&params.data_dir, process.pid());
             AppError::Internal("Failed to take stdio from CLI process".into())
         })?;
 
@@ -222,6 +236,7 @@ impl AcpAgentManager {
                     stderr = %stderr,
                     "Agent process exited before ACP handshake completed"
                 );
+                let _ = unregister_agent_process(&params.data_dir, process.pid());
                 return Err(AppError::from(AcpError::StartupCrash { exit_code, signal, stderr }));
             }
             res = &mut connect_fut => res.map_err(|e| {
@@ -230,6 +245,7 @@ impl AcpAgentManager {
                     error = %ErrorChain(&e),
                     "Failed to establish ACP protocol connection"
                 );
+                let _ = unregister_agent_process(&params.data_dir, process.pid());
                 AppError::from(e)
             })?,
         };
@@ -275,7 +291,7 @@ impl AcpAgentManager {
             params,
             session: RwLock::new(session),
             runtime,
-            process: Arc::new(process),
+            process,
             protocol,
             session_lock: Mutex::new(()),
             permission_router,

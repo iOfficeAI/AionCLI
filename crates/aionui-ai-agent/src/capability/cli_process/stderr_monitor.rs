@@ -4,9 +4,8 @@ use tracing::{debug, error};
 
 /// Force-kill a process by PID, plus any descendants.
 ///
-/// Uses platform-native shell commands so we don't pull in a `libc`/`winapi`
-/// dependency just for this one call site:
-/// * Unix: `kill -9 <pid>`
+/// Uses platform-native shell commands:
+/// * Unix: `kill -9 -<pid>` to target the spawned process group
 /// * Windows: `taskkill /F /T /PID <pid>` (`/T` walks the process tree —
 ///   the ACP CLI typically spawns a node/bun child that must die with it)
 ///
@@ -14,22 +13,21 @@ use tracing::{debug, error};
 pub(super) fn force_kill(pid: u32) -> Result<(), AppError> {
     #[cfg(unix)]
     {
-        let result = std::process::Command::new("kill")
-            .args(["-9", &pid.to_string()])
-            .output();
+        let group_id = format!("-{pid}");
+        let result = std::process::Command::new("kill").args(["-9", &group_id]).output();
 
         match result {
             Ok(output) if output.status.success() => {
-                debug!(pid, "SIGKILL sent successfully");
+                debug!(pid, process_group = %group_id, "SIGKILL sent successfully");
                 Ok(())
             }
             Ok(_output) => {
                 // Non-zero exit likely means process already exited — acceptable
-                debug!(pid, "Process already exited before SIGKILL");
+                debug!(pid, process_group = %group_id, "Process group already exited before SIGKILL");
                 Ok(())
             }
             Err(e) => {
-                error!(pid, error = %e, "Failed to execute kill command");
+                error!(pid, process_group = %group_id, error = %e, "Failed to execute kill command");
                 Err(AppError::Internal(format!("Failed to kill process {pid}: {e}")))
             }
         }

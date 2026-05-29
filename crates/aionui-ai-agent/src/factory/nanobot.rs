@@ -22,6 +22,6 @@ pub(super) async fn build(
         .into_iter()
         .find_map(|m| m.resolved_command)
         .ok_or_else(|| AppError::BadRequest("Nanobot CLI not found in PATH".into()))?;
-    let agent = NanobotAgentManager::new(ctx.conversation_id, ctx.workspace, cli_path).await?;
+    let agent = NanobotAgentManager::new(ctx.conversation_id, ctx.workspace, cli_path, deps.data_dir.clone()).await?;
     Ok(AgentInstance::Nanobot(Arc::new(agent)))
 }

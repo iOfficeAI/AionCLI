@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use aionui_common::{AgentKillReason, ErrorChain};
-use tracing::{debug, info, warn};
+use aionui_common::AgentKillReason;
+use tracing::{debug, info};
 
 use crate::task_manager::IWorkerTaskManager;
 
@@ -65,12 +65,10 @@ fn scan_and_cleanup(manager: &Arc<dyn IWorkerTaskManager>, threshold_ms: i64) {
     info!(count = idle_ids.len(), "Idle scan: cleaning up idle agents");
 
     for id in idle_ids {
-        if let Err(e) = manager.kill(&id, Some(AgentKillReason::IdleTimeout)) {
-            warn!(
-                conversation_id = %id,
-                error = %ErrorChain(&e),
-                "Failed to kill idle agent"
-            );
-        }
+        let manager = Arc::clone(manager);
+        tokio::spawn(async move {
+            info!(conversation_id = %id, "Idle scan: awaiting idle agent shutdown");
+            manager.kill_and_wait(&id, Some(AgentKillReason::IdleTimeout)).await;
+        });
     }
 }

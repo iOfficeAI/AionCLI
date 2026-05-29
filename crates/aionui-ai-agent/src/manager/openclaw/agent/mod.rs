@@ -9,6 +9,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::agent_runtime::AgentRuntime;
 use crate::capability::cli_process::CliAgentProcess;
+use crate::manager::process_registry::register_session_process;
 use crate::protocol::events::AgentStreamEvent;
 use crate::types::SendMessageData;
 use aionui_api_types::OpenClawBuildExtra;
@@ -56,6 +57,7 @@ impl OpenClawAgentManager {
         workspace: String,
         config: OpenClawBuildExtra,
         resume_session_key: Option<String>,
+        data_dir: std::path::PathBuf,
     ) -> Result<Self, AppError> {
         let file_config = load_openclaw_config();
 
@@ -80,8 +82,16 @@ impl OpenClawAgentManager {
 
             if !is_port_listening(host, port).await {
                 let spawn_config = build_spawn_config(cli_path, &workspace, &config.gateway);
-                let process = CliAgentProcess::spawn(spawn_config).await?;
-                let process = Arc::new(process);
+                let command_preview = spawn_config.command.display().to_string();
+                let process = Arc::new(CliAgentProcess::spawn(spawn_config).await?);
+                register_session_process(
+                    &data_dir,
+                    Arc::clone(&process),
+                    conversation_id.clone(),
+                    AgentType::OpenclawGateway,
+                    None,
+                    Some(command_preview),
+                )?;
 
                 wait_for_gateway_ready(host, port).await?;
 

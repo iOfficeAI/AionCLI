@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use aionui_api_types::McpConnectionTestResult;
+use aionui_runtime::Builder as CmdBuilder;
 use serde::Serialize;
-use tokio::process::Command;
 use tokio::sync::mpsc;
 use tracing::debug;
 
@@ -84,14 +84,14 @@ impl McpConnectionTestService {
         args: &[String],
         env: &HashMap<String, String>,
     ) -> McpConnectionTestResult {
-        let mut child = match Command::new(command)
-            .args(args)
+        let mut cmd = CmdBuilder::new(command);
+        cmd.args(args)
             .envs(env.iter())
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-        {
+            .stderr(std::process::Stdio::null());
+
+        let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => return spawn_error_result(command, &e),
         };
@@ -99,7 +99,7 @@ impl McpConnectionTestService {
         let stdin = child.stdin.take().expect("stdin was piped");
         let stdout = child.stdout.take().expect("stdout was piped");
         let result = run_stdio_protocol(stdin, stdout).await;
-        let _ = child.kill().await;
+        kill_child_tree(&mut child).await;
         result
     }
 
@@ -314,6 +314,36 @@ impl McpConnectionTestService {
 struct HttpMcpResponse {
     rpc: JsonRpcResponse,
     session_id: Option<String>,
+}
+
+async fn kill_child_tree(child: &mut tokio::process::Child) {
+    if let Some(pid) = child.id() {
+        #[cfg(unix)]
+        {
+            let process_group = format!("-{pid}");
+            let _ = tokio::process::Command::new("kill")
+                .args(["-KILL", &process_group])
+                .status()
+                .await;
+        }
+
+        #[cfg(windows)]
+        {
+            let _ = tokio::process::Command::new("taskkill")
+                .args(["/PID", &pid.to_string(), "/T", "/F"])
+                .status()
+                .await;
+        }
+
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = child.kill().await;
+        }
+    } else {
+        let _ = child.kill().await;
+    }
+
+    let _ = child.wait().await;
 }
 
 #[cfg(test)]

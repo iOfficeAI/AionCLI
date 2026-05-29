@@ -73,6 +73,7 @@ impl Builder {
     pub fn new<S: AsRef<OsStr>>(program: S) -> Self {
         let mut inner = Command::new(resolve_program(program.as_ref()));
         inner.kill_on_drop(true);
+        configure_platform_spawn(&mut inner);
         strip_pollution(&mut inner);
         Self {
             inner,
@@ -96,6 +97,7 @@ impl Builder {
             .stderr(Stdio::piped())
             .env("NO_COLOR", "1")
             .env("TERM", "dumb");
+        configure_platform_spawn(&mut inner);
         strip_pollution(&mut inner);
         Self {
             inner,
@@ -178,6 +180,16 @@ fn strip_pollution(cmd: &mut Command) {
         .env_remove("NODE_DEBUG")
         .env_remove("CLAUDECODE");
 }
+
+#[cfg(unix)]
+fn configure_platform_spawn(cmd: &mut Command) {
+    // Start each child in its own process group so explicit teardown can
+    // kill the whole subtree (CLI + MCP descendants) in one shot.
+    cmd.process_group(0);
+}
+
+#[cfg(not(unix))]
+fn configure_platform_spawn(_cmd: &mut Command) {}
 
 /// Resolve `program` through `resolve_command_path` so callers don't have
 /// to. If the input already contains a path separator (relative or

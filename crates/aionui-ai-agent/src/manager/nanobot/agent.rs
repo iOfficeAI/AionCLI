@@ -10,6 +10,7 @@ use aionui_common::CommandSpec;
 
 use crate::agent_runtime::AgentRuntime;
 use crate::capability::cli_process::CliAgentProcess;
+use crate::manager::process_registry::register_session_process;
 use crate::protocol::events::AgentStreamEvent;
 use crate::types::SendMessageData;
 use std::path::PathBuf;
@@ -38,9 +39,23 @@ pub struct NanobotAgentManager {
 
 impl NanobotAgentManager {
     /// Create a new Nanobot agent by spawning the CLI subprocess.
-    pub async fn new(conversation_id: String, workspace: String, cli_path: PathBuf) -> Result<Self, AppError> {
+    pub async fn new(
+        conversation_id: String,
+        workspace: String,
+        cli_path: PathBuf,
+        data_dir: PathBuf,
+    ) -> Result<Self, AppError> {
         let spawn_config = Self::build_spawn_config(cli_path, &workspace);
-        let process = CliAgentProcess::spawn(spawn_config).await?;
+        let command_preview = spawn_config.command.display().to_string();
+        let process = Arc::new(CliAgentProcess::spawn(spawn_config).await?);
+        register_session_process(
+            &data_dir,
+            Arc::clone(&process),
+            conversation_id.clone(),
+            AgentType::Nanobot,
+            None,
+            Some(command_preview),
+        )?;
 
         let raw_rx = process
             .take_initial_receiver()
@@ -49,7 +64,7 @@ impl NanobotAgentManager {
 
         Ok(Self {
             runtime,
-            process: Arc::new(process),
+            process,
             state: RwLock::new(NanobotState { has_messages: false }),
             raw_rx: Mutex::new(Some(raw_rx)),
         })
