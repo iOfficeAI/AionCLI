@@ -57,9 +57,10 @@ pub(crate) fn register_session_process(
     command_preview: Option<String>,
 ) -> Result<(), AppError> {
     let pid = process.pid();
+    let process_group_id = process.process_group_id();
     let entry = RegisteredAgentProcess {
         pid,
-        process_group_id: process_group_id(pid),
+        process_group_id,
         conversation_id: conversation_id.into(),
         agent_type: agent_type.serde_name().to_owned(),
         backend,
@@ -76,7 +77,7 @@ pub(crate) fn register_session_process(
     let data_dir = data_dir.to_path_buf();
     tokio::spawn(async move {
         let _ = process.wait_for_exit().await;
-        wait_for_process_tree_exit(pid, process_group_id(pid)).await;
+        wait_for_process_tree_exit(pid, process_group_id).await;
         if let Err(e) = unregister_agent_process(&data_dir, pid) {
             warn!(
                 pid,
@@ -163,16 +164,6 @@ fn is_registered_process_tree_alive(pid: u32, process_group_id: Option<u32>) -> 
         .filter(|group_id| *group_id > 1)
         .is_some_and(is_unix_process_group_alive)
         || is_unix_process_alive(pid)
-}
-
-#[cfg(unix)]
-fn process_group_id(pid: u32) -> Option<u32> {
-    Some(pid)
-}
-
-#[cfg(not(unix))]
-fn process_group_id(_pid: u32) -> Option<u32> {
-    None
 }
 
 #[cfg(unix)]

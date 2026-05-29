@@ -10,7 +10,7 @@ use tracing::{debug, error};
 ///   the ACP CLI typically spawns a node/bun child that must die with it)
 ///
 /// If the process has already exited, this is a no-op.
-pub(super) fn force_kill(pid: u32) -> Result<(), AppError> {
+pub(super) fn force_kill(pid: u32, process_group_id: Option<u32>) -> Result<(), AppError> {
     #[cfg(unix)]
     {
         use std::io;
@@ -34,34 +34,30 @@ pub(super) fn force_kill(pid: u32) -> Result<(), AppError> {
             }
         }
 
-        let pgid = unsafe { libc::getpgid(pid as i32) };
-        if pgid == -1 {
-            let err = io::Error::last_os_error();
-            if err.raw_os_error() == Some(libc::ESRCH) {
-                debug!(pid, "Process already exited before resolving process group");
+        if let Some(group_id) = process_group_id.filter(|group_id| *group_id > 1) {
+            let rc = unsafe { libc::kill(-(group_id as i32), libc::SIGKILL) };
+            if rc == 0 {
+                debug!(pid, process_group = group_id, "SIGKILL sent successfully");
                 return Ok(());
             }
 
-            error!(pid, error = %err, "Failed to resolve process group");
-            return kill_pid(pid);
-        }
-
-        let rc = unsafe { libc::kill(-pgid, libc::SIGKILL) };
-        if rc == 0 {
-            debug!(pid, process_group = pgid, "SIGKILL sent successfully");
-            Ok(())
-        } else {
             let err = io::Error::last_os_error();
             if err.raw_os_error() == Some(libc::ESRCH) {
-                debug!(pid, process_group = pgid, "Process group already exited before SIGKILL");
-                kill_pid(pid)
-            } else {
-                error!(pid, process_group = pgid, error = %err, "Failed to send SIGKILL to process group");
-                Err(AppError::Internal(format!(
-                    "Failed to kill process group {pgid}: {err}"
-                )))
+                debug!(
+                    pid,
+                    process_group = group_id,
+                    "Process group already exited before SIGKILL"
+                );
+                return kill_pid(pid);
             }
+
+            error!(pid, process_group = group_id, error = %err, "Failed to send SIGKILL to process group");
+            return Err(AppError::Internal(format!(
+                "Failed to kill process group {group_id}: {err}"
+            )));
         }
+
+        kill_pid(pid)
     }
     #[cfg(windows)]
     {
@@ -152,7 +148,7 @@ mod force_kill_tests {
         let mut child = spawn_blocker();
         let pid = child.id();
 
-        force_kill(pid).expect("force_kill should succeed for live pid");
+        force_kill(pid, Some(pid)).expect("force_kill should succeed for live pid");
 
         assert!(
             wait_for_exit(&mut child, Duration::from_secs(5)),
@@ -172,7 +168,78 @@ mod force_kill_tests {
         // expectation is "kill returns success when nothing matches" — both the
         // unix `kill` non-zero exit and Windows `taskkill` rc=128 are mapped to
         // Ok in `force_kill`, so this should not produce an error.
-        force_kill(pid).expect("force_kill on dead pid must not error");
+        force_kill(pid, Some(pid)).expect("force_kill on dead pid must not error");
+    }
+
+    #[cfg(unix)]
+    fn wait_for_pid_exit(pid: u32, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if !is_pid_alive(pid) {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    #[cfg(unix)]
+    fn is_pid_alive(pid: u32) -> bool {
+        let result = unsafe { libc::kill(pid as i32, 0) };
+        if result == 0 {
+            return true;
+        }
+        !matches!(std::io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn force_kill_uses_cached_group_when_leader_has_exited() {
+        use std::fs;
+        use std::process::Stdio;
+
+        let marker = tempfile::NamedTempFile::new().unwrap();
+        let marker_path = marker.path().to_string_lossy().into_owned();
+
+        let mut command = Command::new("sh");
+        command
+            .args([
+                "-c",
+                "sleep 60 & child=$!; printf '%s' \"$child\" > \"$1\"; exit 0",
+                "cached-group-cleanup",
+                marker_path.as_str(),
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0);
+
+        let mut leader = command.spawn().expect("spawn shell with background child");
+        let leader_pid = leader.id();
+
+        assert!(
+            wait_for_exit(&mut leader, Duration::from_secs(5)),
+            "leader pid={leader_pid} should exit promptly",
+        );
+
+        let child_pid: u32 = fs::read_to_string(marker.path())
+            .expect("background child pid marker should exist")
+            .trim()
+            .parse()
+            .expect("background child pid should be numeric");
+
+        assert!(
+            is_pid_alive(child_pid),
+            "background child pid={child_pid} should still be alive"
+        );
+
+        force_kill(leader_pid, Some(leader_pid)).expect("force_kill should use cached process group id");
+
+        assert!(
+            wait_for_pid_exit(child_pid, Duration::from_secs(5)),
+            "background child pid={child_pid} should exit after group kill",
+        );
     }
 }
 

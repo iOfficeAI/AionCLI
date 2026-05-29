@@ -7,7 +7,7 @@ use tokio::process::Child;
 use tokio::sync::{Mutex, broadcast, watch};
 use tracing::{debug, error, info, warn};
 
-use super::{CliAgentProcess, EVENT_CHANNEL_CAPACITY, STDERR_BUFFER_MAX};
+use super::{CliAgentProcess, EVENT_CHANNEL_CAPACITY, STDERR_BUFFER_MAX, tracked_process_group_id};
 
 impl CliAgentProcess {
     /// Spawn a new CLI subprocess in **SDK mode**.
@@ -107,6 +107,7 @@ impl CliAgentProcess {
             stdin: Mutex::new(Some(stdin)),
             stdout: Mutex::new(Some(stdout)),
             pid,
+            process_group_id: tracked_process_group_id(pid),
             event_tx,
             exit_rx,
             initial_rx: std::sync::Mutex::new(None),

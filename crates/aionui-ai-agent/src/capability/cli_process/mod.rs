@@ -43,6 +43,9 @@ pub struct CliAgentProcess {
     stdout: Mutex<Option<ChildStdout>>,
     /// OS-level process ID.
     pid: u32,
+    /// Process group ID captured at spawn time so teardown can still target
+    /// the whole tree after the direct child exits.
+    process_group_id: Option<u32>,
     /// Broadcast sender for parsed stdout events (legacy mode only).
     #[allow(dead_code)] // Part of the complete CliProcess API; used in legacy mode via subscribe()
     event_tx: broadcast::Sender<serde_json::Value>,
@@ -156,7 +159,7 @@ impl CliAgentProcess {
 
         // Force kill
         warn!(pid = self.pid, "Grace period expired, sending SIGKILL");
-        force_kill(self.pid)?;
+        force_kill(self.pid, self.process_group_id)?;
 
         // Wait for the exit monitor to observe process termination so callers
         // do not race a still-live child after force-kill returns.
@@ -189,6 +192,11 @@ impl CliAgentProcess {
     #[allow(dead_code)] // Complete CliProcess lifecycle API
     pub fn pid(&self) -> u32 {
         self.pid
+    }
+
+    /// Get the cached process group ID captured when the child was spawned.
+    pub fn process_group_id(&self) -> Option<u32> {
+        self.process_group_id
     }
 
     /// Wait for the process to exit (blocks until exit or cancellation).
@@ -242,6 +250,16 @@ impl CliAgentProcess {
         tail.reverse();
         tail.join("\n")
     }
+}
+
+#[cfg(unix)]
+pub(super) fn tracked_process_group_id(pid: u32) -> Option<u32> {
+    Some(pid)
+}
+
+#[cfg(not(unix))]
+pub(super) fn tracked_process_group_id(_pid: u32) -> Option<u32> {
+    None
 }
 
 #[cfg(test)]
