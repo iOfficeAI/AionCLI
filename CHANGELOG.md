@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.16](https://github.com/iOfficeAI/AionCore/compare/v0.1.15...v0.1.16) (2026-05-29)
+
+
+### Features
+
+* **agent:** classify structured agent send errors ([#356](https://github.com/iOfficeAI/AionCore/issues/356)) ([f52e8cd](https://github.com/iOfficeAI/AionCore/commit/f52e8cd93edb3e5edbee450ca41bef49e4cc9c48))
+* **mcp:** support session scoped MCP injection ([#363](https://github.com/iOfficeAI/AionCore/issues/363)) ([2974f47](https://github.com/iOfficeAI/AionCore/commit/2974f47346056ef5483fe3e9c39d58d63f714ae7))
+
+
+### Bug Fixes
+
+* channel reply stream cold start ([#366](https://github.com/iOfficeAI/AionCore/issues/366)) ([b848ddf](https://github.com/iOfficeAI/AionCore/commit/b848ddff8fe5a973c67ee3c67187c6248d8c7455))
+* **mcp:** clean up stdio test process trees ([#368](https://github.com/iOfficeAI/AionCore/issues/368)) ([3481956](https://github.com/iOfficeAI/AionCore/commit/3481956d4c7e2148302d9f31ecef5a88357c38e8))
+
 ## [0.1.15](https://github.com/iOfficeAI/AionCore/compare/v0.1.14...v0.1.15) (2026-05-28)
 
 
