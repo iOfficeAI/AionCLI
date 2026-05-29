@@ -487,7 +487,11 @@ mod tests {
         match server {
             McpServer::Stdio(s) => {
                 assert_eq!(s.name, "ctx7");
-                assert_eq!(s.command.to_string_lossy(), "npx");
+                let command = s.command.to_string_lossy();
+                assert!(
+                    command == "npx" || command.ends_with("/npx"),
+                    "unexpected stdio command path: {command}",
+                );
                 assert_eq!(s.args, vec!["-y".to_owned(), "@upstash/context7-mcp".to_owned()]);
                 assert_eq!(s.env.len(), 1);
                 assert_eq!(s.env[0].name, "K");

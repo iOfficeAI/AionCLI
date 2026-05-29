@@ -77,6 +77,8 @@ pub(super) fn force_kill(pid: u32) -> Result<(), AppError> {
 #[cfg(test)]
 mod force_kill_tests {
     use super::force_kill;
+    #[cfg(unix)]
+    use std::os::unix::process::CommandExt;
     use std::process::Command;
     use std::time::{Duration, Instant};
 
@@ -91,10 +93,11 @@ mod force_kill_tests {
                 .spawn()
                 .expect("spawn powershell sleep")
         } else {
-            Command::new("sh")
-                .args(["-c", "sleep 60"])
-                .spawn()
-                .expect("spawn sleep")
+            let mut command = Command::new("sh");
+            command.args(["-c", "sleep 60"]);
+            #[cfg(unix)]
+            command.process_group(0);
+            command.spawn().expect("spawn sleep")
         }
     }
 

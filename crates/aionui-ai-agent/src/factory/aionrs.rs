@@ -875,7 +875,11 @@ mod tests {
 
         let server = servers.get("demo-mcp").expect("snapshot should remain");
         assert_eq!(server.transport, TransportType::Stdio);
-        assert_eq!(server.command.as_deref(), Some("uvx"));
+        let command = server.command.as_deref().expect("stdio command should exist");
+        assert!(
+            command == "uvx" || command.ends_with("/uvx"),
+            "unexpected stdio command path: {command}",
+        );
         assert_eq!(server.args.as_deref(), Some(&["new-server".to_owned()][..]));
         assert_eq!(
             server.env.as_ref().and_then(|env| env.get("TOKEN")),
