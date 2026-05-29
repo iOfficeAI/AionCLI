@@ -164,6 +164,7 @@ mod tests {
         assert_eq!(json["ownership"], "user_llm_provider");
         assert_eq!(json["retryable"], false);
         assert_eq!(json["feedback_recommended"], false);
+        assert!(json.get("resolution").is_none());
     }
 
     #[test]

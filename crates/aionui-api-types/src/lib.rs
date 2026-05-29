@@ -39,7 +39,10 @@ pub use agent_build_extra::{
     SessionMcpServer, SessionMcpTransport, SlashCommandItem,
 };
 pub use agent_discovery::{AgentEnvEntry, AgentHandshake, AgentMetadata, AgentSource, AgentSourceInfo, BehaviorPolicy};
-pub use agent_error::{AgentErrorCode, AgentErrorOwnership, AgentStreamErrorData};
+pub use agent_error::{
+    AgentErrorCode, AgentErrorOwnership, AgentErrorResolution, AgentErrorResolutionKind, AgentErrorResolutionTarget,
+    AgentStreamErrorData,
+};
 pub use assistant::{
     AssistantResponse, AssistantSource, CreateAssistantRequest, ImportAssistantsRequest, ImportAssistantsResult,
     ImportError, SetAssistantStateRequest, UpdateAssistantRequest,
@@ -136,3 +139,19 @@ pub use team::{
 };
 pub use team_mcp::{GuideMcpConfig, TEAM_MCP_SERVER_NAME, TeamMcpStdioConfig};
 pub use websocket::WebSocketMessage;
+
+#[cfg(test)]
+mod public_contract_tests {
+    use super::{AgentErrorResolution, AgentErrorResolutionKind, AgentErrorResolutionTarget};
+
+    #[test]
+    fn error_resolution_types_are_exported_from_crate_root() {
+        let resolution = AgentErrorResolution::new(
+            AgentErrorResolutionKind::Retry,
+            Some(AgentErrorResolutionTarget::Feedback),
+        );
+
+        assert_eq!(resolution.kind, AgentErrorResolutionKind::Retry);
+        assert_eq!(resolution.target, Some(AgentErrorResolutionTarget::Feedback));
+    }
+}
