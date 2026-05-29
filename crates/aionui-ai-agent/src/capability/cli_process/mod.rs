@@ -156,7 +156,21 @@ impl CliAgentProcess {
 
         // Force kill
         warn!(pid = self.pid, "Grace period expired, sending SIGKILL");
-        force_kill(self.pid)
+        force_kill(self.pid)?;
+
+        // Wait for the exit monitor to observe process termination so callers
+        // do not race a still-live child after force-kill returns.
+        let mut rx = self.exit_rx.clone();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            if rx.borrow().is_some() {
+                return;
+            }
+            let _ = rx.changed().await;
+        })
+        .await
+        .map_err(|_| AppError::Internal(format!("Process {} did not exit after force_kill", self.pid)))?;
+
+        Ok(())
     }
 
     /// Check whether the subprocess is still running.

@@ -21,10 +21,50 @@ pub(super) fn force_kill(pid: u32) -> Result<(), AppError> {
                 debug!(pid, process_group = %group_id, "SIGKILL sent successfully");
                 Ok(())
             }
-            Ok(_output) => {
-                // Non-zero exit likely means process already exited — acceptable
-                debug!(pid, process_group = %group_id, "Process group already exited before SIGKILL");
-                Ok(())
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if stderr.contains("No such process") {
+                    let direct_pid = pid.to_string();
+                    let direct = std::process::Command::new("kill").args(["-9", &direct_pid]).output();
+                    match direct {
+                        Ok(direct_output) if direct_output.status.success() => {
+                            debug!(pid, process_group = %group_id, "Process group missing; direct SIGKILL sent successfully");
+                            Ok(())
+                        }
+                        Ok(direct_output) => {
+                            let direct_stderr = String::from_utf8_lossy(&direct_output.stderr);
+                            if direct_stderr.contains("No such process") {
+                                debug!(pid, process_group = %group_id, "Process already exited before SIGKILL");
+                                Ok(())
+                            } else {
+                                error!(
+                                    pid,
+                                    process_group = %group_id,
+                                    %stderr,
+                                    direct_stderr = %direct_stderr,
+                                    "kill returned unexpected non-zero status"
+                                );
+                                Err(AppError::Internal(format!(
+                                    "Failed to kill process group {group_id} (stderr: {stderr}); direct kill also failed for pid {pid}: {direct_stderr}",
+                                )))
+                            }
+                        }
+                        Err(e) => {
+                            error!(pid, process_group = %group_id, error = %e, "Failed to execute direct kill command");
+                            Err(AppError::Internal(format!("Failed to kill process {pid}: {e}")))
+                        }
+                    }
+                } else {
+                    error!(
+                        pid,
+                        process_group = %group_id,
+                        %stderr,
+                        "kill returned unexpected non-zero status"
+                    );
+                    Err(AppError::Internal(format!(
+                        "Failed to kill process group {group_id}: {stderr}",
+                    )))
+                }
             }
             Err(e) => {
                 error!(pid, process_group = %group_id, error = %e, "Failed to execute kill command");
