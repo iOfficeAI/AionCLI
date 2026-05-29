@@ -148,11 +148,11 @@ async fn get_not_found() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn edit_name() {
+async fn edit_name_is_rejected() {
     let svc = make_service().await;
     let created = svc.add_server(stdio_req("old")).await.unwrap();
 
-    let updated = svc
+    let err = svc
         .edit_server(
             &created.id,
             UpdateMcpServerRequest {
@@ -164,8 +164,8 @@ async fn edit_name() {
             },
         )
         .await
-        .unwrap();
-    assert_eq!(updated.name, "new");
+        .unwrap_err();
+    assert!(matches!(err, McpError::InvalidEdit(_)));
 }
 
 #[tokio::test]

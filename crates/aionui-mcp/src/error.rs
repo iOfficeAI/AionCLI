@@ -12,6 +12,9 @@ pub enum McpError {
     #[error("MCP server name conflict: {0}")]
     Conflict(String),
 
+    #[error("Invalid MCP server edit: {0}")]
+    InvalidEdit(String),
+
     #[error("Invalid transport configuration: {0}")]
     InvalidTransport(String),
 
@@ -39,6 +42,7 @@ impl From<McpError> for AppError {
         match err {
             McpError::NotFound(msg) => AppError::NotFound(msg),
             McpError::Conflict(msg) => AppError::Conflict(msg),
+            McpError::InvalidEdit(msg) => AppError::BadRequest(msg),
             McpError::InvalidTransport(msg) => AppError::BadRequest(msg),
             McpError::AgentNotInstalled(msg) => AppError::BadRequest(msg),
             McpError::AgentOperationFailed(msg) => AppError::Internal(msg),
@@ -69,6 +73,12 @@ mod tests {
     #[test]
     fn invalid_transport_maps_to_bad_request() {
         let err: AppError = McpError::InvalidTransport("missing command".into()).into();
+        assert!(matches!(err, AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn invalid_edit_maps_to_bad_request() {
+        let err: AppError = McpError::InvalidEdit("rename forbidden".into()).into();
         assert!(matches!(err, AppError::BadRequest(_)));
     }
 
@@ -112,6 +122,10 @@ mod tests {
         assert_eq!(
             McpError::InvalidTransport("bad".into()).to_string(),
             "Invalid transport configuration: bad"
+        );
+        assert_eq!(
+            McpError::InvalidEdit("rename forbidden".into()).to_string(),
+            "Invalid MCP server edit: rename forbidden"
         );
     }
 }

@@ -75,10 +75,20 @@ impl McpConfigService {
     /// Edit an existing MCP server (partial update).
     pub async fn edit_server(&self, id: &str, req: UpdateMcpServerRequest) -> Result<McpServerResponse, McpError> {
         // Verify the server exists
-        self.repo
+        let existing_server = self
+            .repo
             .find_by_id(id)
             .await?
             .ok_or_else(|| McpError::NotFound(id.to_owned()))?;
+
+        if let Some(ref new_name) = req.name
+            && new_name != &existing_server.name
+        {
+            return Err(McpError::InvalidEdit(format!(
+                "MCP server name cannot be changed during edit; keep '{current_name}'",
+                current_name = existing_server.name
+            )));
+        }
 
         // Check name uniqueness if renaming
         if let Some(ref new_name) = req.name
@@ -718,10 +728,10 @@ mod tests {
     // -- edit_server ---------------------------------------------------------
 
     #[tokio::test]
-    async fn edit_server_updates_name() {
+    async fn edit_server_rejects_name_change() {
         let svc = make_service();
         let created = svc.add_server(stdio_create_req("old-name")).await.unwrap();
-        let updated = svc
+        let err = svc
             .edit_server(
                 &created.id,
                 UpdateMcpServerRequest {
@@ -733,8 +743,8 @@ mod tests {
                 },
             )
             .await
-            .unwrap();
-        assert_eq!(updated.name, "new-name");
+            .unwrap_err();
+        assert!(matches!(err, McpError::InvalidEdit(_)));
     }
 
     #[tokio::test]
