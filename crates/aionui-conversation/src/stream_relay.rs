@@ -134,7 +134,6 @@ impl StreamRelay {
         let mut first_agent_event_logged = false;
         let mut first_visible_output_logged = false;
         let mut send_error_done = send_error_rx.is_none();
-        let mut error_finalized = false;
 
         loop {
             let recv_result = if send_error_done {
@@ -146,14 +145,6 @@ impl StreamRelay {
                         send_error_done = true;
                         match send_error {
                             Ok(send_error) => {
-                                if error_finalized {
-                                    debug!(
-                                        code = ?send_error.code(),
-                                        ownership = ?send_error.ownership(),
-                                        "Skipping send error injection because a stream error was already handled"
-                                    );
-                                    continue;
-                                }
                                 warn!(
                                     code = ?send_error.code(),
                                     ownership = ?send_error.ownership(),
@@ -232,12 +223,6 @@ impl StreamRelay {
                             }
                         }
                         AgentStreamEvent::Finish(_) | AgentStreamEvent::Error(_) => {
-                            if matches!(event, AgentStreamEvent::Error(_))
-                                && std::mem::replace(&mut error_finalized, true)
-                            {
-                                debug!("Skipping duplicate stream error event");
-                                continue;
-                            }
                             let elapsed_ms = now_ms() - started_at;
                             let event_type = if matches!(event, AgentStreamEvent::Finish(_)) {
                                 "Finish"
@@ -1142,7 +1127,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_send_error_does_not_duplicate_existing_stream_error() {
+    async fn run_send_error_keeps_existing_stream_error_when_it_arrives_first() {
         let repo = Arc::new(RecordingRepo::new());
         let bus = Arc::new(aionui_realtime::BroadcastEventBus::new(64));
         let (tx, _) = broadcast::channel(64);
@@ -1160,24 +1145,71 @@ mod tests {
         let send_error = AgentSendError::from_app_error(aionui_common::AppError::BadGateway(
             "provider returned 401 invalid api key".into(),
         ));
-        tx.send(AgentStreamEvent::Error(send_error.stream_error().clone()))
-            .unwrap();
+        tx.send(AgentStreamEvent::Error(ErrorEventData::legacy(
+            "stream already emitted",
+            None,
+        )))
+        .unwrap();
         let (send_error_tx, send_error_rx) = tokio::sync::oneshot::channel();
-        send_error_tx.send(send_error).unwrap();
+        let delayed_send_error = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            let _ = send_error_tx.send(send_error);
+        });
 
         let outcome = relay.consume_with_send_error(rx, send_error_rx).await;
+        delayed_send_error.await.unwrap();
         assert!(outcome.system_responses.is_empty());
 
         let inserts = repo.take_inserts();
-        let error_tips_count = inserts
-            .iter()
-            .filter(|msg| {
-                msg.r#type == "tips"
-                    && serde_json::from_str::<serde_json::Value>(&msg.content)
-                        .is_ok_and(|content| content["type"] == "error")
-            })
-            .count();
-        assert_eq!(error_tips_count, 1);
+        assert_eq!(inserts.len(), 1);
+        assert_eq!(inserts[0].r#type, "tips");
+        let content: serde_json::Value = serde_json::from_str(&inserts[0].content).unwrap();
+        assert_eq!(content["content"], "stream already emitted");
+        assert_eq!(content["type"], "error");
+    }
+
+    #[tokio::test]
+    async fn run_send_error_uses_send_error_when_it_arrives_first() {
+        let repo = Arc::new(RecordingRepo::new());
+        let bus = Arc::new(aionui_realtime::BroadcastEventBus::new(64));
+        let (tx, _) = broadcast::channel(64);
+
+        let relay = StreamRelay::new(
+            "conv-1".into(),
+            "asst-1".into(),
+            "user-1".into(),
+            repo.clone(),
+            bus.clone(),
+            None,
+        );
+
+        let rx = tx.subscribe();
+        let (send_error_tx, send_error_rx) = tokio::sync::oneshot::channel();
+        send_error_tx
+            .send(AgentSendError::from_app_error(aionui_common::AppError::BadGateway(
+                "provider returned 401 invalid api key".into(),
+            )))
+            .unwrap();
+        let delayed_stream_error = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            let _ = tx.send(AgentStreamEvent::Error(ErrorEventData::legacy(
+                "stream already emitted",
+                None,
+            )));
+        });
+
+        let outcome = relay.consume_with_send_error(rx, send_error_rx).await;
+        delayed_stream_error.await.unwrap();
+        assert!(outcome.system_responses.is_empty());
+
+        let inserts = repo.take_inserts();
+        assert_eq!(inserts.len(), 1);
+        assert_eq!(inserts[0].r#type, "tips");
+        let content: serde_json::Value = serde_json::from_str(&inserts[0].content).unwrap();
+        assert_eq!(content["content"], "The model provider rejected the request");
+        assert_eq!(content["type"], "error");
+        assert_eq!(content["error"]["resolution"]["kind"], "check_provider_credentials");
+        assert_eq!(content["error"]["resolution"]["target"], "provider_settings");
     }
 
     #[tokio::test]
