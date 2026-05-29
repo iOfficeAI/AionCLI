@@ -9,6 +9,7 @@ use crate::types::{BotInfo, PluginConfig, PluginStatus, PluginType, UnifiedIncom
 ///
 /// This addresses M-63 — the API Spec `BasePlugin.onMessage/onConfirm`
 /// callbacks are mapped to channel-based injection.
+#[derive(Clone)]
 pub struct PluginCallbacks {
     /// Sender for incoming messages from the platform.
     pub message_tx: tokio::sync::mpsc::Sender<UnifiedIncomingMessage>,

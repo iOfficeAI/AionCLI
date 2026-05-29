@@ -5,6 +5,7 @@
 //! TP-1..TP-5, CS-1..CS-2, WS-2.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use aionui_api_types::WebSocketMessage;
@@ -51,6 +52,7 @@ struct MockPlugin {
     bot_info: Option<BotInfo>,
     last_error: Option<String>,
     should_fail_init: bool,
+    start_calls: Arc<AtomicUsize>,
 }
 
 impl MockPlugin {
@@ -61,6 +63,7 @@ impl MockPlugin {
             bot_info: None,
             last_error: None,
             should_fail_init: false,
+            start_calls: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -91,6 +94,7 @@ impl ChannelPlugin for MockPlugin {
     }
 
     async fn start(&mut self) -> Result<(), ChannelError> {
+        self.start_calls.fetch_add(1, Ordering::SeqCst);
         self.status = PluginStatus::Starting;
         self.status = PluginStatus::Running;
         Ok(())
@@ -162,6 +166,17 @@ fn make_failing_factory() -> PluginFactory {
 
 fn make_no_impl_factory() -> PluginFactory {
     Box::new(|_pt| None)
+}
+
+fn make_counting_factory() -> (PluginFactory, Arc<AtomicUsize>) {
+    let start_calls = Arc::new(AtomicUsize::new(0));
+    let captured = Arc::clone(&start_calls);
+    let factory = Box::new(move |pt| {
+        let mut plugin = MockPlugin::new(pt);
+        plugin.start_calls = Arc::clone(&captured);
+        Some(Box::new(plugin) as Box<dyn ChannelPlugin>)
+    });
+    (factory, start_calls)
 }
 
 fn make_telegram_config() -> serde_json::Value {
@@ -370,6 +385,24 @@ async fn tp1_test_valid_credentials() {
         .await
         .unwrap();
     assert_eq!(result.as_deref(), Some("mock_bot_user"));
+}
+
+#[tokio::test]
+async fn test_plugin_initializes_without_starting_runtime() {
+    let (mgr, _repo, _bc) = setup().await;
+    let (factory, start_calls) = make_counting_factory();
+
+    let username = mgr
+        .test_plugin("telegram", make_plugin_config(), &factory)
+        .await
+        .unwrap();
+
+    assert_eq!(username.as_deref(), Some("mock_bot_user"));
+    assert_eq!(
+        start_calls.load(Ordering::SeqCst),
+        0,
+        "credential tests must not start long-running plugin runtime"
+    );
 }
 
 // ── TP-2: Test invalid credentials propagates error ───────────────

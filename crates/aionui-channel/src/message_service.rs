@@ -46,8 +46,9 @@ impl ChannelMessageService {
     /// Sends a text message from a channel user to the AI agent.
     ///
     /// 1. Ensures the session has a backing conversation (creates one if needed)
-    /// 2. Sends the message via ConversationService
-    /// 3. Returns the conversation_id for stream subscription
+    /// 2. Warms up the backing agent task so stream subscription is available
+    /// 3. Sends the message via ConversationService
+    /// 4. Returns the conversation_id and stream receiver for relay
     ///
     /// The caller is responsible for subscribing to stream events and
     /// relaying them to the IM platform.
@@ -75,30 +76,40 @@ impl ChannelMessageService {
         };
 
         let user_id = &self.owner_user_id;
+        // Channel relays need a stream subscription before the agent starts
+        // emitting. `ConversationService::send_message` returns immediately
+        // and builds cold agents in the background, so warm the conversation
+        // explicitly for channel traffic.
+        self.conversation_svc
+            .warmup(user_id, &conversation_id, &self.task_manager)
+            .await
+            .map_err(|e| ChannelError::MessageSendFailed(e.to_string()))?;
+
+        let stream_rx = self
+            .task_manager
+            .get_task(&conversation_id)
+            .map(|handle| handle.subscribe())
+            .ok_or_else(|| {
+                ChannelError::MessageSendFailed(format!(
+                    "Agent task missing after warmup for conversation {conversation_id}"
+                ))
+            })?;
+
         self.conversation_svc
             .send_message(user_id, &conversation_id, req, &self.task_manager)
             .await
             .map_err(|e| ChannelError::MessageSendFailed(e.to_string()))?;
 
-        // Subscribe to the agent's broadcast channel for the ChannelStreamRelay.
-        // The agent task exists because send_message just called get_or_build_task.
-        // ConversationService spawns agent.send_message in a background task,
-        // so the first events have not been emitted yet — no race condition.
-        let stream_rx = self
-            .task_manager
-            .get_task(&conversation_id)
-            .map(|handle| handle.subscribe());
-
         info!(
             conversation_id = %conversation_id,
             session_id = %session.id,
-            has_stream = stream_rx.is_some(),
+            has_stream = true,
             "message sent to agent"
         );
 
         Ok(SendResult {
             conversation_id,
-            stream_rx,
+            stream_rx: Some(stream_rx),
         })
     }
 

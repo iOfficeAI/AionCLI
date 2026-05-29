@@ -32,6 +32,7 @@ pub struct TelegramPlugin {
     bot_info: Option<BotInfo>,
     last_error: Option<String>,
     api: Option<Arc<TelegramApi>>,
+    callbacks: Option<PluginCallbacks>,
     poll_handle: Option<JoinHandle<()>>,
     shutdown_tx: Option<watch::Sender<bool>>,
 }
@@ -43,6 +44,7 @@ impl Default for TelegramPlugin {
             bot_info: None,
             last_error: None,
             api: None,
+            callbacks: None,
             poll_handle: None,
             shutdown_tx: None,
         }
@@ -102,27 +104,38 @@ impl ChannelPlugin for TelegramPlugin {
         );
 
         self.api = Some(api);
-        // Store callbacks in a shared container for the polling task
-        let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        self.shutdown_tx = Some(shutdown_tx);
-
-        // Spawn the long-polling task
-        let api_clone = Arc::clone(self.api.as_ref().expect("api just set"));
-        self.poll_handle = Some(tokio::spawn(poll_loop(
-            api_clone,
-            callbacks.message_tx,
-            callbacks.confirm_tx,
-            shutdown_rx,
-        )));
-
+        self.callbacks = Some(callbacks);
         self.status = PluginStatus::Ready;
         Ok(())
     }
 
     async fn start(&mut self) -> Result<(), ChannelError> {
         self.status = PluginStatus::Starting;
-        // The polling task was already spawned in initialize;
-        // `start` just transitions the status.
+
+        if self.poll_handle.is_some() {
+            self.status = PluginStatus::Running;
+            return Ok(());
+        }
+
+        let api = self
+            .api
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| ChannelError::PlatformApi("Telegram plugin not initialized".into()))?;
+        let callbacks = self
+            .callbacks
+            .clone()
+            .ok_or_else(|| ChannelError::PlatformApi("Telegram callbacks not initialized".into()))?;
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        self.shutdown_tx = Some(shutdown_tx);
+        self.poll_handle = Some(tokio::spawn(poll_loop(
+            api,
+            callbacks.message_tx,
+            callbacks.confirm_tx,
+            shutdown_rx,
+        )));
+
         self.status = PluginStatus::Running;
         info!("Telegram plugin started");
         Ok(())
@@ -143,6 +156,7 @@ impl ChannelPlugin for TelegramPlugin {
         }
 
         self.api = None;
+        self.callbacks = None;
         self.status = PluginStatus::Stopped;
         info!("Telegram plugin stopped");
         Ok(())
