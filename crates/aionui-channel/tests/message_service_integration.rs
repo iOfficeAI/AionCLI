@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use aionui_ai_agent::agent_task::{AgentInstance, IAgentTask};
 use aionui_ai_agent::protocol::events::FinishEventData;
 use aionui_ai_agent::types::{BuildTaskOptions, SendMessageData};
-use aionui_ai_agent::{AgentStreamEvent, IMockAgent, IWorkerTaskManager};
+use aionui_ai_agent::{AgentSendError, AgentStreamEvent, IMockAgent, IWorkerTaskManager};
 use aionui_api_types::WebSocketMessage;
 use aionui_channel::channel_settings::ChannelSettingsService;
 use aionui_channel::message_service::ChannelMessageService;
@@ -101,7 +101,7 @@ impl IAgentTask for ScriptedAgent {
         self.event_tx.subscribe()
     }
 
-    async fn send_message(&self, _data: SendMessageData) -> Result<(), AppError> {
+    async fn send_message(&self, _data: SendMessageData) -> Result<(), AgentSendError> {
         let _ = self.event_tx.send(AgentStreamEvent::Finish(FinishEventData::default()));
         Ok(())
     }
