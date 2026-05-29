@@ -180,6 +180,7 @@ wiremock = "0.6"
 # Random
 getrandom = "0.2"
 hex = "0.4"
+libc = "0.2"
 
 # Shrink target/debug: minimal debuginfo, sidecar files, no incremental cache.
 [profile.dev]

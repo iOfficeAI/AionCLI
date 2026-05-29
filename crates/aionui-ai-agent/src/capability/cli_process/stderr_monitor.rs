@@ -13,62 +13,53 @@ use tracing::{debug, error};
 pub(super) fn force_kill(pid: u32) -> Result<(), AppError> {
     #[cfg(unix)]
     {
-        let group_id = format!("-{pid}");
-        let result = std::process::Command::new("kill").args(["-9", &group_id]).output();
+        use std::io;
 
-        match result {
-            Ok(output) if output.status.success() => {
-                debug!(pid, process_group = %group_id, "SIGKILL sent successfully");
+        fn kill_pid(target_pid: u32) -> Result<(), AppError> {
+            let rc = unsafe { libc::kill(target_pid as i32, libc::SIGKILL) };
+            if rc == 0 {
+                debug!(pid = target_pid, "Direct SIGKILL sent successfully");
+                return Ok(());
+            }
+
+            let err = io::Error::last_os_error();
+            if err.raw_os_error() == Some(libc::ESRCH) {
+                debug!(pid = target_pid, "Process already exited before SIGKILL");
                 Ok(())
+            } else {
+                error!(pid = target_pid, error = %err, "Direct SIGKILL failed");
+                Err(AppError::Internal(format!(
+                    "Failed to kill process {target_pid}: {err}"
+                )))
             }
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                if stderr.contains("No such process") {
-                    let direct_pid = pid.to_string();
-                    let direct = std::process::Command::new("kill").args(["-9", &direct_pid]).output();
-                    match direct {
-                        Ok(direct_output) if direct_output.status.success() => {
-                            debug!(pid, process_group = %group_id, "Process group missing; direct SIGKILL sent successfully");
-                            Ok(())
-                        }
-                        Ok(direct_output) => {
-                            let direct_stderr = String::from_utf8_lossy(&direct_output.stderr);
-                            if direct_stderr.contains("No such process") {
-                                debug!(pid, process_group = %group_id, "Process already exited before SIGKILL");
-                                Ok(())
-                            } else {
-                                error!(
-                                    pid,
-                                    process_group = %group_id,
-                                    %stderr,
-                                    direct_stderr = %direct_stderr,
-                                    "kill returned unexpected non-zero status"
-                                );
-                                Err(AppError::Internal(format!(
-                                    "Failed to kill process group {group_id} (stderr: {stderr}); direct kill also failed for pid {pid}: {direct_stderr}",
-                                )))
-                            }
-                        }
-                        Err(e) => {
-                            error!(pid, process_group = %group_id, error = %e, "Failed to execute direct kill command");
-                            Err(AppError::Internal(format!("Failed to kill process {pid}: {e}")))
-                        }
-                    }
-                } else {
-                    error!(
-                        pid,
-                        process_group = %group_id,
-                        %stderr,
-                        "kill returned unexpected non-zero status"
-                    );
-                    Err(AppError::Internal(format!(
-                        "Failed to kill process group {group_id}: {stderr}",
-                    )))
-                }
+        }
+
+        let pgid = unsafe { libc::getpgid(pid as i32) };
+        if pgid == -1 {
+            let err = io::Error::last_os_error();
+            if err.raw_os_error() == Some(libc::ESRCH) {
+                debug!(pid, "Process already exited before resolving process group");
+                return Ok(());
             }
-            Err(e) => {
-                error!(pid, process_group = %group_id, error = %e, "Failed to execute kill command");
-                Err(AppError::Internal(format!("Failed to kill process {pid}: {e}")))
+
+            error!(pid, error = %err, "Failed to resolve process group");
+            return kill_pid(pid);
+        }
+
+        let rc = unsafe { libc::kill(-pgid, libc::SIGKILL) };
+        if rc == 0 {
+            debug!(pid, process_group = pgid, "SIGKILL sent successfully");
+            Ok(())
+        } else {
+            let err = io::Error::last_os_error();
+            if err.raw_os_error() == Some(libc::ESRCH) {
+                debug!(pid, process_group = pgid, "Process group already exited before SIGKILL");
+                kill_pid(pid)
+            } else {
+                error!(pid, process_group = pgid, error = %err, "Failed to send SIGKILL to process group");
+                Err(AppError::Internal(format!(
+                    "Failed to kill process group {pgid}: {err}"
+                )))
             }
         }
     }

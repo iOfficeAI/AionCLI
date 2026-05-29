@@ -339,6 +339,7 @@ dependencies = [
  "futures-util",
  "getrandom 0.2.17",
  "hex",
+ "libc",
  "regex",
  "rusqlite",
  "serde",
