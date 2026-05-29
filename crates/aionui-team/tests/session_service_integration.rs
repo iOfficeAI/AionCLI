@@ -8,7 +8,7 @@ use aionui_ai_agent::task_manager::AgentFactory;
 use aionui_ai_agent::types::BuildTaskOptions;
 use aionui_ai_agent::{IWorkerTaskManager, WorkerTaskManagerImpl};
 use aionui_api_types::{AddAgentRequest, CreateTeamRequest, TeamAgentInput, WebSocketMessage};
-use aionui_common::{AgentKillReason, AppError, PaginatedResult};
+use aionui_common::{AgentKillReason, AgentType, AppError, PaginatedResult, ProviderWithModel};
 use aionui_db::models::{
     AcpSessionRow, AgentMetadataRow, ConversationRow, MessageRow, UpdateAgentHandshakeParams, UpsertAgentMetadataParams,
 };
@@ -502,22 +502,32 @@ mod mock_agent {
     use aionui_ai_agent::agent_task::{IAgentTask, IMockAgent};
     use aionui_ai_agent::protocol::events::AgentStreamEvent;
     use aionui_ai_agent::types::SendMessageData;
-    use aionui_common::{AgentKillReason, AgentType, AppError, ConversationStatus, TimestampMs};
+    use aionui_common::{AgentKillReason, AgentType, AppError, Confirmation, ConversationStatus, TimestampMs};
     use tokio::sync::broadcast;
 
     pub struct MockAgent {
         pub conversation_id: String,
         pub workspace: String,
         pub event_tx: broadcast::Sender<AgentStreamEvent>,
+        pub confirmations: Vec<Confirmation>,
     }
 
     impl MockAgent {
         pub fn new(conversation_id: String, workspace: String) -> Self {
+            Self::with_confirmations(conversation_id, workspace, Vec::new())
+        }
+
+        pub fn with_confirmations(
+            conversation_id: String,
+            workspace: String,
+            confirmations: Vec<Confirmation>,
+        ) -> Self {
             let (event_tx, _) = broadcast::channel(16);
             Self {
                 conversation_id,
                 workspace,
                 event_tx,
+                confirmations,
             }
         }
     }
@@ -553,7 +563,11 @@ mod mock_agent {
         }
     }
 
-    impl IMockAgent for MockAgent {}
+    impl IMockAgent for MockAgent {
+        fn get_confirmations(&self) -> Vec<Confirmation> {
+            self.confirmations.clone()
+        }
+    }
 }
 
 fn success_factory() -> AgentFactory {
@@ -562,6 +576,30 @@ fn success_factory() -> AgentFactory {
         async move {
             Ok(aionui_ai_agent::AgentInstance::Mock(Arc::new(
                 mock_agent::MockAgent::new(opts.conversation_id, opts.workspace),
+            )))
+        }
+        .boxed()
+    })
+}
+
+fn confirmations_factory(count: usize) -> AgentFactory {
+    use aionui_common::Confirmation;
+    use futures_util::FutureExt;
+    Arc::new(move |opts: BuildTaskOptions| {
+        let confirmations = (0..count)
+            .map(|idx| Confirmation {
+                id: format!("tool-{idx}"),
+                call_id: format!("tool-{idx}"),
+                title: None,
+                action: None,
+                description: format!("Confirm tool {idx}"),
+                command_type: None,
+                options: vec![],
+            })
+            .collect::<Vec<_>>();
+        async move {
+            Ok(aionui_ai_agent::AgentInstance::Mock(Arc::new(
+                mock_agent::MockAgent::with_confirmations(opts.conversation_id, opts.workspace, confirmations),
             )))
         }
         .boxed()
@@ -971,6 +1009,56 @@ async fn tl2_list_multiple_teams() {
 
     let list = svc.list_teams().await.unwrap();
     assert_eq!(list.len(), 2);
+}
+
+#[tokio::test]
+async fn tl_list_teams_includes_pending_confirmation_counts_without_rebuilding_tasks() {
+    let (svc, task_manager) = setup_with_factory(confirmations_factory(2));
+    let created = svc
+        .create_team(
+            "user1",
+            CreateTeamRequest {
+                name: "With Confirmations".into(),
+                agents: vec![TeamAgentInput {
+                    name: "Lead".into(),
+                    role: "lead".into(),
+                    backend: "acp".into(),
+                    model: "claude".into(),
+                    custom_agent_id: None,
+                    conversation_id: None,
+                }],
+                workspace: None,
+            },
+        )
+        .await
+        .unwrap();
+    let conversation_id = created.agents[0].conversation_id.clone();
+    task_manager
+        .get_or_build_task(
+            &conversation_id,
+            BuildTaskOptions {
+                agent_type: AgentType::Acp,
+                workspace: "/tmp/ws".into(),
+                model: ProviderWithModel {
+                    provider_id: "test".into(),
+                    model: "claude".into(),
+                    use_model: None,
+                },
+                conversation_id: conversation_id.clone(),
+                extra: serde_json::json!({}),
+            },
+        )
+        .await
+        .unwrap();
+    let before = task_manager.snapshot();
+
+    let list = svc.list_teams().await.unwrap();
+    let after = task_manager.snapshot();
+
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].id, created.id);
+    assert_eq!(list[0].agents[0].pending_confirmations, 2);
+    assert_eq!(after.build, before.build);
 }
 
 // -- Get team -----------------------------------------------------------------

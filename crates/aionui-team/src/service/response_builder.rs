@@ -22,7 +22,16 @@ impl TeamSessionService {
         agent: &TeamAgent,
     ) -> Result<aionui_api_types::TeamAgentResponse, TeamError> {
         let icon = self.resolve_agent_icon(agent).await?;
-        Ok(agent.to_response_with_icon(icon))
+        let mut response = agent.to_response_with_icon(icon);
+        response.pending_confirmations = self.pending_confirmation_count(&agent.conversation_id);
+        Ok(response)
+    }
+
+    fn pending_confirmation_count(&self, conversation_id: &str) -> usize {
+        self.task_manager
+            .get_task(conversation_id)
+            .map(|agent| agent.get_confirmations().len())
+            .unwrap_or(0)
     }
 
     async fn resolve_agent_icon(&self, agent: &TeamAgent) -> Result<Option<String>, TeamError> {

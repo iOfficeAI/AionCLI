@@ -124,6 +124,7 @@ impl TeamAgent {
             model: self.model.clone(),
             custom_agent_id: self.custom_agent_id.clone(),
             status: self.status.map(|s| s.to_string()),
+            pending_confirmations: 0,
         }
     }
 }

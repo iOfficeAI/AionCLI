@@ -45,6 +45,7 @@ pub(super) fn user_facing_message(err: &AppError) -> String {
     full.split_once(": ").map(|(_, rest)| rest.to_owned()).unwrap_or(full)
 }
 
+use super::codex_sandbox;
 use super::mode_normalize::normalize_requested_mode;
 
 /// Grace period before force-killing an ACP process (ms).
@@ -74,6 +75,26 @@ pub(super) fn exit_status_parts(exit: Option<std::process::ExitStatus>) -> (Opti
         }
     }
     (status.code(), None)
+}
+
+fn initial_mode_from_params(params: &AcpSessionParams) -> Option<ModeId> {
+    // Prefer the last-persisted mode; for brand-new conversations
+    // fall back to `AcpBuildExtra::session_mode` so the first turn
+    // still honours the caller's choice.
+    params
+        .session_snapshot
+        .as_ref()
+        .and_then(|s| s.current_mode_id.as_ref())
+        .map(|m| normalize_requested_mode(&params.metadata, m.as_str()))
+        .or_else(|| {
+            params
+                .config
+                .session_mode
+                .as_ref()
+                .map(|m| normalize_requested_mode(&params.metadata, m))
+        })
+        .filter(|m| !m.is_empty())
+        .map(ModeId::new)
 }
 
 fn confirm_option_id(data: &Value) -> Option<String> {
@@ -190,6 +211,9 @@ impl AcpAgentManager {
         ),
         AppError,
     > {
+        let initial_mode = initial_mode_from_params(&params);
+        codex_sandbox::sync_for_agent(&params.metadata, initial_mode.as_ref().map(|m| m.as_str())).await?;
+
         let process = Arc::new(CliAgentProcess::spawn_for_sdk(params.command_spec.clone(), &params.data_dir).await?);
         register_session_process(
             &params.data_dir,
@@ -253,22 +277,7 @@ impl AcpAgentManager {
 
         let snapshot = params.session_snapshot.as_ref();
 
-        // Prefer the last-persisted mode; for brand-new conversations
-        // fall back to `AcpBuildExtra::session_mode` so the first turn
-        // still honours the caller's choice.
-        let (initial_mode, initial_model, initial_config) = (
-            snapshot
-                .and_then(|s| s.current_mode_id.as_ref())
-                .map(|m| normalize_requested_mode(&params.metadata, m.as_str()))
-                .or_else(|| {
-                    params
-                        .config
-                        .session_mode
-                        .as_ref()
-                        .map(|m| normalize_requested_mode(&params.metadata, m))
-                })
-                .filter(|m| !m.is_empty())
-                .map(ModeId::new),
+        let (initial_model, initial_config) = (
             snapshot.and_then(|s| s.current_model_id.clone()).or_else(|| {
                 params
                     .config
@@ -375,6 +384,7 @@ impl AcpAgentManager {
         if normalized_mode.is_empty() {
             return Ok(());
         }
+        codex_sandbox::sync_for_agent(&self.params.metadata, Some(&normalized_mode)).await?;
         let session_id = self.session.read().await.session_id().map(ToOwned::to_owned);
 
         // Write desired — the aggregate root's legitimate intent write-point.
