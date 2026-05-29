@@ -39,4 +39,5 @@ sha2.workspace = true
 hex.workspace = true
 
 [target.'cfg(unix)'.dependencies]
+libc.workspace = true
 wait-timeout = "0.2"

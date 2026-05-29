@@ -719,6 +719,7 @@ dependencies = [
  "dirs",
  "fs2",
  "hex",
+ "libc",
  "reqwest",
  "serde",
  "serde_json",
