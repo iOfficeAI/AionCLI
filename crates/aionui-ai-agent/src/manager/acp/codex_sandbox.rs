@@ -94,15 +94,13 @@ fn render_config_with_sandbox_mode(content: &str, mode: &str) -> String {
         }
     }
 
-    if replaced {
+    let rendered = if replaced {
         let mut rendered = lines.join(newline);
         if content.ends_with('\n') {
             rendered.push_str(newline);
         }
-        return rendered;
-    }
-
-    if content.trim_start().starts_with('[') {
+        rendered
+    } else if content.trim_start().starts_with('[') {
         format!("{sandbox_line}{newline}{newline}{content}")
     } else if let Some(section_index) = content.find("\n[") {
         let split_at = section_index + 1;
@@ -117,7 +115,57 @@ fn render_config_with_sandbox_mode(content: &str, mode: &str) -> String {
         format!("{sandbox_line}{newline}")
     } else {
         format!("{}{newline}{sandbox_line}{newline}", content.trim_end())
+    };
+
+    if mode == CodexSandboxMode::DangerFullAccess.as_str() {
+        ensure_windows_unelevated_sandbox(&rendered, newline)
+    } else {
+        rendered
     }
+}
+
+fn ensure_windows_unelevated_sandbox(content: &str, newline: &str) -> String {
+    let sandbox_line = "sandbox = \"unelevated\"";
+    let mut lines: Vec<String> = content.lines().map(ToOwned::to_owned).collect();
+    let Some(windows_start) = lines.iter().position(|line| line.trim() == "[windows]") else {
+        let mut rendered = content.trim_end().to_owned();
+        if !rendered.is_empty() {
+            rendered.push_str(newline);
+            rendered.push_str(newline);
+        }
+        rendered.push_str("[windows]");
+        rendered.push_str(newline);
+        rendered.push_str(sandbox_line);
+        rendered.push_str(newline);
+        return rendered;
+    };
+
+    let windows_end = lines
+        .iter()
+        .enumerate()
+        .skip(windows_start + 1)
+        .find_map(|(index, line)| line.trim_start().starts_with('[').then_some(index))
+        .unwrap_or(lines.len());
+
+    if let Some(sandbox_index) = lines[windows_start + 1..windows_end]
+        .iter()
+        .position(|line| {
+            line.trim_start()
+                .strip_prefix("sandbox")
+                .is_some_and(|rest| rest.trim_start().starts_with('='))
+        })
+        .map(|offset| windows_start + 1 + offset)
+    {
+        lines[sandbox_index] = sandbox_line.to_owned();
+    } else {
+        lines.insert(windows_start + 1, sandbox_line.to_owned());
+    }
+
+    let mut rendered = lines.join(newline);
+    if content.ends_with('\n') {
+        rendered.push_str(newline);
+    }
+    rendered
 }
 
 #[cfg(test)]
@@ -166,6 +214,54 @@ web_search = true
         assert!(rendered.starts_with("sandbox_mode = \"workspace-write\"\n\n[tools]"));
     }
 
+    #[test]
+    fn config_render_full_access_adds_windows_unelevated_sandbox() {
+        let input = r#"model = "gpt-5"
+
+[tools]
+web_search = true
+"#;
+
+        let rendered = render_config_with_sandbox_mode(input, "danger-full-access");
+
+        assert!(rendered.contains("[windows]\nsandbox = \"unelevated\"\n"));
+    }
+
+    #[test]
+    fn config_render_workspace_write_does_not_touch_windows_section() {
+        let input = r#"sandbox_mode = "danger-full-access"
+
+[windows]
+sandbox = "unelevated"
+other = true
+
+[tools]
+web_search = true
+"#;
+
+        let rendered = render_config_with_sandbox_mode(input, "workspace-write");
+
+        assert!(rendered.contains("[windows]\nsandbox = \"unelevated\"\nother = true"));
+    }
+
+    #[test]
+    fn config_render_full_access_updates_existing_windows_sandbox() {
+        let input = r#"sandbox_mode = "workspace-write"
+
+[windows]
+sandbox = "elevated"
+other = true
+
+[tools]
+web_search = true
+"#;
+
+        let rendered = render_config_with_sandbox_mode(input, "danger-full-access");
+
+        assert!(rendered.contains("[windows]\nsandbox = \"unelevated\"\nother = true"));
+        assert!(!rendered.contains("sandbox = \"elevated\""));
+    }
+
     #[tokio::test]
     async fn write_codex_sandbox_mode_to_path_creates_parent_and_writes_full_access() {
         let dir = tempfile::tempdir().unwrap();
@@ -176,6 +272,9 @@ web_search = true
             .unwrap();
 
         let rendered = fs::read_to_string(config_path).await.unwrap();
-        assert_eq!(rendered, "sandbox_mode = \"danger-full-access\"\n");
+        assert_eq!(
+            rendered,
+            "sandbox_mode = \"danger-full-access\"\n\n[windows]\nsandbox = \"unelevated\"\n"
+        );
     }
 }
