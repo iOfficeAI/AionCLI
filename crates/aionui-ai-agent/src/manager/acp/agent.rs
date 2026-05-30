@@ -213,7 +213,7 @@ impl AcpAgentManager {
         AppError,
     > {
         let initial_mode = initial_mode_from_params(&params);
-        codex_sandbox::sync_for_agent(&params.metadata, initial_mode.as_ref().map(|m| m.as_str())).await?;
+        codex_sandbox::sync_for_agent(&params.metadata, initial_mode.as_ref().map(|m| m.as_str())).await;
 
         let process = Arc::new(CliAgentProcess::spawn_for_sdk(params.command_spec.clone(), &params.data_dir).await?);
         register_session_process(
@@ -385,7 +385,7 @@ impl AcpAgentManager {
         if normalized_mode.is_empty() {
             return Ok(());
         }
-        codex_sandbox::sync_for_agent(&self.params.metadata, Some(&normalized_mode)).await?;
+        codex_sandbox::sync_for_agent(&self.params.metadata, Some(&normalized_mode)).await;
         let session_id = self.session.read().await.session_id().map(ToOwned::to_owned);
 
         // Write desired — the aggregate root's legitimate intent write-point.

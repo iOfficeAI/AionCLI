@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use aionui_api_types::AgentMetadata;
 use aionui_common::{AppError, ErrorChain};
 use tokio::fs;
-use tracing::info;
+use tracing::{info, warn};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum CodexSandboxMode {
@@ -20,6 +20,13 @@ impl CodexSandboxMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CodexSandboxSyncOutcome {
+    SkippedNonCodex,
+    Synced(CodexSandboxMode),
+    Failed(CodexSandboxMode),
+}
+
 pub(super) fn sandbox_mode_for_requested_mode(mode: Option<&str>) -> CodexSandboxMode {
     match mode.map(str::trim) {
         Some("full-access" | "yoloNoSandbox") => CodexSandboxMode::DangerFullAccess,
@@ -27,24 +34,56 @@ pub(super) fn sandbox_mode_for_requested_mode(mode: Option<&str>) -> CodexSandbo
     }
 }
 
-pub(super) async fn sync_for_agent(metadata: &AgentMetadata, requested_mode: Option<&str>) -> Result<(), AppError> {
+pub(super) async fn sync_for_agent(metadata: &AgentMetadata, requested_mode: Option<&str>) -> CodexSandboxSyncOutcome {
     if metadata.backend.as_deref() != Some("codex") {
-        return Ok(());
+        return CodexSandboxSyncOutcome::SkippedNonCodex;
     }
 
     let sandbox_mode = sandbox_mode_for_requested_mode(requested_mode);
-    write_codex_sandbox_mode(sandbox_mode).await?;
-    info!(
-        requested_mode = requested_mode.unwrap_or_default(),
-        sandbox_mode = sandbox_mode.as_str(),
-        "Codex sandbox config synced"
-    );
-    Ok(())
+    let path = match codex_config_path() {
+        Ok(path) => path,
+        Err(e) => {
+            warn!(
+                requested_mode = requested_mode.unwrap_or_default(),
+                sandbox_mode = sandbox_mode.as_str(),
+                error = %ErrorChain(&e),
+                "Codex sandbox config path resolution failed; continuing with existing Codex config"
+            );
+            return CodexSandboxSyncOutcome::Failed(sandbox_mode);
+        }
+    };
+    sync_for_agent_at_path(metadata, requested_mode, &path).await
 }
 
-pub(super) async fn write_codex_sandbox_mode(mode: CodexSandboxMode) -> Result<(), AppError> {
-    let path = codex_config_path()?;
-    write_codex_sandbox_mode_to_path(mode, &path).await
+async fn sync_for_agent_at_path(
+    metadata: &AgentMetadata,
+    requested_mode: Option<&str>,
+    path: &std::path::Path,
+) -> CodexSandboxSyncOutcome {
+    if metadata.backend.as_deref() != Some("codex") {
+        return CodexSandboxSyncOutcome::SkippedNonCodex;
+    }
+
+    let sandbox_mode = sandbox_mode_for_requested_mode(requested_mode);
+    match write_codex_sandbox_mode_to_path(sandbox_mode, path).await {
+        Ok(()) => {
+            info!(
+                requested_mode = requested_mode.unwrap_or_default(),
+                sandbox_mode = sandbox_mode.as_str(),
+                "Codex sandbox config synced"
+            );
+            CodexSandboxSyncOutcome::Synced(sandbox_mode)
+        }
+        Err(e) => {
+            warn!(
+                requested_mode = requested_mode.unwrap_or_default(),
+                sandbox_mode = sandbox_mode.as_str(),
+                error = %ErrorChain(&e),
+                "Codex sandbox config sync failed; continuing with existing Codex config"
+            );
+            CodexSandboxSyncOutcome::Failed(sandbox_mode)
+        }
+    }
 }
 
 async fn write_codex_sandbox_mode_to_path(mode: CodexSandboxMode, path: &std::path::Path) -> Result<(), AppError> {
@@ -172,6 +211,33 @@ fn ensure_windows_unelevated_sandbox(content: &str, newline: &str) -> String {
 mod tests {
     use super::*;
 
+    fn metadata_with_backend(backend: Option<&str>) -> AgentMetadata {
+        AgentMetadata {
+            id: "agent-1".into(),
+            icon: None,
+            name: "Codex CLI".into(),
+            name_i18n: None,
+            description: None,
+            description_i18n: None,
+            backend: backend.map(str::to_owned),
+            agent_type: aionui_common::AgentType::Acp,
+            agent_source: aionui_api_types::AgentSource::Builtin,
+            agent_source_info: aionui_api_types::AgentSourceInfo::default(),
+            enabled: true,
+            available: true,
+            command: None,
+            resolved_command: None,
+            args: vec![],
+            env: vec![],
+            native_skills_dirs: None,
+            behavior_policy: aionui_api_types::BehaviorPolicy::default(),
+            yolo_id: Some("full-access".into()),
+            sort_order: 3110,
+            team_capable: true,
+            handshake: aionui_api_types::AgentHandshake::default(),
+        }
+    }
+
     #[test]
     fn full_access_maps_to_danger_full_access() {
         assert_eq!(
@@ -276,5 +342,54 @@ web_search = true
             rendered,
             "sandbox_mode = \"danger-full-access\"\n\n[windows]\nsandbox = \"unelevated\"\n"
         );
+    }
+
+    #[tokio::test]
+    async fn sync_for_agent_at_path_reports_failed_without_returning_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent_file = dir.path().join("not-a-directory");
+        fs::write(&parent_file, "blocks create_dir_all").await.unwrap();
+        let config_path = parent_file.join("config.toml");
+
+        let outcome =
+            sync_for_agent_at_path(&metadata_with_backend(Some("codex")), Some("full-access"), &config_path).await;
+
+        assert_eq!(
+            outcome,
+            CodexSandboxSyncOutcome::Failed(CodexSandboxMode::DangerFullAccess)
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_for_agent_at_path_skips_non_codex_agents() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        let outcome = sync_for_agent_at_path(
+            &metadata_with_backend(Some("claude")),
+            Some("full-access"),
+            &config_path,
+        )
+        .await;
+
+        assert_eq!(outcome, CodexSandboxSyncOutcome::SkippedNonCodex);
+        assert!(!config_path.exists());
+    }
+
+    #[tokio::test]
+    async fn sync_for_agent_at_path_reports_synced_on_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        let outcome =
+            sync_for_agent_at_path(&metadata_with_backend(Some("codex")), Some("full-access"), &config_path).await;
+
+        assert_eq!(
+            outcome,
+            CodexSandboxSyncOutcome::Synced(CodexSandboxMode::DangerFullAccess)
+        );
+        let rendered = fs::read_to_string(config_path).await.unwrap();
+        assert!(rendered.contains(r#"sandbox_mode = "danger-full-access""#));
+        assert!(rendered.contains("[windows]\nsandbox = \"unelevated\""));
     }
 }
