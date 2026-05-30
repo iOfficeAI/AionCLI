@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.17](https://github.com/iOfficeAI/AionCore/compare/v0.1.16...v0.1.17) (2026-05-30)
+
+
+### Bug Fixes
+
+* **agent:** make codex sandbox sync non-fatal ([#370](https://github.com/iOfficeAI/AionCore/issues/370)) ([8916faa](https://github.com/iOfficeAI/AionCore/commit/8916faa9bc69ff1959aef2db83febb7c03f1441b))
+
 ## [0.1.16](https://github.com/iOfficeAI/AionCore/compare/v0.1.15...v0.1.16) (2026-05-29)
 
 
